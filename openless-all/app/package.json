@@ -8,6 +8,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:android:init": "tauri android init",
+    "tauri:android:dev": "tauri android dev",
+    "tauri:android:build": "tauri android build --apk --debug",
+    "merge:android-v1-manifest": "node scripts/merge-android-v1-manifest.mjs",
     "check:hotkey-injection": "node scripts/check-hotkey-injection.mjs"
   },
   "dependencies": {
