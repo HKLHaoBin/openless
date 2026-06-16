@@ -530,6 +530,8 @@ impl Coordinator {
                     }
                 })
                 .await;
+                // 预热加载完后推一次状态，前端零轮询更新「已加载」。
+                emit_local_asr_engine_status(&inner);
             });
         }
         #[cfg(not(target_os = "macos"))]
@@ -541,10 +543,16 @@ impl Coordinator {
     /// 释放当前缓存的本地 ASR 引擎（用户主动点 / 或 删除模型时调）。
     pub fn release_local_asr_engine(&self) {
         self.inner.local_asr_cache.release_now();
+        emit_local_asr_engine_status(&self.inner);
     }
 
     pub fn local_asr_loaded_model(&self) -> Option<String> {
         self.inner.local_asr_cache.loaded_model_id()
+    }
+
+    /// 主动把当前本地 ASR 引擎状态推给前端（keepLoadedSecs 变更等命令侧调用）。
+    pub fn emit_local_asr_engine_status(&self) {
+        emit_local_asr_engine_status(&self.inner);
     }
 
     pub fn bind_app(&self, handle: AppHandle) {
@@ -2253,22 +2261,22 @@ fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
         // 读当前 prefs
         let prefs = inner.prefs.get();
         if crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey).is_some() {
-            // 不是 Custom → 睡着等 prefs 改动
+            // 不是 Custom → 卸载后退出守护
             take_combo_hotkey_on_main_thread(&inner);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_combo_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         let binding = prefs.dictation_hotkey.clone();
         if is_unconfigured_shortcut(&binding) {
             take_combo_hotkey_on_main_thread(&inner);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_combo_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         if inner.combo_hotkey.lock().is_some() {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_combo_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         let app = inner.app.lock().clone();
@@ -2366,13 +2374,13 @@ fn translation_hotkey_supervisor_loop(inner: Arc<Inner>) {
                 let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
                 monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
             }
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 try_update_translation_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         if inner.translation_hotkey.lock().is_some() {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 try_update_translation_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         let app = match inner.app.lock().clone() {
@@ -2459,21 +2467,21 @@ fn action_hotkey_supervisor_loop(inner: Arc<Inner>, kind: ActionHotkeyKind) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        // None = 用户主动停用：反注册并睡着等 prefs 改动（由 update 路径唤醒）。
+        // None = 用户主动停用：反注册后退出守护（由 update_action_hotkey_binding 主动路径重装）。
         let Some(binding) = action_hotkey_binding(&inner, kind) else {
             take_action_hotkey_on_main_thread(&inner, kind);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_action_hotkey_binding 主动路径，issue #470
+            return;
         };
         if is_modifier_only_shortcut(&binding) {
             take_action_hotkey_on_main_thread(&inner, kind);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_action_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         if action_hotkey_slot(&inner, kind).lock().is_some() {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_action_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         let app = match inner.app.lock().clone() {
@@ -3333,6 +3341,29 @@ fn ensure_local_qwen3_model_ready() -> Result<(), String> {
     Ok(())
 }
 
+/// 引擎加载/释放/keepLoadedSecs 变化时主动推给前端，前端 listen
+/// `local-asr:engine-changed` 即可零轮询同步 UI（issue #470 / #6）。
+/// 只反映 Qwen3 这一路（loaded_model_id / prefs），不碰 Foundry / Sherpa。
+/// 仅用桌面端跨平台符号；Android 无本地 ASR 引擎（LocalAsrEngineStatus 不在该 target
+/// 编译），单独给 no-op stub（见下），让各调用点在所有平台统一编译。
+#[cfg(not(target_os = "android"))]
+fn emit_local_asr_engine_status(inner: &Arc<Inner>) {
+    let model_id = inner.local_asr_cache.loaded_model_id();
+    let keep_loaded_secs = inner.prefs.get().local_asr_keep_loaded_secs;
+    let status = crate::commands::LocalAsrEngineStatus {
+        loaded: model_id.is_some(),
+        model_id,
+        keep_loaded_secs,
+    };
+    if let Some(app) = inner.app.lock().clone() {
+        let _ = app.emit("local-asr:engine-changed", &status);
+    }
+}
+
+/// Android no-op：该 target 不编译 LocalAsrEngineStatus / 本地 ASR 引擎。issue #470 / #6。
+#[cfg(target_os = "android")]
+fn emit_local_asr_engine_status(_inner: &Arc<Inner>) {}
+
 /// 一次 dictation 结束后，按 prefs.local_asr_keep_loaded_secs 决定何时释放
 /// 内存里的 Qwen3-ASR 引擎。0 = 立即释放；其它值 = sleep N 秒后看 last_used。
 /// 多次会话叠加多个 sleep 任务，每个独立 check：只要中间又被使用过就跳过释放。
@@ -3341,12 +3372,16 @@ fn schedule_local_asr_release(inner: &Arc<Inner>) {
     let cache = Arc::clone(&inner.local_asr_cache);
     if keep_secs == 0 {
         cache.release_now();
+        emit_local_asr_engine_status(inner);
         return;
     }
     let dur = std::time::Duration::from_secs(keep_secs as u64);
+    let inner = Arc::clone(inner);
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(dur).await;
-        cache.release_if_idle(dur);
+        if cache.release_if_idle(dur) {
+            emit_local_asr_engine_status(&inner);
+        }
     });
 }
 
@@ -3433,6 +3468,8 @@ async fn build_local_qwen3(
     let engine = tauri::async_runtime::spawn_blocking(move || cache.get_or_load(&mid, &dir))
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e:#}"))??;
+    // 加载完成（含缓存命中刷新 last_used）后推一次状态，前端零轮询更新「已加载」。
+    emit_local_asr_engine_status(inner);
     Ok(Arc::new(crate::asr::local::LocalQwenAsr::new(app, engine)))
 }
 

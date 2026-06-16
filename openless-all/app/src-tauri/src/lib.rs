@@ -28,6 +28,10 @@ mod commands;
 mod coordinator;
 mod coordinator_state;
 mod correction;
+// 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
+// Linux 退化为纯轮询兜底。仅桌面端。详见 issue #470。
+#[cfg(not(mobile))]
+mod device_watch;
 mod external_url;
 #[cfg(not(mobile))]
 mod global_hotkey_runtime;
@@ -105,6 +109,9 @@ use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
     RunEvent, Runtime,
 };
+// 桌面专用：移动端 WebviewWindowBuilder 没有 decorations/shadow 等方法，懒创建只在桌面用。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 use crate::types::PolishMode;
 
@@ -490,9 +497,9 @@ fn run_desktop() {
                 let _ = capsule.hide();
             }
 
-            // QA / Less Computer 浮窗在 tauri.conf.json 中设 create:false，启动不建 WebView；
-            // 首次 show 时由 ensure_webview_window 按需创建并 configure。
-            log::info!("[windows] qa / less-computer / less-computer-glow 按需创建（create:false）");
+            // QA / Less Computer / glow 懒创建：macOS 用 ensure_*_window 动态 build；
+            // Windows 在 tauri.conf.json 设 create:false，首次 show 时 ensure_webview_window
+            // 按需创建并 configure —— idle 时省 3 个常驻 webview 进程。
 
             // 主窗口磨砂：macOS 用 NSVisualEffectView，Windows 用 Mica。
             // 没这一层的话 transparent: true 让窗口透明 → 背后只是空，不是磨砂。
@@ -901,21 +908,74 @@ fn microphone_device_signature() -> Option<Vec<(String, bool)>> {
     }
 }
 
+/// 在主线程上刷新托盘麦克风子菜单并通知前端。供 OS 原生设备变更回调与慢速兜底轮询
+/// 共用同一条收尾路径。已在主线程或被 `run_on_main_thread` 派发后调用。
+#[cfg(not(mobile))]
+fn refresh_microphone_on_main(app: &AppHandle) {
+    if let Err(err) = refresh_tray_microphone_menu(app) {
+        log::warn!("[tray] refresh microphone menu after device change failed: {err}");
+    }
+    let _ = app.emit("microphone:devices-changed", serde_json::json!({}));
+}
+
+/// 设备变更去抖闭包：被 OS 原生通知回调（macOS CoreAudio / Windows MMDevice）调用。
+/// 复用 `microphone_device_signature()` 去抖——签名没变就零副作用直接返回；变了才
+/// `run_on_main_thread` 派发刷新+emit。OS 通知可能合并/重复触发，去抖确保只在真正
+/// 变化时刷新。`last_signature` 用 `Mutex` 保护，因为回调可能从不同的 CoreAudio/COM
+/// 线程并发进入。
+#[cfg(not(mobile))]
+fn make_microphone_change_handler(app: AppHandle) -> impl Fn() + Send + Sync + 'static {
+    let last_signature = parking_lot::Mutex::new(microphone_device_signature());
+    move || {
+        let signature = microphone_device_signature();
+        {
+            let mut guard = last_signature.lock();
+            if signature == *guard {
+                return;
+            }
+            *guard = signature;
+        }
+        let refresh_app = app.clone();
+        let _ = app.run_on_main_thread(move || refresh_microphone_on_main(&refresh_app));
+    }
+}
+
 #[cfg(not(mobile))]
 fn start_tray_microphone_watcher(app: AppHandle) {
     TRAY_MICROPHONE_WATCHER_STOPPING.store(false, Ordering::Relaxed);
+
+    // 1) OS 原生设备变更通知（issue #470 的最优方案）：空闲零唤醒。
+    //    macOS → CoreAudio AudioObjectAddPropertyListener；Windows → IMMNotificationClient。
+    //    Linux 无原生路径，返回 false，纯靠下面的慢速兜底。
+    //    注册失败（OSStatus≠0 / RegisterEndpoint Err）只 warn，不 panic——兜底轮询保证
+    //    三平台都「永远能检测到设备」。
+    let native_registered =
+        device_watch::spawn_native_watcher(app.clone(), make_microphone_change_handler(app.clone()));
+    if native_registered {
+        log::info!("[tray] OS native microphone device watcher registered");
+    } else {
+        log::info!(
+            "[tray] no OS native microphone device watcher (unsupported platform or registration failed); relying on slow poll fallback"
+        );
+    }
+
+    // 2) 全平台慢速兜底：60s 无条件轮询，复用 signature 去抖（签名没变就 continue，零
+    //    副作用）。原生通知失败时由它保证设备变更最终被检测到；原生通知正常时它只是
+    //    极低频的安全网，几乎从不真正刷新。
     if let Err(err) = std::thread::Builder::new()
-        .name("openless-tray-mic-watch".into())
+        .name("openless-tray-mic-poll".into())
         .spawn(move || {
             let mut last_signature = microphone_device_signature();
             while !TRAY_MICROPHONE_WATCHER_STOPPING.load(Ordering::Relaxed) {
-                // 10s, not 1.5s. `list_input_devices()` is a relatively costly
-                // CoreAudio/WASAPI enumeration and this ran every 1.5s forever —
-                // the single biggest idle wakeup. The tray menu refreshes on hover
-                // and the settings page reacts to `microphone:devices-changed`, so
-                // ~10s detection latency is fine. (Proper fix: subscribe to an OS
-                // device-change notification instead of polling.)
-                std::thread::sleep(Duration::from_millis(10_000));
+                // 60s（而非 10s）：原生通知承担实时检测，这条线程只是兜底，把它拉到 60s
+                // 进一步压低空闲唤醒。1s 一片的睡眠让退出 flag 最多 1s 内生效，避免退出时
+                // 长时间挂起线程。
+                for _ in 0..60 {
+                    if TRAY_MICROPHONE_WATCHER_STOPPING.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                }
                 if TRAY_MICROPHONE_WATCHER_STOPPING.load(Ordering::Relaxed) {
                     break;
                 }
@@ -924,20 +984,12 @@ fn start_tray_microphone_watcher(app: AppHandle) {
                     continue;
                 }
                 last_signature = signature;
-                let app = app.clone();
                 let refresh_app = app.clone();
-                let _ = app.run_on_main_thread(move || {
-                    if let Err(err) = refresh_tray_microphone_menu(&refresh_app) {
-                        log::warn!(
-                            "[tray] refresh microphone menu after device change failed: {err}"
-                        );
-                    }
-                    let _ = refresh_app.emit("microphone:devices-changed", serde_json::json!({}));
-                });
+                let _ = app.run_on_main_thread(move || refresh_microphone_on_main(&refresh_app));
             }
         })
     {
-        log::warn!("[tray] start microphone watcher failed: {err}");
+        log::warn!("[tray] start microphone poll fallback failed: {err}");
     }
 }
 
@@ -1911,8 +1963,14 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
         return;
     }
 
+    #[cfg(target_os = "windows")]
     let Some(window) = ensure_webview_window(app, "qa") else {
         log::info!("[qa] show 跳过：qa 窗口创建失败 (content_kind={content_kind})");
+        return;
+    };
+    #[cfg(not(target_os = "windows"))]
+    let Some(window) = ensure_qa_window(app) else {
+        log::info!("[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})");
         return;
     };
     // 仅首次 show 时居中；之后保留用户拖动后的位置。
@@ -2001,6 +2059,116 @@ fn make_qa_window_draggable_macos<R: tauri::Runtime>(window: &tauri::WebviewWind
     log::info!("[qa] NSWindow movableByWindowBackground=YES");
 }
 
+/// 懒创建 QA 浮窗：原来在 tauri.conf.json eager 创建（常驻一个 WebKit 进程）。改为首次
+/// show 时才 build —— idle 时根本不存在 → 省一个常驻 webview。配置与原 tauri.conf 的 qa
+/// 块逐项一致（"center": false ⇒ **不**调 .center()；"focus": false ⇒ focused(false)）。
+/// 关键：make_qa_window_draggable_macos 原先只在启动时设一次，这里创建时必须补回，否则
+/// 懒创建的 QA 窗口在 macOS 上拖不动。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(w) = app.get_webview_window("qa") {
+        return Some(w);
+    }
+    let built = WebviewWindowBuilder::new(app, "qa", WebviewUrl::App("index.html?window=qa".into()))
+        .title("OpenLess QA")
+        .inner_size(380.0, 440.0)
+        .decorations(false)
+        .transparent(true)
+        .shadow(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .focused(false)
+        .visible(false)
+        .accept_first_mouse(true)
+        .build();
+    match built {
+        Ok(w) => {
+            #[cfg(target_os = "macos")]
+            make_qa_window_draggable_macos(&w);
+            Some(w)
+        }
+        Err(e) => {
+            log::warn!("[qa] lazy window create failed: {e}");
+            None
+        }
+    }
+}
+
+// 移动端 QA 路由到 main 窗口（show_qa_window 在 Android 早返回）；Android 的
+// WebviewWindowBuilder 没有桌面方法，这里只占位返回已有窗口（编译用，运行时不达）。
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
+    app.get_webview_window("qa")
+}
+
+/// 懒创建 Less Computer 浮窗（macOS only）。配置与原 tauri.conf 的 less-computer 块一致。
+#[cfg(target_os = "macos")]
+fn ensure_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(w) = app.get_webview_window("less-computer") {
+        return Some(w);
+    }
+    match WebviewWindowBuilder::new(
+        app,
+        "less-computer",
+        WebviewUrl::App("index.html?window=less-computer".into()),
+    )
+    .title("OpenLess Less Computer")
+    .inner_size(400.0, 200.0)
+    .decorations(false)
+    .transparent(true)
+    .shadow(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .focused(false)
+    .visible(false)
+    .accept_first_mouse(true)
+    .build()
+    {
+        Ok(w) => Some(w),
+        Err(e) => {
+            log::warn!("[less-computer] lazy window create failed: {e}");
+            None
+        }
+    }
+}
+
+/// 懒创建 Less Computer glow 描边窗（macOS only）。shadow:false、无 acceptFirstMouse。
+/// 它的 level/collectionBehavior/ignore-mouse 在每次 show_less_computer_glow 里幂等设置，
+/// 所以创建时不需要额外原生配置。
+#[cfg(target_os = "macos")]
+fn ensure_less_computer_glow_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(w) = app.get_webview_window("less-computer-glow") {
+        return Some(w);
+    }
+    match WebviewWindowBuilder::new(
+        app,
+        "less-computer-glow",
+        WebviewUrl::App("index.html?window=less-computer-glow".into()),
+    )
+    .title("OpenLess Less Computer Glow")
+    .inner_size(800.0, 600.0)
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .focused(false)
+    .visible(false)
+    .build()
+    {
+        Ok(w) => Some(w),
+        Err(e) => {
+            log::warn!("[less-computer-glow] lazy window create failed: {e}");
+            None
+        }
+    }
+}
+
 /// 隐藏 QA 窗口。供 commands::qa_window_dismiss / coordinator session 收尾共用。
 pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     #[cfg(target_os = "android")]
@@ -2065,8 +2233,8 @@ fn position_less_computer_window<R: tauri::Runtime>(
 /// 显示 Less Computer 浮窗（不抢前台 app 焦点，与 QA 同手法）。`macos` 专用。
 #[cfg(target_os = "macos")]
 pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(window) = ensure_webview_window(app, "less-computer") else {
-        log::info!("[less-computer] show 跳过：窗口创建失败");
+    let Some(window) = ensure_less_computer_window(app) else {
+        log::info!("[less-computer] show 跳过：窗口不存在");
         return;
     };
     if let Err(e) = position_less_computer_window(&window, LESS_COMPUTER_WINDOW_MIN_HEIGHT) {
@@ -2102,7 +2270,9 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(_app: &AppHandle<R>) 
 /// 隐藏 Less Computer 浮窗。供 dismiss 命令 / session 收尾共用。
 #[cfg(target_os = "macos")]
 pub(crate) fn hide_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
-    destroy_webview_window(app, "less-computer");
+    if let Some(window) = app.get_webview_window("less-computer") {
+        let _ = window.hide();
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -2111,7 +2281,7 @@ pub(crate) fn hide_less_computer_window<R: tauri::Runtime>(_app: &AppHandle<R>) 
 /// 显示全屏彩虹描边浮层：盖满当前显示器、点击穿透、置顶。Agent 工作时点亮整屏边缘。
 #[cfg(target_os = "macos")]
 pub(crate) fn show_less_computer_glow<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(window) = ensure_webview_window(app, "less-computer-glow") else {
+    let Some(window) = ensure_less_computer_glow_window(app) else {
         return;
     };
     // 盖满当前（否则主）显示器，含菜单栏/Dock 区域。关键：用「逻辑坐标」(物理/缩放) ——
@@ -2136,6 +2306,8 @@ pub(crate) fn show_less_computer_glow<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
     // 点击穿透：纯视觉浮层，绝不拦截鼠标。
     let _ = window.set_ignore_cursor_events(true);
+    // issue #470：通知 glow 前端「可见」，恢复发光动画（隐藏时会 emit(false) 卸载发光层以释放 GPU）。
+    let _ = window.emit("less-computer-glow:active", true);
     let window_clone = window.clone();
     let _ = app.run_on_main_thread(move || {
         use objc2::msg_send;
@@ -2169,7 +2341,12 @@ pub(crate) fn show_less_computer_glow<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 /// 隐藏全屏彩虹描边浮层。
 #[cfg(target_os = "macos")]
 pub(crate) fn hide_less_computer_glow<R: tauri::Runtime>(app: &AppHandle<R>) {
-    destroy_webview_window(app, "less-computer-glow");
+    if let Some(window) = app.get_webview_window("less-computer-glow") {
+        // issue #470：先通知前端「不可见」卸载全屏发光层(4 条无限动画)，webview 隐藏后即零 GPU；
+        // 否则 .hide() 后 webview 仍持续合成发光层（Windows 尤其不释放动画）。
+        let _ = window.emit("less-computer-glow:active", false);
+        let _ = window.hide();
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
