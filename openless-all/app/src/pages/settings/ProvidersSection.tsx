@@ -273,7 +273,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
       // seq 守卫：只有当前 call 还是最新时才翻 failed + 回滚下拉框；旧 call 早被
       // newer call 的 emitSaved('saving') 覆盖，不要插手。
       if (seq === llmSwitchSeqRef.current) {
-        emitSaved('failed', t('common.operationFailed'));
+        emitSaved('failed', providerErrorMessage(err, t));
         // 仅当后端切换本身没成（active.llm 仍是旧的）才回滚下拉框 —— 回到 committed
         // 与后端一致。若后端已切到 id、只是后续 prefs / 凭据写入失败，回滚反而让下拉
         // 显示旧、后端是新；此时保持下拉在 id 与后端一致更不误导。
@@ -291,7 +291,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
     if (!prefs) return;
     void updatePrefs(current => ({ ...current, llmThinkingEnabled: enabled })).catch(error => {
       console.error('[settings] failed to update LLM thinking mode', error);
-      emitSaved('failed', t('common.operationFailed'));
+      emitSaved('failed', providerErrorMessage(error, t));
     });
   };
 
@@ -330,7 +330,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
     } catch (err) {
       // seq 守卫 + 回滚 + 不 rethrow，同 onLlmProviderChange。
       if (seq === asrSwitchSeqRef.current) {
-        emitSaved('failed', t('common.operationFailed'));
+        emitSaved('failed', providerErrorMessage(err, t));
         // 同 onLlmProviderChange：仅后端没切成时才回滚下拉框，与后端保持一致。
         if (!backendSwitched) {
           setAsrProvider(committedAsrProvider);
@@ -787,17 +787,17 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
   // 改造：除 readError（持续错误，留在输入旁标识字段不可用）外，所有 saving / saved /
   //   saveError / copied / copyError 一律发到右上角 SavedToast。原内联文案太挤、跟其它
   //   页面 toast 风格不统一。
-  const showTemporaryStatus = (next: CredentialFieldStatus) => {
+  const showTemporaryStatus = (next: CredentialFieldStatus, messageOverride?: string) => {
     if (next === 'saving') {
       emitSaved('saving', t('common.saving'));
     } else if (next === 'saved') {
       emitSaved('saved', t('common.saved'));
     } else if (next === 'saveError') {
-      emitSaved('failed', t('common.operationFailed'));
+      emitSaved('failed', messageOverride ?? t('common.operationFailed'));
     } else if (next === 'copied') {
       emitSaved('saved', t('common.copied'));
     } else if (next === 'copyError') {
-      emitSaved('failed', t('common.operationFailed'));
+      emitSaved('failed', messageOverride ?? t('common.operationFailed'));
     }
     setStatus(next);
     if (statusRef.current) clearTimeout(statusRef.current);
@@ -817,7 +817,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
     } catch (error) {
       if (!mountedRef.current) return;
       console.error('[settings] failed to save credential', account, error);
-      showTemporaryStatus('saveError');
+      showTemporaryStatus('saveError', providerErrorMessage(error, t));
     }
   };
 
@@ -858,7 +858,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
       showTemporaryStatus('copied');
     } catch (error) {
       console.error('[settings] failed to copy credential', account, error);
-      showTemporaryStatus('copyError');
+      showTemporaryStatus('copyError', providerErrorMessage(error, t));
     }
   };
 
