@@ -41,4 +41,21 @@ object OpenLessNative {
     @JvmStatic external fun nativeNotifyOverlayPermissionChanged(context: android.content.Context)
 
     @JvmStatic external fun nativeNotifyOverlayDestroyed()
+
+    /** ADB specialist kit (debug builds). Returns a single status line for OpenLessAdb logcat. */
+    @JvmStatic external fun nativeAdbDumpLog(destPath: String, appFilesDir: String?): String
+
+    @JvmStatic external fun nativeAdbSetCredential(
+        account: String,
+        value: String,
+        provider: String?,
+    ): String
+
+    @JvmStatic external fun nativeAdbSetAsrProvider(provider: String): String
+
+    @JvmStatic external fun nativeAdbSetLlmProvider(provider: String): String
+
+    @JvmStatic external fun nativeAdbValidate(kind: String): String
+
+    @JvmStatic external fun nativeAdbApplyCredsJson(path: String): String
 }

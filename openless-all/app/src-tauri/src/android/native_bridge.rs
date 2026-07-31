@@ -411,4 +411,153 @@ mod jni_exports {
     ) {
         notify_overlay_destroyed();
     }
+
+    fn read_jstring(env: &mut JniEnv, value: jni::objects::JString) -> Result<String, String> {
+        env.get_string(&value)
+            .map(|s| s.to_string_lossy().into_owned())
+            .map_err(|error| format!("read jstring: {error}"))
+    }
+
+    fn read_optional_jstring(
+        env: &mut JniEnv,
+        value: JObject,
+    ) -> Result<Option<String>, String> {
+        if value.is_null() {
+            return Ok(None);
+        }
+        let text = read_jstring(env, jni::objects::JString::from(value))?;
+        if text.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(text))
+        }
+    }
+
+    fn return_status(env: *mut JNIEnv, status: String) -> jstring {
+        match JniEnv::from_raw(env) {
+            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, &status),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeAdbDumpLog(
+        env: *mut JNIEnv,
+        _class: JClass,
+        dest_path: jni::objects::JString,
+        app_files_dir: JObject,
+    ) -> jstring {
+        let status = match JniEnv::from_raw(env) {
+            Ok(mut jenv) => {
+                let dest = match read_jstring(&mut jenv, dest_path) {
+                    Ok(path) => path,
+                    Err(error) => return return_status(env, format!("DUMP_ERR {error}")),
+                };
+                let hint = match read_optional_jstring(&mut jenv, app_files_dir) {
+                    Ok(v) => v,
+                    Err(error) => return return_status(env, format!("DUMP_ERR {error}")),
+                };
+                crate::android::adb_debug::dump_log_to_with_hint(&dest, hint.as_deref())
+            }
+            Err(error) => format!("DUMP_ERR attach JNI: {error}"),
+        };
+        return_status(env, status)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeAdbSetCredential(
+        env: *mut JNIEnv,
+        _class: JClass,
+        account: jni::objects::JString,
+        value: jni::objects::JString,
+        provider: JObject,
+    ) -> jstring {
+        let status = match JniEnv::from_raw(env) {
+            Ok(mut jenv) => {
+                let account = match read_jstring(&mut jenv, account) {
+                    Ok(v) => v,
+                    Err(error) => return return_status(env, format!("SET_ERR {error}")),
+                };
+                let value = match read_jstring(&mut jenv, value) {
+                    Ok(v) => v,
+                    Err(error) => return return_status(env, format!("SET_ERR {error}")),
+                };
+                let provider = match read_optional_jstring(&mut jenv, provider) {
+                    Ok(v) => v,
+                    Err(error) => return return_status(env, format!("SET_ERR {error}")),
+                };
+                crate::android::adb_debug::set_credential(
+                    &account,
+                    &value,
+                    provider.as_deref(),
+                )
+            }
+            Err(error) => format!("SET_ERR attach JNI: {error}"),
+        };
+        return_status(env, status)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeAdbSetAsrProvider(
+        env: *mut JNIEnv,
+        _class: JClass,
+        provider: jni::objects::JString,
+    ) -> jstring {
+        let status = match JniEnv::from_raw(env) {
+            Ok(mut jenv) => match read_jstring(&mut jenv, provider) {
+                Ok(provider) => crate::android::adb_debug::set_asr_provider(&provider),
+                Err(error) => format!("SET_ERR {error}"),
+            },
+            Err(error) => format!("SET_ERR attach JNI: {error}"),
+        };
+        return_status(env, status)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeAdbSetLlmProvider(
+        env: *mut JNIEnv,
+        _class: JClass,
+        provider: jni::objects::JString,
+    ) -> jstring {
+        let status = match JniEnv::from_raw(env) {
+            Ok(mut jenv) => match read_jstring(&mut jenv, provider) {
+                Ok(provider) => crate::android::adb_debug::set_llm_provider(&provider),
+                Err(error) => format!("SET_ERR {error}"),
+            },
+            Err(error) => format!("SET_ERR attach JNI: {error}"),
+        };
+        return_status(env, status)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeAdbValidate(
+        env: *mut JNIEnv,
+        _class: JClass,
+        kind: jni::objects::JString,
+    ) -> jstring {
+        let status = match JniEnv::from_raw(env) {
+            Ok(mut jenv) => match read_jstring(&mut jenv, kind) {
+                Ok(kind) => crate::android::adb_debug::validate(&kind),
+                Err(error) => format!("VALIDATE_ERR {error}"),
+            },
+            Err(error) => format!("VALIDATE_ERR attach JNI: {error}"),
+        };
+        return_status(env, status)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeAdbApplyCredsJson(
+        env: *mut JNIEnv,
+        _class: JClass,
+        path: jni::objects::JString,
+    ) -> jstring {
+        let status = match JniEnv::from_raw(env) {
+            Ok(mut jenv) => match read_jstring(&mut jenv, path) {
+                Ok(path) => crate::android::adb_debug::apply_creds_json(&path),
+                Err(error) => format!("APPLY_ERR {error}"),
+            },
+            Err(error) => format!("APPLY_ERR attach JNI: {error}"),
+        };
+        return_status(env, status)
+    }
 }

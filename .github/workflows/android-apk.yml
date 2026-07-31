@@ -1,11 +1,11 @@
-name: Android APK (debug)
+name: Android APK (ADB specialist debug)
 
+# SPECIALIST BRANCH (special/android-adb-debug-kit) — do not merge to beta.
 # Triggers:
-#   - push v*-tauri tag → signed release APK + minisign + updater manifest → GitHub Release
-#   - workflow_dispatch → signed release APK when ANDROID_KEYSTORE_* secrets exist
-#     (overlay install + user data preserved); otherwise unsigned debug APK (annotated, non-blocking)
+#   - workflow_dispatch → ALWAYS unsigned debug APK (debuggable; ADB dump/creds tooling)
+#   - push v*-tauri tag → REJECTED on this branch (avoid shipping specialist code as release)
 #
-# Scope: full overlay/accessibility APK for ADB testing and tag releases.
+# Scope: temporary kit for users who cannot export logs / configure services via UI.
 
 on:
   push:
@@ -31,44 +31,19 @@ jobs:
       - name: Detect build mode
         id: mode
         shell: bash
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          is_tag=false
+          # ADB specialist kit: never build release from this branch.
           if [[ "${{ github.ref }}" == refs/tags/v* ]] && [[ "${{ github.ref_name }}" == *-tauri ]]; then
-            is_tag=true
+            echo "::error title=ADB specialist branch::Tag releases are disabled on special/android-adb-debug-kit. Use a normal release branch."
+            exit 1
           fi
-          echo "is_tag_release=$is_tag" >> "$GITHUB_OUTPUT"
-
-          has_keystore=true
-          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
-            if [ -z "${!name:-}" ]; then
-              has_keystore=false
-              break
-            fi
-          done
-
-          if $is_tag; then
-            echo "mode=release" >> "$GITHUB_OUTPUT"
-            echo "label=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-            echo "signing=tag-release" >> "$GITHUB_OUTPUT"
-            echo "signing_label=Tag release with release keystore" >> "$GITHUB_OUTPUT"
-          elif $has_keystore; then
-            echo "mode=release" >> "$GITHUB_OUTPUT"
-            echo "label=dispatch-run-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-            echo "signing=dispatch-release" >> "$GITHUB_OUTPUT"
-            echo "signing_label=Manual dispatch with release keystore (overlay install OK)" >> "$GITHUB_OUTPUT"
-          else
-            echo "mode=debug" >> "$GITHUB_OUTPUT"
-            echo "label=unsigned-run-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-            echo "signing=debug-fallback" >> "$GITHUB_OUTPUT"
-            echo "signing_label=Unsigned debug fallback (no keystore secrets)" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Unsigned debug APK::ANDROID_KEYSTORE_* secrets not configured. Building debug APK without release signing. Overlay install and user data preservation require the release keystore; uninstall before installing if replacing a signed build."
-          fi
+          echo "is_tag_release=false" >> "$GITHUB_OUTPUT"
+          echo "mode=debug" >> "$GITHUB_OUTPUT"
+          echo "label=adb-specialist-run-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "signing=adb-specialist-debug" >> "$GITHUB_OUTPUT"
+          echo "signing_label=ADB specialist forced debug (debuggable)" >> "$GITHUB_OUTPUT"
+          echo "::notice title=ADB specialist debug APK::Forced debug build for log dump / credential ADB tooling. Do not distribute as a normal release."
 
       - name: Check updater signing availability (tag release)
         if: steps.mode.outputs.is_tag_release == 'true'
@@ -182,6 +157,10 @@ jobs:
       - name: Merge updater / install manifest
         working-directory: openless-all/app
         run: node scripts/merge-android-updater-manifest.mjs
+
+      - name: Merge ADB specialist debug manifest
+        working-directory: openless-all/app
+        run: node scripts/merge-android-adb-debug-manifest.mjs
 
       - name: Configure Android release signing
         if: steps.mode.outputs.mode == 'release'

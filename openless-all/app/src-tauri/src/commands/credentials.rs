@@ -302,7 +302,7 @@ fn ensure_main_window(window: &Window) -> Result<(), String> {
     }
 }
 
-fn parse_account(s: &str) -> Result<CredentialAccount, String> {
+pub(crate) fn parse_account(s: &str) -> Result<CredentialAccount, String> {
     match s {
         "volcengine.app_key" => Ok(CredentialAccount::VolcengineAppKey),
         "volcengine.access_key" => Ok(CredentialAccount::VolcengineAccessKey),

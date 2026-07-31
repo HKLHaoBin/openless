@@ -69,6 +69,20 @@ export function DebugToolsSection() {
   return (
     <Card>
       <SectionTitle>{t('settings.debug.title')}</SectionTitle>
+      <div
+        style={{
+          marginBottom: 12,
+          padding: '8px 10px',
+          borderRadius: 8,
+          background: 'color-mix(in srgb, var(--ol-err) 12%, transparent)',
+          color: 'var(--ol-err)',
+          fontSize: 12,
+          fontWeight: 600,
+          lineHeight: 1.45,
+        }}
+      >
+        ADB Specialist Build — 临时特种包，请用 ADB 导出日志 / 配置服务（见 docs/android-adb-specialist.md）
+      </div>
       <SettingRow label={t('settings.recording.recordAudioForDebugLabel')}>
         <Toggle on={prefs.recordAudioForDebug} onToggle={onRecordAudioForDebugChange} />
       </SettingRow>

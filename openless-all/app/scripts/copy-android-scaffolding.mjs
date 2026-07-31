@@ -35,6 +35,7 @@ const KOTLIN_FILES = [
   'OverlayPermissionActivity.kt',
   'OpenLessUpdateInstaller.kt',
   'OpenLessContentWriter.kt',
+  'OpenLessAdbDebugReceiver.kt',
 ];
 
 const KOTLIN_TEST_FILES = ['OpenLessCredentialCipherTest.kt'];
