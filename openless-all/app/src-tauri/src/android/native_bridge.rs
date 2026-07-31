@@ -434,7 +434,7 @@ mod jni_exports {
     }
 
     fn return_status(env: *mut JNIEnv, status: String) -> jstring {
-        match JniEnv::from_raw(env) {
+        match unsafe { JniEnv::from_raw(env) } {
             Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, &status),
             Err(_) => std::ptr::null_mut(),
         }

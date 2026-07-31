@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 
-use crate::commands::credentials::parse_account;
+use crate::commands::parse_account;
 use crate::persistence::{CredentialAccount, CredentialsVault};
 
 const LLM_EXTRA_HEADERS_ACCOUNT: &str = "ark.extra_headers";
