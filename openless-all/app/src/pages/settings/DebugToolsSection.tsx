@@ -118,10 +118,11 @@ export function DebugToolsSection() {
           )}
           {exportStatus === 'err' && (
             <span
-              style={{ fontSize: 11, color: 'var(--ol-err)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: mobile ? '100%' : 220 }}
+              style={{ fontSize: 11, color: 'var(--ol-err)', lineHeight: 1.45, wordBreak: 'break-word', maxWidth: mobile ? '100%' : 280 }}
               title={exportMessage}
             >
               {t('modal.about.exportFailed')}
+              {exportMessage ? `：${exportMessage}` : ''}
             </span>
           )}
         </div>

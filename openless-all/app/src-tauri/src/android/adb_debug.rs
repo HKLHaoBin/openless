@@ -36,13 +36,19 @@ pub fn dump_log_to_with_hint(dest_path: &str, app_files_dir: Option<&str>) -> St
             candidates.push(parent.join("logs").join("openless.log"));
         }
     }
+    candidates.extend(crate::persistence::android_openless_log_candidates());
     candidates.push(crate::log_dir_path().join("openless.log"));
+    candidates.sort();
+    candidates.dedup();
 
-    let src = candidates.into_iter().find(|path| path.exists());
+    let src = candidates.iter().find(|path| path.exists()).cloned();
     let Some(src) = src else {
-        return format!(
-            "DUMP_ERR log missing (tried filesDir/logs + log_dir_path); cold-start MainActivity first"
-        );
+        let tried = candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        return format!("DUMP_ERR log missing (tried: {tried}); cold-start MainActivity first");
     };
     match std::fs::copy(&src, std::path::Path::new(dest_path)) {
         Ok(_) => format!("DUMP_OK path={dest_path} src={}", src.display()),

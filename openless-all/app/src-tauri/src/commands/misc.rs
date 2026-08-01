@@ -161,10 +161,7 @@ pub async fn stop_microphone_level_monitor(app: AppHandle) {
 /// ContentResolver 写入，避免 tauri-plugin-fs detachFd 导致 0 字节文件。
 #[tauri::command]
 pub fn export_error_log(target_path: String) -> Result<(), String> {
-    let src = crate::log_dir_path().join("openless.log");
-    if !src.exists() {
-        return Err(format!("日志文件不存在：{}", src.display()));
-    }
+    let src = resolve_openless_log_path()?;
 
     #[cfg(target_os = "android")]
     {
@@ -187,6 +184,25 @@ pub fn export_error_log(target_path: String) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| format!("复制日志失败：{e}"))
     }
+}
+
+fn resolve_openless_log_path() -> Result<std::path::PathBuf, String> {
+    let mut candidates = Vec::new();
+    #[cfg(target_os = "android")]
+    {
+        candidates.extend(crate::persistence::android_openless_log_candidates());
+    }
+    candidates.push(crate::log_dir_path().join("openless.log"));
+
+    if let Some(src) = candidates.iter().find(|path| path.exists()) {
+        return Ok(src.clone());
+    }
+    let tried = candidates
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!("日志文件不存在（已尝试：{tried}）"))
 }
 
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────

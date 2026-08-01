@@ -20,11 +20,21 @@ adb install -r .\OpenLess-android-debug-*.apk
 
 - 覆盖安装**同签名**的 debug 包可用 `-r`，保留数据。
 - 若手机上已是**正式签名** release，可能无法直接覆盖，需用户同意后 `adb uninstall com.openless.app`（会丢本地数据）再装。
-- 装好后先冷启动一次（初始化日志目录与凭证库）：
+- 装好后先冷启动一次（初始化 `files/OpenLess` 与 `files/logs`）：
 
 ```powershell
 adb shell am start -n com.openless.app/.MainActivity
 ```
+
+冷启动后预期私有目录布局：
+
+| 路径（相对 `run-as` cwd） | 用途 |
+|--------------------------|------|
+| `files/OpenLess/preferences.json` | 用户偏好（切 ASR/LLM、悬浮窗等） |
+| `files/OpenLess/credentials.enc.json` | 加密凭据 |
+| `files/logs/openless.log` | 会话文件日志（UI 导出 / `ADB_DUMP_LOG` 源） |
+
+**不要**再出现 `/data/local/tmp/openless_prefs_fallback.json`（旧 bug：设置保存必失败）。
 
 App 内「高级 → 调试工具」会显示红字 **ADB Specialist Build**，确认装的是特种包。
 
@@ -32,7 +42,7 @@ App 内「高级 → 调试工具」会显示红字 **ADB Specialist Build**，�
 
 ## 2. 导出会话日志（推荐）
 
-不经过设置页「导出」、不走 SAF。
+不经过设置页「导出」、不走 SAF。源文件应为 `files/logs/openless.log`。
 
 ```powershell
 adb logcat -c
@@ -44,7 +54,7 @@ adb pull /sdcard/Android/data/com.openless.app/files/openless-adb-export.log .
 成功时 logcat 类似：
 
 ```text
-I/OpenLessAdb: DUMP_OK path=/storage/emulated/0/Android/data/com.openless.app/files/openless-adb-export.log
+I/OpenLessAdb: DUMP_OK path=.../openless-adb-export.log src=.../files/logs/openless.log
 ```
 
 把电脑上的 `openless-adb-export.log` 发给支持方。
@@ -52,8 +62,8 @@ I/OpenLessAdb: DUMP_OK path=/storage/emulated/0/Android/data/com.openless.app/fi
 ### 备用：`run-as`（仅 debuggable debug 包）
 
 ```powershell
-adb exec-out run-as com.openless.app sh -c "pwd; find . -name openless.log 2>/dev/null"
-adb exec-out run-as com.openless.app cat logs/openless.log > openless.log
+adb exec-out run-as com.openless.app sh -c "pwd; ls -la files/OpenLess; ls -la files/logs; find . -name openless.log 2>/dev/null"
+adb exec-out run-as com.openless.app cat files/logs/openless.log > openless.log
 ```
 
 若 `run-as: Package ... is not debuggable`，说明装的不是本特种 debug 包。
