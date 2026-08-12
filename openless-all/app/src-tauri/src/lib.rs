@@ -36,6 +36,9 @@ mod endpoint_security;
 mod external_url;
 #[cfg(not(mobile))]
 mod global_hotkey_runtime;
+// 读宿主 app 光标周围的正文，给 LLM 润色当上下文。唯一接触「别的应用的文档」的地方，
+// 平台差异和安全硬拦全关在里面；目前仅 macOS 有实现，其余平台优雅降级。
+mod host_document;
 #[cfg(not(mobile))]
 #[path = "hotkey.rs"]
 mod hotkey;
@@ -49,6 +52,7 @@ mod llm_gemini;
 #[cfg(mobile)]
 mod mobile_runtime;
 mod net;
+mod omni;
 mod permissions;
 mod persistence;
 mod polish;
@@ -68,14 +72,14 @@ mod selection;
 mod selection;
 #[cfg(not(mobile))]
 mod shortcut_binding;
+#[cfg(mobile)]
+#[path = "mobile_stubs/shortcut_binding.rs"]
+mod shortcut_binding;
 #[cfg(not(mobile))]
 mod side_aware_combo;
 #[cfg(mobile)]
 #[path = "mobile_stubs/side_aware_combo.rs"]
 mod side_aware_combo;
-#[cfg(mobile)]
-#[path = "mobile_stubs/shortcut_binding.rs"]
-mod shortcut_binding;
 mod types;
 #[cfg(not(mobile))]
 mod unicode_keystroke;
@@ -87,6 +91,7 @@ mod windows_ime_ipc;
 mod windows_ime_profile;
 #[cfg(target_os = "windows")]
 mod windows_ime_protocol;
+mod windows_ime_restore;
 #[cfg(target_os = "windows")]
 mod windows_ime_session;
 
@@ -114,6 +119,8 @@ static LESS_COMPUTER_PANEL_EPOCH: std::sync::atomic::AtomicU64 =
 #[cfg(not(mobile))]
 static TRAY_MICROPHONE_WATCHER_STOPPING: AtomicBool = AtomicBool::new(false);
 #[cfg(not(mobile))]
+struct TrayMicrophoneDeviceCache(parking_lot::Mutex<Vec<recorder::MicrophoneDevice>>);
+#[cfg(not(mobile))]
 use tauri::menu::{
     CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, Submenu, SubmenuBuilder,
 };
@@ -127,7 +134,8 @@ use tauri::{
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-use crate::types::PolishMode;
+#[cfg(not(mobile))]
+use crate::types::StylePack;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -186,6 +194,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::marketplace_list,
             commands::marketplace_detail,
             commands::marketplace_install,
+            commands::marketplace_download,
             commands::marketplace_upload,
             commands::marketplace_like,
             commands::marketplace_my_likes,
@@ -211,12 +220,21 @@ macro_rules! app_invoke_handler_desktop {
             commands::cancel_dictation,
             coding_agent::commands::coding_agent_detect,
             coding_agent::commands::coding_agent_detect_opencode,
+            coding_agent::commands::coding_agent_list_opencode_models,
             coding_agent::commands::coding_agent_run_test,
             coding_agent::commands::coding_agent_cancel_test,
             coding_agent::commands::coding_agent_command_risk,
             commands::handle_window_hotkey_event,
             #[cfg(debug_assertions)]
             commands::inject_hotkey_click_for_dev,
+            #[cfg(debug_assertions)]
+            commands::run_selection_polish_for_dev,
+            #[cfg(not(mobile))]
+            commands::get_selection_polish_preview,
+            #[cfg(not(mobile))]
+            commands::confirm_selection_polish_preview,
+            #[cfg(not(mobile))]
+            commands::cancel_selection_polish_preview,
             commands::repolish,
             commands::list_style_packs,
             commands::create_style_pack_from_template,
@@ -239,17 +257,30 @@ macro_rules! app_invoke_handler_desktop {
             commands::read_credential,
             commands::set_active_asr_provider,
             commands::set_active_llm_provider,
+            commands::list_channels,
+            commands::create_channel,
+            commands::rename_channel,
+            commands::set_channel_provider_type,
+            commands::delete_channel_if_blank,
+            commands::delete_channel,
+            commands::set_channel_enabled,
+            commands::reorder_channels,
+            commands::record_channel_test,
+            commands::set_active_omni_provider,
             commands::get_qa_hotkey_label,
             commands::set_qa_hotkey,
+            commands::set_selection_polish_hotkey,
             commands::validate_shortcut_binding,
             commands::set_dictation_hotkey,
             commands::set_translation_hotkey,
             commands::set_switch_style_hotkey,
             commands::set_open_app_hotkey,
+            commands::set_style_pack_hotkeys,
             commands::qa_window_dismiss,
             commands::qa_toggle_recording,
             commands::qa_submit_text,
             commands::less_computer_window_dismiss,
+            commands::less_computer_window_open,
             commands::chat_panel_focus_keyboard,
             commands::less_computer_submit_text,
             commands::less_computer_sync,
@@ -265,6 +296,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::local_asr_set_mirror,
             commands::local_asr_list_models,
             commands::local_asr_fetch_remote_info,
+            commands::local_asr_fetch_hf_card,
             commands::local_asr_download_model,
             commands::local_asr_cancel_download,
             commands::local_asr_delete_model,
@@ -314,6 +346,10 @@ macro_rules! app_invoke_handler_desktop {
             #[cfg(target_os = "windows")]
             commands::sherpa_onnx_asr_reveal_model_dir,
             commands::export_error_log,
+            commands::debug_read_cursor_context,
+            commands::accept_pending_correction,
+            commands::reject_pending_correction,
+            commands::dismiss_vocab_suggestions,
             restart_app,
             reset_accessibility_permission_and_restart_app,
             log_client_error,
@@ -351,6 +387,16 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::read_credential,
             $crate::commands::set_active_asr_provider,
             $crate::commands::set_active_llm_provider,
+            $crate::commands::list_channels,
+            $crate::commands::create_channel,
+            $crate::commands::rename_channel,
+            $crate::commands::set_channel_provider_type,
+            $crate::commands::delete_channel_if_blank,
+            $crate::commands::delete_channel,
+            $crate::commands::set_channel_enabled,
+            $crate::commands::reorder_channels,
+            $crate::commands::record_channel_test,
+            $crate::commands::set_active_omni_provider,
             $crate::commands::validate_provider_credentials,
             $crate::commands::list_provider_models,
             $crate::commands::list_history,
@@ -363,6 +409,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::marketplace_list,
             $crate::commands::marketplace_detail,
             $crate::commands::marketplace_install,
+            $crate::commands::marketplace_download,
             $crate::commands::marketplace_upload,
             $crate::commands::marketplace_like,
             $crate::commands::marketplace_my_likes,
@@ -498,6 +545,7 @@ fn run_desktop() {
         .manage(sherpa_onnx_runtime.clone())
         .manage(commands::MicrophoneMonitorState::new(None))
         .manage(commands::TrayMicrophoneMenuState::new(Vec::new()))
+        .manage(TrayMicrophoneDeviceCache(parking_lot::Mutex::new(Vec::new())))
         .setup(move |app| {
             init_file_logger();
             log::info!("=== OpenLess 启动 ===");
@@ -753,6 +801,7 @@ fn run_desktop() {
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
                 // 同步启动 QA hotkey listener。和 dictation hotkey 平行，互不抢状态。
                 coordinator.start_qa_hotkey_listener();
+                coordinator.start_selection_polish_hotkey_listener();
                 // 启动「快速 Agent」双热键监听（功能默认关闭，启用后才注册）。
                 coordinator.start_coding_agent_hotkey_listener();
                 // 启动自定义组合键监听器。当 trigger == Custom 时替代 modifier-only 监听器。
@@ -760,6 +809,7 @@ fn run_desktop() {
                 coordinator.start_translation_hotkey_listener();
                 coordinator.start_switch_style_hotkey_listener();
                 coordinator.start_open_app_hotkey_listener();
+                coordinator.start_style_pack_hotkey_listeners();
             }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => show_main_window(app),
@@ -776,11 +826,13 @@ fn run_desktop() {
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
                 coordinator.stop_hotkey_listener();
                 coordinator.stop_qa_hotkey_listener();
+                coordinator.stop_selection_polish_hotkey_listener();
                 coordinator.stop_coding_agent_hotkey_listener();
                 coordinator.stop_combo_hotkey_listener();
                 coordinator.stop_translation_hotkey_listener();
                 coordinator.stop_switch_style_hotkey_listener();
                 coordinator.stop_open_app_hotkey_listener();
+                coordinator.stop_style_pack_hotkey_listeners();
             }
             _ => {}
         });
@@ -805,12 +857,15 @@ struct TrayMenu {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg(not(mobile))]
-struct TrayPolishModeMenuEntry {
+struct TrayStylePackMenuEntry {
     id: String,
-    label: &'static str,
-    mode: PolishMode,
+    pack_id: String,
+    label: String,
     checked: bool,
 }
+
+#[cfg(not(mobile))]
+const TRAY_STYLE_PACK_MENU_ID_PREFIX: &str = "style-pack-id-";
 
 fn tray_style_menu_enabled() -> bool {
     #[cfg(all(not(mobile), target_os = "windows"))]
@@ -820,32 +875,44 @@ fn tray_style_menu_enabled() -> bool {
 }
 
 #[cfg(not(mobile))]
-fn tray_polish_mode_menu_entries(selected: PolishMode) -> Vec<TrayPolishModeMenuEntry> {
-    [
-        (PolishMode::Raw, "style-raw"),
-        (PolishMode::Light, "style-light"),
-        (PolishMode::Structured, "style-structured"),
-        (PolishMode::Formal, "style-formal"),
-    ]
-    .into_iter()
-    .map(|(mode, id)| TrayPolishModeMenuEntry {
-        id: id.to_string(),
-        label: mode.display_name(),
-        mode,
-        checked: mode == selected,
-    })
-    .collect()
+fn tray_style_pack_menu_id(pack_id: &str) -> String {
+    format!("{TRAY_STYLE_PACK_MENU_ID_PREFIX}{pack_id}")
 }
 
 #[cfg(not(mobile))]
-fn parse_tray_polish_mode_id(id: &str) -> Option<PolishMode> {
-    match id {
-        "style-raw" => Some(PolishMode::Raw),
-        "style-light" => Some(PolishMode::Light),
-        "style-structured" => Some(PolishMode::Structured),
-        "style-formal" => Some(PolishMode::Formal),
-        _ => None,
-    }
+fn parse_tray_style_pack_menu_id(id: &str) -> Option<&str> {
+    let pack_id = id.strip_prefix(TRAY_STYLE_PACK_MENU_ID_PREFIX)?;
+    (!pack_id.is_empty()).then_some(pack_id)
+}
+
+#[cfg(not(mobile))]
+fn tray_style_pack_menu_entries(
+    packs: &[StylePack],
+    active_style_pack_id: &str,
+) -> Vec<TrayStylePackMenuEntry> {
+    packs
+        .iter()
+        .filter(|pack| pack.enabled)
+        .map(|pack| TrayStylePackMenuEntry {
+            id: tray_style_pack_menu_id(&pack.id),
+            pack_id: pack.id.clone(),
+            label: if pack.name.trim().is_empty() {
+                pack.id.clone()
+            } else {
+                pack.name.clone()
+            },
+            checked: pack.id == active_style_pack_id,
+        })
+        .collect()
+}
+
+#[cfg(not(mobile))]
+fn resolve_tray_style_pack_id<'a>(id: &'a str, packs: &[StylePack]) -> Option<&'a str> {
+    let pack_id = parse_tray_style_pack_menu_id(id)?;
+    packs
+        .iter()
+        .any(|pack| pack.enabled && pack.id == pack_id)
+        .then_some(pack_id)
 }
 
 #[cfg(not(mobile))]
@@ -880,13 +947,12 @@ fn build_style_tray_menu<M: Manager<tauri::Wry>>(
     coordinator: &Arc<coordinator::Coordinator>,
 ) -> tauri::Result<StyleTrayMenu> {
     let prefs = coordinator.prefs().get();
-    let selected = coordinator
-        .style_packs()
-        .get_or_default_active(&prefs.active_style_pack_id)
-        .map(|pack| pack.base_mode)
-        .unwrap_or(prefs.default_mode);
+    let packs = coordinator.style_packs().list().unwrap_or_else(|err| {
+        log::warn!("[tray] list style packs for tray menu failed: {err}");
+        Vec::new()
+    });
     let mut submenu = SubmenuBuilder::with_id(app, "style", "输出风格");
-    for entry in tray_polish_mode_menu_entries(selected) {
+    for entry in tray_style_pack_menu_entries(&packs, &prefs.active_style_pack_id) {
         let item = CheckMenuItemBuilder::with_id(&entry.id, entry.label)
             .checked(entry.checked)
             .build(app)?;
@@ -905,13 +971,10 @@ fn build_microphone_tray_menu<M: Manager<tauri::Wry>>(
     let selected = coordinator.prefs().get().microphone_device_name;
     let mut items = Vec::new();
     let mut submenu = SubmenuBuilder::with_id(app, "microphone", "选择麦克风");
-    let devices = match recorder::list_input_devices() {
-        Ok(devices) => devices,
-        Err(err) => {
-            log::warn!("[tray] list microphone devices failed: {err}");
-            Vec::new()
-        }
-    };
+    // CoreAudio device enumeration can block inside AudioUnitSetProperty while AppKit is
+    // finishing launch. Tray menus must be built on the main thread, so only consume the
+    // cache here; the watcher below owns every potentially blocking enumeration.
+    let devices = app.state::<TrayMicrophoneDeviceCache>().0.lock().clone();
     let selected_available =
         selected.trim().is_empty() || devices.iter().any(|device| device.name == selected);
 
@@ -969,18 +1032,44 @@ pub(crate) fn refresh_tray_microphone_menu(app: &AppHandle) -> tauri::Result<()>
 }
 
 #[cfg(not(mobile))]
-fn microphone_device_signature() -> Option<Vec<(String, bool)>> {
+fn microphone_devices_with_signature(
+) -> Option<(Vec<recorder::MicrophoneDevice>, Vec<(String, bool)>)> {
     match recorder::list_input_devices() {
-        Ok(devices) => Some(
-            devices
-                .into_iter()
-                .map(|device| (device.name, device.is_default))
-                .collect(),
-        ),
+        Ok(devices) => {
+            let signature = devices
+                .iter()
+                .map(|device| (device.name.clone(), device.is_default))
+                .collect();
+            Some((devices, signature))
+        }
         Err(err) => {
             log::warn!("[tray] watch microphone devices failed: {err}");
             None
         }
+    }
+}
+
+/// Enumerate devices off the main thread, update the shared cache, then rebuild the tray on
+/// AppKit's main thread only when the device signature changed.
+#[cfg(not(mobile))]
+fn refresh_microphone_cache_if_changed(
+    app: &AppHandle,
+    last_signature: &parking_lot::Mutex<Option<Vec<(String, bool)>>>,
+) {
+    let Some((devices, signature)) = microphone_devices_with_signature() else {
+        return;
+    };
+    {
+        let mut guard = last_signature.lock();
+        if guard.as_ref() == Some(&signature) {
+            return;
+        }
+        *guard = Some(signature);
+    }
+    *app.state::<TrayMicrophoneDeviceCache>().0.lock() = devices;
+    let refresh_app = app.clone();
+    if let Err(err) = app.run_on_main_thread(move || refresh_microphone_on_main(&refresh_app)) {
+        log::warn!("[tray] dispatch microphone cache refresh failed: {err}");
     }
 }
 
@@ -995,24 +1084,29 @@ fn refresh_microphone_on_main(app: &AppHandle) {
 }
 
 /// 设备变更去抖闭包：被 OS 原生通知回调（macOS CoreAudio / Windows MMDevice）调用。
-/// 复用 `microphone_device_signature()` 去抖——签名没变就零副作用直接返回；变了才
-/// `run_on_main_thread` 派发刷新+emit。OS 通知可能合并/重复触发，去抖确保只在真正
-/// 变化时刷新。`last_signature` 用 `Mutex` 保护，因为回调可能从不同的 CoreAudio/COM
-/// 线程并发进入。
+/// OS 回调仅调度一个后台枚举任务，绝不在 AppKit 主线程或 CoreAudio/COM 通知线程中
+/// 直接枚举设备。并发通知通过 `refresh_in_flight` 合并，签名去抖避免重复刷新菜单。
 #[cfg(not(mobile))]
 fn make_microphone_change_handler(app: AppHandle) -> impl Fn() + Send + Sync + 'static {
-    let last_signature = parking_lot::Mutex::new(microphone_device_signature());
+    let last_signature = Arc::new(parking_lot::Mutex::new(None));
+    let refresh_in_flight = Arc::new(AtomicBool::new(false));
     move || {
-        let signature = microphone_device_signature();
-        {
-            let mut guard = last_signature.lock();
-            if signature == *guard {
-                return;
-            }
-            *guard = signature;
+        if refresh_in_flight.swap(true, Ordering::AcqRel) {
+            return;
         }
         let refresh_app = app.clone();
-        let _ = app.run_on_main_thread(move || refresh_microphone_on_main(&refresh_app));
+        let refresh_signature = Arc::clone(&last_signature);
+        let refresh_flag = Arc::clone(&refresh_in_flight);
+        if let Err(err) = std::thread::Builder::new()
+            .name("openless-tray-mic-event".into())
+            .spawn(move || {
+                refresh_microphone_cache_if_changed(&refresh_app, &refresh_signature);
+                refresh_flag.store(false, Ordering::Release);
+            })
+        {
+            refresh_in_flight.store(false, Ordering::Release);
+            log::warn!("[tray] start microphone event refresh failed: {err}");
+        }
     }
 }
 
@@ -1025,8 +1119,10 @@ fn start_tray_microphone_watcher(app: AppHandle) {
     //    Linux 无原生路径，返回 false，纯靠下面的慢速兜底。
     //    注册失败（OSStatus≠0 / RegisterEndpoint Err）只 warn，不 panic——兜底轮询保证
     //    三平台都「永远能检测到设备」。
-    let native_registered =
-        device_watch::spawn_native_watcher(app.clone(), make_microphone_change_handler(app.clone()));
+    let native_registered = device_watch::spawn_native_watcher(
+        app.clone(),
+        make_microphone_change_handler(app.clone()),
+    );
     if native_registered {
         log::info!("[tray] OS native microphone device watcher registered");
     } else {
@@ -1041,7 +1137,9 @@ fn start_tray_microphone_watcher(app: AppHandle) {
     if let Err(err) = std::thread::Builder::new()
         .name("openless-tray-mic-poll".into())
         .spawn(move || {
-            let mut last_signature = microphone_device_signature();
+            let last_signature = parking_lot::Mutex::new(None);
+            // Populate the initially empty tray cache without blocking AppKit startup.
+            refresh_microphone_cache_if_changed(&app, &last_signature);
             while !TRAY_MICROPHONE_WATCHER_STOPPING.load(Ordering::Relaxed) {
                 // 60s（而非 10s）：原生通知承担实时检测，这条线程只是兜底，把它拉到 60s
                 // 进一步压低空闲唤醒。1s 一片的睡眠让退出 flag 最多 1s 内生效，避免退出时
@@ -1055,13 +1153,7 @@ fn start_tray_microphone_watcher(app: AppHandle) {
                 if TRAY_MICROPHONE_WATCHER_STOPPING.load(Ordering::Relaxed) {
                     break;
                 }
-                let signature = microphone_device_signature();
-                if signature == last_signature {
-                    continue;
-                }
-                last_signature = signature;
-                let refresh_app = app.clone();
-                let _ = app.run_on_main_thread(move || refresh_microphone_on_main(&refresh_app));
+                refresh_microphone_cache_if_changed(&app, &last_signature);
             }
         })
     {
@@ -1091,12 +1183,23 @@ fn handle_microphone_tray_menu_event(app: &AppHandle, id: &str) {
 
 #[cfg(not(mobile))]
 fn handle_style_tray_menu_event(app: &AppHandle, id: &str) -> bool {
-    let Some(mode) = parse_tray_polish_mode_id(id) else {
+    let Some(pack_id) = parse_tray_style_pack_menu_id(id) else {
         return false;
     };
     let coord = app.state::<Arc<coordinator::Coordinator>>();
-    if let Err(err) = commands::activate_builtin_style_mode(&coord, app, mode) {
-        log::warn!("[tray] activate builtin style mode failed: {err}");
+    let packs = match coord.style_packs().list() {
+        Ok(packs) => packs,
+        Err(err) => {
+            log::warn!("[tray] validate style pack tray item failed: {err}");
+            return true;
+        }
+    };
+    if resolve_tray_style_pack_id(id, &packs).is_none() {
+        log::warn!("[tray] ignore stale or disabled style pack tray item id={pack_id}");
+        return true;
+    }
+    if let Err(err) = commands::activate_style_pack_by_id(&coord, app, pack_id) {
+        log::warn!("[tray] activate style pack from tray failed: {err}");
         return true;
     }
     if let Err(err) = refresh_tray_microphone_menu(app) {
@@ -1148,12 +1251,7 @@ fn apply_windows_caption_theme<R: Runtime>(window: &tauri::WebviewWindow<R>, dar
             &immersive_dark,
             "immersive dark mode",
         );
-        set_dwm_window_attribute(
-            hwnd,
-            DWMWA_CAPTION_COLOR,
-            &caption_color,
-            "caption color",
-        );
+        set_dwm_window_attribute(hwnd, DWMWA_CAPTION_COLOR, &caption_color, "caption color");
         set_dwm_window_attribute(hwnd, DWMWA_TEXT_COLOR, &text_color, "text color");
         set_dwm_window_attribute(hwnd, DWMWA_BORDER_COLOR, &border_color, "border color");
     }
@@ -1639,10 +1737,7 @@ fn bottom_visual_position(
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn frame_contains_point(frame: LogicalMonitorFrame, x: f64, y: f64) -> bool {
-    x >= frame.x
-        && x < frame.x + frame.width
-        && y >= frame.y
-        && y < frame.y + frame.height
+    x >= frame.x && x < frame.x + frame.width && y >= frame.y && y < frame.y + frame.height
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -1851,11 +1946,8 @@ mod macos_capsule_ax {
 
     unsafe fn cfstring_from_static(bytes_with_nul: &[u8]) -> Option<CFStringRef> {
         let cstr = CStr::from_bytes_with_nul(bytes_with_nul).ok()?;
-        let s = CFStringCreateWithCString(
-            std::ptr::null(),
-            cstr.as_ptr(),
-            K_CF_STRING_ENCODING_UTF8,
-        );
+        let s =
+            CFStringCreateWithCString(std::ptr::null(), cstr.as_ptr(), K_CF_STRING_ENCODING_UTF8);
         if s.is_null() {
             None
         } else {
@@ -2172,7 +2264,10 @@ fn make_chat_window_panel_macos<R: tauri::Runtime>(window: &tauri::WebviewWindow
 /// 解法是把 NSWindow 的 `movableByWindowBackground` 打开——这条路径不依赖窗口是否成为
 /// key window，跟 Spotlight / Raycast 的浮窗是同一手法。设一次就够，整个生命周期保持。
 #[cfg(target_os = "macos")]
-fn make_chat_window_draggable_macos<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>, tag: &str) {
+fn make_chat_window_draggable_macos<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    tag: &str,
+) {
     use objc2::msg_send;
     use objc2::runtime::{AnyObject, Bool};
     let Ok(handle) = window.ns_window() else {
@@ -2213,19 +2308,20 @@ fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::Webv
     if let Some(w) = app.get_webview_window("qa") {
         return Some(w);
     }
-    let built = WebviewWindowBuilder::new(app, "qa", WebviewUrl::App("index.html?window=qa".into()))
-        .title("OpenLess QA")
-        .inner_size(QA_WINDOW_WIDTH, QA_WINDOW_HEIGHT)
-        .decorations(false)
-        .transparent(true)
-        .shadow(true)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .resizable(false)
-        .focused(false)
-        .visible(false)
-        .accept_first_mouse(true)
-        .build();
+    let built =
+        WebviewWindowBuilder::new(app, "qa", WebviewUrl::App("index.html?window=qa".into()))
+            .title("OpenLess QA")
+            .inner_size(QA_WINDOW_WIDTH, QA_WINDOW_HEIGHT)
+            .decorations(false)
+            .transparent(true)
+            .shadow(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .focused(false)
+            .visible(false)
+            .accept_first_mouse(true)
+            .build();
     match built {
         Ok(w) => {
             // ⚠️ NSWindow 操作必须在主线程（macOS 26 硬约束）。ensure_qa_window 常从
@@ -2258,7 +2354,9 @@ fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::Webv
 
 /// 懒创建 Less Computer 浮窗（macOS only）。配置与原 tauri.conf 的 less-computer 块一致。
 #[cfg(target_os = "macos")]
-fn ensure_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
+fn ensure_less_computer_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
     if let Some(w) = app.get_webview_window("less-computer") {
         return Some(w);
     }
@@ -2370,6 +2468,61 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     hide_chat_window_animated(app, "qa", &QA_PANEL_EPOCH);
 }
 
+/// 选区润色预览是独立、可编辑的小窗：模型结果不会直接覆盖，用户确认后才回到原选区粘贴。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn ensure_selection_polish_preview_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(window) = app.get_webview_window("selection-polish-preview") {
+        return Some(window);
+    }
+    WebviewWindowBuilder::new(
+        app,
+        "selection-polish-preview",
+        WebviewUrl::App("index.html?window=selection-polish-preview".into()),
+    )
+    .title("OpenLess 选区润色预览")
+    .inner_size(640.0, 440.0)
+    .min_inner_size(480.0, 320.0)
+    .resizable(true)
+    .always_on_top(true)
+    .visible(false)
+    .build()
+    .map(Some)
+    .unwrap_or_else(|error| {
+        log::warn!("[selection-polish] create preview window failed: {error}");
+        None
+    })
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(window) = ensure_selection_polish_preview_window(app) else {
+        return;
+    };
+    if let Err(error) = window.show() {
+        log::warn!("[selection-polish] show preview failed: {error}");
+        return;
+    }
+    if let Err(error) = window.set_focus() {
+        log::warn!("[selection-polish] focus preview failed: {error}");
+    }
+    let _ = app.emit_to(
+        "selection-polish-preview",
+        "selection-polish-preview:shown",
+        (),
+    );
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
+
+pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("selection-polish-preview") {
+        let _ = window.hide();
+    }
+}
+
 // ───────────────────────── Less Computer 浮窗 ─────────────────────────
 //
 // Less Computer 语音 Agent 的聊天浮窗（窗口 label = "less-computer"）。
@@ -2419,13 +2572,23 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
         log::info!("[less-computer] show 跳过：窗口不存在");
         return;
     };
-    if let Err(e) = position_less_computer_window(&window) {
-        log::warn!("[less-computer] position before show failed: {e}");
-    }
     let window_clone = window.clone();
     let _ = app.run_on_main_thread(move || {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
+        // This helper is also called from the Tokio worker that executes a text or
+        // voice Agent turn. Keep every AppKit-backed window mutation on the main
+        // thread; macOS aborts the process if a converted NSPanel is resized or moved
+        // from that worker while WebKit is servicing its custom URL scheme.
+        if let Err(e) = position_less_computer_window(&window_clone) {
+            log::warn!("[less-computer] position before show failed: {e}");
+        }
+        // A lazily-created window starts with Tauri's visible=false state. Cocoa's
+        // orderFrontRegardless alone does not always clear that state, leaving the first
+        // text-only launch invisible even though the NSPanel was created successfully.
+        if let Err(e) = window_clone.show() {
+            log::warn!("[less-computer] window.show before orderFront failed: {e}");
+        }
         match window_clone.ns_window() {
             Ok(handle) => {
                 let ns = handle as *mut AnyObject;
@@ -2784,12 +2947,13 @@ fn capsule_height_for_qa() -> f64 {
 mod tests {
     use super::{
         bottom_center_position, bottom_visual_position, capsule_height_for_qa,
-        capsule_visual_height, capsule_window_bounds, clamp_to_monitor, logical_monitor_frame,
-        frame_contains_point, frame_distance_to_point_squared, parse_tray_polish_mode_id,
-        rotate_log_if_too_large, tray_polish_mode_menu_entries, tray_style_menu_enabled,
-        LogicalMonitorFrame, LOG_ROTATE_LIMIT_BYTES,
+        capsule_visual_height, capsule_window_bounds, clamp_to_monitor, frame_contains_point,
+        frame_distance_to_point_squared, logical_monitor_frame, parse_tray_style_pack_menu_id,
+        resolve_tray_style_pack_id, rotate_log_if_too_large, tray_style_menu_enabled,
+        tray_style_pack_menu_entries, tray_style_pack_menu_id, LogicalMonitorFrame,
+        LOG_ROTATE_LIMIT_BYTES,
     };
-    use crate::types::PolishMode;
+    use crate::types::{builtin_style_pack_for_mode, PolishMode, StylePack, StylePackKind};
     use std::io::Write;
 
     #[test]
@@ -2802,43 +2966,109 @@ mod tests {
     }
 
     #[test]
-    fn tray_style_menu_lists_builtin_modes_in_expected_order() {
-        let entries = tray_polish_mode_menu_entries(PolishMode::Structured);
+    fn tray_style_menu_lists_enabled_packs_and_marks_active_id() {
+        let imported = StylePack {
+            id: "imported.meeting".into(),
+            name: "会议纪要".into(),
+            kind: StylePackKind::Imported,
+            base_mode: PolishMode::Structured,
+            ..StylePack::default()
+        };
+        let duplicate_base_mode = StylePack {
+            id: "imported.structured".into(),
+            name: "自定义结构化".into(),
+            kind: StylePackKind::Imported,
+            base_mode: PolishMode::Structured,
+            ..StylePack::default()
+        };
+        let disabled = StylePack {
+            id: "imported.disabled".into(),
+            name: "已禁用".into(),
+            kind: StylePackKind::Imported,
+            base_mode: PolishMode::Structured,
+            enabled: false,
+            ..StylePack::default()
+        };
+
+        let packs = vec![
+            builtin_style_pack_for_mode(PolishMode::Raw),
+            builtin_style_pack_for_mode(PolishMode::Light),
+            builtin_style_pack_for_mode(PolishMode::Structured),
+            builtin_style_pack_for_mode(PolishMode::Formal),
+            imported,
+            duplicate_base_mode,
+            disabled,
+        ];
+        let entries = tray_style_pack_menu_entries(&packs, "imported.meeting");
 
         assert_eq!(
             entries
                 .iter()
-                .map(|entry| (entry.id.as_str(), entry.label, entry.mode, entry.checked))
+                .map(|entry| (entry.pack_id.as_str(), entry.label.as_str(), entry.checked))
                 .collect::<Vec<_>>(),
             vec![
-                ("style-raw", "原文", PolishMode::Raw, false),
-                ("style-light", "轻度润色", PolishMode::Light, false),
-                ("style-structured", "清晰结构", PolishMode::Structured, true),
-                ("style-formal", "正式表达", PolishMode::Formal, false),
+                ("builtin.raw", "原文", false),
+                ("builtin.light", "轻度润色", false),
+                ("builtin.structured", "清晰结构", false),
+                ("builtin.formal", "正式表达", false),
+                ("imported.meeting", "会议纪要", true),
+                ("imported.structured", "自定义结构化", false),
             ]
         );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.checked)
+                .map(|entry| entry.pack_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["imported.meeting"]
+        );
+        assert_eq!(entries[0].id, tray_style_pack_menu_id("builtin.raw"));
     }
 
     #[test]
-    fn tray_style_menu_id_parsing_accepts_only_style_items() {
+    fn tray_style_menu_ids_are_stable_and_collision_safe() {
+        let first = tray_style_pack_menu_id("imported.meeting");
+        assert_eq!(first, "style-pack-id-imported.meeting");
+        assert_eq!(first, tray_style_pack_menu_id("imported.meeting"));
+        assert_ne!(first, tray_style_pack_menu_id("imported.structured"));
+        assert_ne!(first, "style-structured");
+    }
+
+    #[test]
+    fn tray_style_menu_id_parsing_rejects_malformed_and_stale_items() {
+        let packs = vec![
+            builtin_style_pack_for_mode(PolishMode::Raw),
+            StylePack {
+                id: "imported.disabled".into(),
+                name: "已禁用".into(),
+                kind: StylePackKind::Imported,
+                base_mode: PolishMode::Raw,
+                enabled: false,
+                ..StylePack::default()
+            },
+        ];
+
         assert_eq!(
-            parse_tray_polish_mode_id("style-raw"),
-            Some(PolishMode::Raw)
+            parse_tray_style_pack_menu_id(&tray_style_pack_menu_id("builtin.raw")),
+            Some("builtin.raw")
         );
         assert_eq!(
-            parse_tray_polish_mode_id("style-light"),
-            Some(PolishMode::Light)
+            resolve_tray_style_pack_id(&tray_style_pack_menu_id("builtin.raw"), &packs),
+            Some("builtin.raw")
         );
         assert_eq!(
-            parse_tray_polish_mode_id("style-structured"),
-            Some(PolishMode::Structured)
+            resolve_tray_style_pack_id(&tray_style_pack_menu_id("imported.disabled"), &packs),
+            None
         );
         assert_eq!(
-            parse_tray_polish_mode_id("style-formal"),
-            Some(PolishMode::Formal)
+            resolve_tray_style_pack_id(&tray_style_pack_menu_id("imported.deleted"), &packs),
+            None
         );
-        assert_eq!(parse_tray_polish_mode_id("toggle"), None);
-        assert_eq!(parse_tray_polish_mode_id("mic-default"), None);
+        assert_eq!(parse_tray_style_pack_menu_id("style-pack-id-"), None);
+        assert_eq!(parse_tray_style_pack_menu_id("style-raw"), None);
+        assert_eq!(parse_tray_style_pack_menu_id("toggle"), None);
+        assert_eq!(parse_tray_style_pack_menu_id("mic-default"), None);
     }
 
     #[test]
@@ -2909,10 +3139,7 @@ mod tests {
 
         assert_eq!(frame_distance_to_point_squared(frame, 100.0, -100.0), 0.0);
         assert_eq!(frame_distance_to_point_squared(frame, 100.0, 20.0), 400.0);
-        assert_eq!(
-            frame_distance_to_point_squared(frame, -10.0, -910.0),
-            200.0
-        );
+        assert_eq!(frame_distance_to_point_squared(frame, -10.0, -910.0), 200.0);
     }
 
     #[test]

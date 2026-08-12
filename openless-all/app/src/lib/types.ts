@@ -24,18 +24,31 @@ export type {
 
 export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
 
+/** 识别管线模式（issue #902）：traditional = ASR + LLM 两段式；
+ *  multimodal = 单个多模态模型一步完成「音频 + 提示词 → 最终文本」。
+ *  两套配置在凭据库中完全隔离，运行时只读当前模式。 */
+export type PipelineMode = 'traditional' | 'multimodal';
+
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed';
 
 /** 概览页年度活动热力图的单日计数（date = 本地日期 YYYY-MM-DD）。 */
 export interface ActivityDay {
   date: string;
   count: number;
+  /** 当日最终插入文本的总字符数。升级前写入的日期没有这个字段（读作 0）。 */
+  chars?: number;
+  /** 当日录音总时长（毫秒）。升级前写入的日期没有这个字段（读作 0）。 */
+  durationMs?: number;
 }
 
 export interface DictationSession {
   id: string;
   createdAt: string; // ISO-8601
   rawTranscript: string;
+  /** 纠正规则**之前**的 ASR 原文。`rawTranscript` 存的是规则跑完之后的版本，
+   *  两者相同时后端不写这个字段（null）。用于归因：一次误识别到底是 ASR 听错还是
+   *  LLM 改坏。旧历史没有此字段。 */
+  asrTranscript: string | null;
   finalText: string;
   mode: PolishMode;
   stylePackId: string | null;
@@ -58,6 +71,8 @@ export interface DictationSession {
   llmProvider: string | null;
   /** 本次润色用的 LLM 模型 id。Raw 直通时为 null。 */
   llmModel: string | null;
+  /** 本次会话走的识别管线模式（"multimodal" / 缺失 = 传统两段式）。 */
+  pipelineMode?: string | null;
   /** 松键后等待转写结果的实测耗时（毫秒）。流式 ASR 是收尾延迟，批式是完整转写耗时。 */
   asrMs: number | null;
   /** LLM 润色/翻译调用的实测耗时（毫秒）。未调用 LLM 时为 null。 */
@@ -73,12 +88,37 @@ export interface DictionaryEntry {
   createdAt: string;
 }
 
+/** 一条纠正规则是怎么来的。老的 correction-rules.json 没有这个字段，后端反序列化时
+ *  落到 'manual'——那些确实都是手动加的。 */
+export type RuleSource = 'manual' | 'learned';
+
 export interface CorrectionRule {
   id: string;
   pattern: string;
   replacement: string;
   enabled: boolean;
   createdAt: string;
+  source: RuleSource;
+}
+
+/** `debug_read_cursor_context` 的返回：一次光标上下文探测的完整结果。
+ *  status 之外的每一种都要能说清「为什么没读到」——装机验证时全靠它判断某个 app
+ *  是被安全闸门拦住了，还是 AX 根本不支持。 */
+export interface HostDocumentReadResult {
+  status: 'ok' | 'blocked' | 'unsupported' | 'unavailable' | 'timeout';
+  reason: string | null;
+  window: { text: string; cursor: number } | null;
+  appName: string | null;
+  bundleId: string | null;
+  elapsedMs: number;
+}
+
+/** 一条等待用户确认的纠正建议（Tier2）。后端只存在内存里，重启即空——建议本身是
+ *  易逝的，用户下次犯同样的错会再产生一条。 */
+export interface PendingCorrection {
+  id: string;
+  pattern: string;
+  replacement: string;
 }
 
 export interface VocabPreset {
@@ -152,6 +192,12 @@ export interface ShortcutBinding {
   modifiers: string[];
 }
 
+/** 风格包直达快捷键：binding 按下即激活 packId 对应的风格包（issue #759）。 */
+export interface StylePackHotkey {
+  packId: string;
+  binding: ShortcutBinding;
+}
+
 /** 划词语音问答快捷键绑定。null 表示未启用。详见 issue #118。 */
 export type QaHotkeyBinding = ShortcutBinding;
 
@@ -197,6 +243,9 @@ export type UpdateChannel = 'stable' | 'beta';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 
+/** 选区润色结果直接替换，或先在可编辑预览中确认。 */
+export type SelectionPolishOutputMode = 'directReplace' | 'previewConfirm';
+
 export interface CustomStylePrompts {
   raw: string;
   light: string;
@@ -227,6 +276,8 @@ export interface StylePack {
   version: string;
   kind: StylePackKind;
   baseMode: PolishMode;
+  /** For selected written text. Empty values in legacy packs use a safe backend default. */
+  selectionPrompt: string;
   prompt: string;
   examples: StylePackExample[];
   tags: string[];
@@ -276,17 +327,32 @@ export interface UserPreferences {
   customStylePrompts: CustomStylePrompts;
   launchAtLogin: boolean;
   showCapsule: boolean;
+  /** 录音胶囊样式（'siri' | 'classic'）。见 CapsulePayload.capsuleStyle 的运行时下发。 */
+  capsuleStyle: CapsuleStyle;
   /** 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。 */
   muteDuringRecording: boolean;
   /** 按下录音热键进入 recording 状态时，播放一段合成提示音提醒「已开始录音」。
    *  默认开启；在 capsule 窗口用 Web Audio API 合成，不依赖 showCapsule。 */
   audioCueOnRecord: boolean;
+  /** Toggle 模式「说完自动停止」（issue #860）。默认关闭；开启后检测到语音、
+   *  连续静音达到 silenceAutoStopSeconds 时自动停止并提交，一直没说话则 10 秒后取消。 */
+  silenceAutoStopEnabled: boolean;
+  /** 语音后的连续静音阈值（秒）。可选 1 / 1.5 / 2 / 3 / 4 / 5，默认 3。 */
+  silenceAutoStopSeconds: number;
   /** 录音输入设备名称。空字符串 = 使用系统默认麦克风。 */
   microphoneDeviceName: string;
   activeAsrProvider: string;
   activeLlmProvider: string;
+  /** 识别管线模式（实验性，issue #902）。multimodal 时各语音管线改用 omni 配置。 */
+  pipelineMode: PipelineMode;
+  /** 「多模态识别管线」实验性功能总开关（高级设置）。默认 false。 */
+  multimodalPipelineEnabled: boolean;
+  /** 多模态（Omni）模型当前激活的 provider id，镜像凭据库 omni.active。 */
+  activeOmniProvider: string;
   /** LLM 思考模式开关。默认关闭；OpenAI 普通 chat 模型会跳过不支持的字段。详见 issue #402。 */
   llmThinkingEnabled: boolean;
+  /** 是否使用系统代理（issue #869）。默认开启；关闭后所有请求直连，境外服务（GitHub 登录/更新等）可能连不上。 */
+  useSystemProxy: boolean;
   /** 仅 Windows/Linux：粘贴成功后是否恢复用户原剪贴板。默认 true。详见 issue #111。 */
   restoreClipboardAfterPaste: boolean;
   /** 仅 Windows/Linux：模拟粘贴时按下的快捷键。详见 issue #360：kitty/alacritty
@@ -313,6 +379,12 @@ export interface UserPreferences {
   outputLanguagePreference: 'auto' | 'zhCn' | 'zhTw' | 'en' | 'ja' | 'ko';
   /** 划词语音问答快捷键。null = 未启用。详见 issue #118。 */
   qaHotkey: QaHotkeyBinding | null;
+  /** 选区润色快捷键。null = 已停用。 */
+  selectionPolishHotkey: ShortcutBinding | null;
+  /** The style pack used only by selected written-text polishing. */
+  selectionPolishStylePackId: string;
+  /** 选区润色结果的交付方式。 */
+  selectionPolishOutputMode: SelectionPolishOutputMode;
   /** 是否把 Q&A 历史写到本地存档。详见 issue #118。 */
   qaSaveHistory: boolean;
   /** 自定义录音组合键。当 hotkey.trigger == 'custom' 时使用。null = 未设置。 */
@@ -323,6 +395,8 @@ export interface UserPreferences {
   switchStyleHotkey: ShortcutBinding | null;
   /** 打开 OpenLess 主窗口的全局快捷键。null = 用户已停用（issue #576）。 */
   openAppHotkey: ShortcutBinding | null;
+  /** 风格包直达快捷键：按下即激活对应风格包。默认空列表（issue #759）。 */
+  stylePackHotkeys: StylePackHotkey[];
   /** Less Computer：是否启用。默认关闭。 */
   codingAgentEnabled: boolean;
   /** Agent 后端：claude-code-cli（默认）/ opencode-cli。 */
@@ -384,6 +458,10 @@ export interface UserPreferences {
   /** 流式输入成功后是否把最终润色文本写回剪贴板。开启后 Cmd+V 还能重复粘贴该次输出，
    *  与一次性路径行为对齐。默认 true。 */
   streamingInsertSaveClipboard: boolean;
+  /** 是否把「用户正在写的那篇文档」中光标附近的原文送进 LLM 润色当上下文。
+   *  默认 false —— 开启后每次听写都会读取前台 app 的正文并把其中一段发给 LLM 服务商。
+   *  仅 macOS 有实现；密码框 / Secure Input / 密码管理器 / 终端一律硬拦。 */
+  cursorContextEnabled: boolean;
   /** 概览页是否显示「年度活动」热力图卡。默认 true；关闭只隐藏卡片，活动计数照常记录。 */
   showOverviewActivityHeatmap: boolean;
   /** 主窗口启动 + 后台每 60 分钟自动检查更新。默认 true。
@@ -550,6 +628,9 @@ export type CapsuleState =
   | 'cancelled'
   | 'error';
 
+/** 录音胶囊样式：'siri' = 流光 Siri 光效版（默认）；'classic' = Openless 经典药丸版。 */
+export type CapsuleStyle = 'siri' | 'classic';
+
 export interface CapsulePayload {
   state: CapsuleState;
   level: number; // 0..1 RMS
@@ -566,13 +647,27 @@ export interface CapsulePayload {
    * 再开口；麦克风就绪后翻 false，光条点亮进入正式录音。只对 recording 有意义。
    */
   warming?: boolean;
+  /**
+   * 用户选择的胶囊样式（siri / classic）。随每次状态事件下发；缺失时回落默认
+   * 'siri'，兼容旧后端 payload。
+   */
+  capsuleStyle?: CapsuleStyle;
+  /**
+   * 选区润色复用 capsule 的无焦点原生窗口，但渲染为轻量状态提示；缺失时保持原有
+   * 语音/QA 胶囊行为，兼容旧后端 payload。
+   */
+  selectionPolish?: boolean;
 }
 
 export interface CredentialsStatus {
   activeAsrProvider: string;
   activeLlmProvider: string;
+  /** 当前识别管线模式，前端据此渲染配置页与概览「已配置」判定。 */
+  pipelineMode: PipelineMode;
   asrConfigured: boolean;
   llmConfigured: boolean;
+  /** 多模态（omni）模型是否已配置。仅 multimodal 模式有意义。 */
+  omniConfigured: boolean;
   /** 兼容旧字段（过渡期保留）。 */
   volcengineConfigured: boolean;
   arkConfigured: boolean;
@@ -590,7 +685,8 @@ export type PermissionStatus =
   | 'denied'
   | 'notDetermined'
   | 'restricted'
-  | 'notApplicable';
+  | 'notApplicable'
+  | 'noDevice';
 
 /** Runtime platform kind returned by `get_platform_capabilities`. */
 export type PlatformKind = 'desktop' | 'android' | 'mobile';

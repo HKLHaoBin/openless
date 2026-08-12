@@ -10,8 +10,11 @@ use super::super::style_pack_archive::{
     MAX_ENTRY_UNCOMPRESSED_BYTES, MAX_EXAMPLES_BYTES, MAX_ICON_BYTES, MAX_MANIFEST_BYTES,
     MAX_PROMPT_BYTES, MAX_TOTAL_UNCOMPRESSED_BYTES, STYLE_PACK_ARCHIVE_MAX_COMPRESSED_BYTES,
 };
-use super::{sync_style_pack_preferences, StylePackStore};
-use crate::types::{builtin_style_packs, CustomStylePrompts, StylePack, StylePackExample};
+use super::{migrate_style_packs_from_preferences, sync_style_pack_preferences, StylePackStore};
+use crate::types::{
+    builtin_style_packs, CustomStylePrompts, PolishMode, StylePack, StylePackExample,
+    StyleSystemPrompts, UserPreferences,
+};
 
 const VALID_PNG_1X1: &[u8] = &[
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -495,6 +498,55 @@ fn style_pack_archive_round_trip_preserves_valid_pack_and_png_icon() {
 }
 
 #[test]
+fn style_pack_archive_bytes_can_be_imported_from_a_document_provider() {
+    let root = TestDir::new("bytes-import");
+    let zip_path = root.path().join("document-provider.zip");
+    valid_archive(&zip_path, None);
+    let bytes = fs::read(&zip_path).expect("read archive bytes");
+    let destination = test_store(&root.path().join("destination"), Vec::new());
+
+    let imported = destination
+        .import_from_zip_bytes(&bytes, "document provider")
+        .expect("import valid archive bytes");
+
+    assert_eq!(imported.id, "test-pack");
+    assert_eq!(imported.name, "Test Pack");
+    assert_eq!(imported.prompt, "Write clearly and concisely.");
+    assert_eq!(imported.examples.len(), 1);
+}
+
+#[test]
+fn migration_fills_empty_selection_prompts_with_style_defaults() {
+    let mut packs = builtin_style_packs();
+    for pack in &mut packs {
+        pack.selection_prompt.clear();
+    }
+
+    assert!(migrate_style_packs_from_preferences(
+        &mut packs,
+        &UserPreferences::default()
+    ));
+    let prompts: Vec<_> = packs
+        .iter()
+        .map(|pack| pack.selection_prompt.as_str())
+        .collect();
+    assert_eq!(prompts.len(), 4);
+    assert_eq!(prompts.iter().collect::<std::collections::HashSet<_>>().len(), 4);
+
+    let prompt_for = |mode| {
+        packs
+            .iter()
+            .find(|pack| pack.base_mode == mode)
+            .expect("built-in pack")
+            .selection_prompt
+            .as_str()
+    };
+    assert!(prompt_for(PolishMode::Light).contains("轻度文本润色助手"));
+    assert!(prompt_for(PolishMode::Structured).contains("AI Prompt 整理助手"));
+    assert!(prompt_for(PolishMode::Formal).contains("职场与专业沟通文本编辑助手"));
+}
+
+#[test]
 fn sync_style_pack_preferences_uses_builtin_store_prompts_as_source_of_truth() {
     let mut prefs = crate::types::UserPreferences {
         style_system_prompts: crate::types::StyleSystemPrompts {
@@ -527,4 +579,56 @@ fn sync_style_pack_preferences_uses_builtin_store_prompts_as_source_of_truth() {
     assert_eq!(prefs.style_system_prompts.structured, packs[2].prompt);
     assert_eq!(prefs.style_system_prompts.formal, packs[3].prompt);
     assert_eq!(prefs.custom_style_prompts, CustomStylePrompts::default());
+}
+
+#[test]
+fn pack_version_newer_compares_numeric_segments() {
+    assert!(super::pack_version_newer("3.0.0", "2.0.0"));
+    assert!(!super::pack_version_newer("2.0.0", "3.0.0"));
+    assert!(!super::pack_version_newer("3.0.0", "3.0.0"));
+    assert!(super::pack_version_newer("3.1.0", "3.0.9"));
+    assert!(super::pack_version_newer("10.0.0", "9.9.9"));
+    // pre-release 视为与正式版同级，不判为更新
+    assert!(!super::pack_version_newer("3.0.0-beta.1", "3.0.0"));
+    assert!(!super::pack_version_newer("3.0.0", "3.0.0-beta.1"));
+    assert!(super::pack_version_newer("3.0.1-beta", "3.0.0"));
+    // 全非数字 → 不判定更新
+    assert!(!super::pack_version_newer("abc", "def"));
+}
+
+#[test]
+fn reconcile_builtin_packs_upgrades_prompt_only_and_preserves_user_fields() {
+    let mut packs = builtin_style_packs();
+    let local = packs
+        .iter_mut()
+        .find(|p| p.id == "builtin.structured")
+        .expect("builtin structured pack");
+    local.version = "2.0.0".into();
+    local.prompt = "用户自定义的旧 prompt".into();
+    local.name = "我的清晰结构".into();
+    local.enabled = false; // 用户手动禁用
+
+    assert!(super::reconcile_builtin_packs(&mut packs));
+
+    let upgraded = packs
+        .iter()
+        .find(|p| p.id == "builtin.structured")
+        .expect("builtin structured pack");
+    assert_eq!(upgraded.version, "3.0.0", "版本应推进到官方 3.0.0");
+    assert!(upgraded.prompt.contains("# 场景优先级"), "prompt 应推进为 v3.0 Beta");
+    assert_eq!(upgraded.name, "我的清晰结构", "用户改名必须保留");
+    assert!(!upgraded.enabled, "用户 enabled 状态必须保留");
+}
+
+#[test]
+fn reconcile_builtin_packs_skips_equal_version_and_adds_missing() {
+    // 等版本（builtin 3.0.0 vs local 3.0.0）→ 不推进、不落盘
+    let mut packs = builtin_style_packs();
+    assert!(!super::reconcile_builtin_packs(&mut packs));
+
+    // 本地缺失内置包 → 补入全部 4 个
+    let mut empty: Vec<StylePack> = Vec::new();
+    assert!(super::reconcile_builtin_packs(&mut empty));
+    assert_eq!(empty.len(), 4);
+    assert!(empty.iter().all(|p| p.kind == crate::types::StylePackKind::Builtin));
 }

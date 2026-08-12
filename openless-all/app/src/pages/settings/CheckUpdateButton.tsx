@@ -43,14 +43,33 @@ export function CheckUpdateButton({ channel }: { channel: UpdateChannel }) {
               ? t('settings.about.upToDate')
               : undefined
         }
-        style={{ ...btnGhostStyle, color, opacity: checking || busy ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, minWidth: 84 }}
+        // 固定宽度 + 内容居中：图标（check ↔ refresh）与 label（"检查更新" ↔ "检查中…"）
+        // 切换时按钮尺寸不再跳动；图标固定容器保证旋转时绕中心转、不位移。
+        style={{ ...btnGhostStyle, color, opacity: checking || busy ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, minWidth: 160 }}
       >
-        <Icon
-          name={iconName}
-          size={12}
-          style={checking ? { animation: 'ol-spin 0.8s linear infinite' } : undefined}
-        />
-        <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
+        <span style={{ display: 'inline-flex', width: 14, height: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Icon
+            name={iconName}
+            size={12}
+            style={{
+              // 状态图标（check ↔ refresh ↔ 错误）切换时颜色过渡；
+              // 检查中旋转（ol-spin），旋转轴在图标容器中心（宽度锁死 14）。
+              transition: 'color 0.18s var(--ol-motion-quick)',
+              animation: checking ? 'ol-spin 0.8s linear infinite' : undefined,
+            }}
+          />
+        </span>
+        <span
+          key={label}
+          style={{
+            whiteSpace: 'nowrap',
+            // 状态文案（"检查更新" ↔ "检查中…" ↔ 结果提示）切换时淡入微滑移，
+            // 与 SelectLite 选中值切换动画同款（ol-select-value-in，global.css）。
+            animation: 'ol-select-value-in .16s var(--ol-motion-quick)',
+          }}
+        >
+          {label}
+        </span>
       </button>
       {isDialogStatus(status) && (
         <UpdateDialog

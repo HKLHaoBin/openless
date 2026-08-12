@@ -9,7 +9,7 @@
 //! insertion, persists history, emits `capsule:state` events to the capsule
 //! window.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -55,8 +55,9 @@ use crate::recorder::{Recorder, RecorderError};
 #[cfg(target_os = "windows")]
 use crate::types::PasteShortcut;
 use crate::types::{
-    CapsulePayload, CapsuleState, ChineseScriptPreference, DictationSession, HotkeyCapability,
-    HotkeyStatus, HotkeyStatusState, InsertStatus, OutputLanguagePreference, PolishMode,
+    CapsulePayload, CapsuleState, CapsuleStyle, ChineseScriptPreference, DictationSession,
+    HotkeyCapability, HotkeyStatus, HotkeyStatusState, InsertStatus, OutputLanguagePreference,
+    PolishMode,
 };
 #[cfg(target_os = "windows")]
 use crate::windows_ime_ipc::ImeSubmitTarget;
@@ -71,8 +72,14 @@ mod polish_flow;
 mod qa;
 mod qa_session;
 mod resources;
+#[cfg(not(mobile))]
+pub(crate) mod selection_polish;
+mod silence_auto_stop;
 
 use asr_wiring::*;
+// providers.rs 的 ASR 验证路径按 provider 的真实请求格式发送探针（issue #837），
+// 需要跨模块访问 whisper 兼容系的格式映射，显式再导出。
+pub(crate) use asr_wiring::whisper_request_format;
 use capsule_focus::*;
 use hotkey_loops::*;
 use polish_flow::*;
@@ -106,13 +113,7 @@ use qa::{
 };
 #[cfg(test)]
 use resources::discard_startup_resources_for_session;
-use resources::{
-    acquire_recording_mute, cancel_active_asr, cancel_qa_asr_for_session, release_recording_mute,
-    selected_microphone_device_name, stop_microphone_preview_monitor,
-    stop_qa_recorder_for_session, store_qa_asr_for_session, store_qa_recorder_for_session,
-    take_asr_for_session, take_qa_asr_for_session, take_recorder_for_session, SessionResource,
-    SharedRecordingMuteState,
-};
+use resources::{cancel_active_asr, SessionResource, SharedRecordingMuteState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CapsuleShowStrategy {
@@ -178,6 +179,165 @@ fn show_capsule_window_for_recording<R: tauri::Runtime>(
     }
 }
 
+/// 词条建议卡片的窗口尺寸（逻辑点）。
+///
+/// 显示卡片时必须把胶囊窗口缩到这个大小 —— 见 [`show_vocab_suggestion_card`] 里关于
+/// 鼠标穿透的说明。
+const VOCAB_CARD_WIDTH: f64 = 320.0;
+/// 一行建议的高度：勾叉按钮 28pt + 行间距 8pt，与 `VocabSuggestionCard.tsx` 对齐。
+const VOCAB_CARD_ROW_HEIGHT: f64 = 36.0;
+/// 标题行 + 卡片内边距 + 留给投影的外边距。
+const VOCAB_CARD_CHROME_HEIGHT: f64 = 72.0;
+/// 卡片离屏幕右边缘留多少。
+const VOCAB_CARD_EDGE_MARGIN: f64 = 24.0;
+
+/// 把「要不要记住这个词」的卡片弹到胶囊那个位置。
+///
+/// 复用胶囊窗口而不是新开一个：多显示器定位、Space 贴附（macOS 26 上那个把窗口钉死在
+/// 单个桌面的坑）、nonactivating panel 都是踩过坑才对的，重开一个窗口等于重踩一遍。
+///
+/// 但有一处必须动：**胶囊平时是鼠标完全穿透的**（`set_ignore_cursor_events(true)`），
+/// 因为它浮在别的 app 上面，不能挡住用户点下面的东西。卡片要能点，就得临时关掉穿透；
+/// 而透明窗口一旦不穿透，**连透明的部分也会拦鼠标**。所以显示卡片时把窗口缩到卡片实际
+/// 大小，挡住的范围就只有卡片本身；收起时再恢复。
+pub(crate) fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
+    let pending = inner.pending_corrections.lock().clone();
+    if pending.is_empty() {
+        return;
+    }
+    let Some(app) = inner.app.lock().clone() else {
+        return;
+    };
+    let height = VOCAB_CARD_CHROME_HEIGHT + VOCAB_CARD_ROW_HEIGHT * pending.len() as f64;
+    let app_for_main = app.clone();
+    let inner_for_main = Arc::clone(inner);
+    let _ = app.run_on_main_thread(move || {
+        let app = app_for_main;
+        let inner = inner_for_main;
+        // **最后一道闸：听写不在 Idle 就绝不弹卡片。**
+        //
+        // 上游那些判据（观察器代次、`pending_corrections` 是否为空）全都是「读一次再去
+        // 干活」，读完到这里还隔着一次跨线程调度 —— 排队的这段时间里 `begin_session_as`
+        // 完全可能已经跑完：解除观察器、收起卡片、开启新一轮听写。那种 check-then-act
+        // 无论怎么加都堵不住这一段。
+        //
+        // 判据放在这里才有意义：这是碰窗口之前的最后一个时点，而且问的是**真正的不变量**
+        // —— 卡片和录音胶囊共用一个窗口，显示卡片要把窗口缩到卡片大小，在听写进行中弹
+        // 出来就是把那次听写的胶囊弄没了（真机踩过，表现是「热键像是坏了」）。
+        //
+        // `begin_session_as` 是先置 phase 再收卡片的，所以只要它开了头，这里必然看得见。
+        if inner.state.lock().phase != crate::coordinator_state::SessionPhase::Idle {
+            log::debug!("[vocab-card] suppressed: a dictation session is in flight");
+            inner.pending_corrections.lock().clear();
+            return;
+        }
+        inner.vocab_card_visible.store(true, Ordering::SeqCst);
+        let Some(window) = app.get_webview_window("capsule") else {
+            return;
+        };
+        // 卡片是要点的，穿透必须关掉。
+        // Android 没有胶囊窗口，tauri 的 set_ignore_cursor_events 在其上不存在
+        //（与 capsule_focus.rs 里同一处理）。
+        #[cfg(not(mobile))]
+        if let Err(e) = window.set_ignore_cursor_events(false) {
+            log::warn!("[vocab-card] set_ignore_cursor_events(false) failed: {e}");
+        }
+        if let Err(e) = window.set_size(tauri::LogicalSize::new(VOCAB_CARD_WIDTH, height)) {
+            log::warn!("[vocab-card] resize failed: {e}");
+        }
+        if let Err(e) = position_vocab_card(&window, VOCAB_CARD_WIDTH, height) {
+            log::warn!("[vocab-card] position failed: {e}");
+        }
+        let _ = app.emit_to("capsule", "vocab:suggested", &pending);
+        show_capsule_window_for_recording(&app, &window, true);
+        #[cfg(target_os = "macos")]
+        crate::restore_main_window_key_if_active(&app);
+    });
+}
+
+/// 收起卡片：把窗口完整还给胶囊。
+///
+/// 四条路径都会走到这里 —— 用户点了「好」/「都不用」、10 秒到时、新一轮听写开始。
+///
+/// **没有卡片时必须原样返回。** `begin_session_as` 每次听写都会调它，如果无条件去
+/// `hide()` 那个窗口，就会和 `emit_capsule` 的 show 抢同一个窗口 —— 胶囊时隐时不显，
+/// 用户会以为热键坏了。
+pub(crate) fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
+    inner.pending_corrections.lock().clear();
+    if !inner.vocab_card_visible.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    let Some(app) = inner.app.lock().clone() else {
+        return;
+    };
+    let app_for_main = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let app = app_for_main;
+        let Some(window) = app.get_webview_window("capsule") else {
+            return;
+        };
+        let _ = app.emit_to("capsule", "vocab:suggested", Vec::<crate::types::PendingCorrection>::new());
+        // 穿透必须还回去，否则胶囊会一直挡着屏幕底部那一块。
+        #[cfg(not(mobile))]
+        if let Err(e) = window.set_ignore_cursor_events(true) {
+            log::warn!("[vocab-card] restoring cursor passthrough failed: {e}");
+        }
+        // 尺寸也必须还回去 —— 卡片把窗口缩到过自己的大小，不复原的话下一次胶囊
+        // 就挤在一个 300×108 的窗口里，等于看不见。
+        let bounds = crate::capsule_window_bounds(false);
+        if let Err(e) = window.set_size(tauri::LogicalSize::new(bounds.width, bounds.height)) {
+            log::warn!("[vocab-card] restoring capsule size failed: {e}");
+        }
+        let _ = window.hide();
+    });
+}
+
+/// 解除手改观察器 —— **唯一的解除入口，三条路径都必须走它。**
+///
+/// 两步缺一不可，而这正是它必须收口成一个函数的原因：
+///
+/// 1. `*slot = None` 丢掉 `EditWatcher`，其 `Drop` 置位停止 flag；
+/// 2. 推进代次，让还在路上的上报当场失效。
+///
+/// 只做第 1 步是不够的：解除是**异步**的，观察线程要到下一次 runloop 轮转（≤1s）才看得见
+/// flag，而 AX 通知回调正跑在那次轮转里面。漏掉第 2 步，一条属于上一轮的建议就会在新会话
+/// 进行中弹出卡片 —— 而卡片会把胶囊窗口缩到卡片大小，等于把正在进行的那次听写的胶囊
+/// 弄没了（真机踩过，表现是「热键像是坏了」）。
+///
+/// 这个函数是补出来的：代次守卫刚加进来时，`arm_edit_watch` 和 `disarm_edit_watch` 各自
+/// 推了代次，唯独 `begin_session_as` 还是裸的 `*slot = None` —— 而它恰好是「新会话开始」
+/// 这条主路径，也就是上面那个 bug 的实际触发路径。三处各写各的，漏一处就等于没修。
+pub(crate) fn disarm_edit_watch(inner: &Arc<Inner>) {
+    *inner.edit_watcher.lock() = None;
+    inner
+        .edit_watch_generation
+        .fetch_add(1, Ordering::SeqCst);
+}
+
+/// 把卡片放到屏幕**右下角**。
+///
+/// 不跟胶囊一样居中：卡片是要停留几秒等你读的，而屏幕正下方居中正是你在写字的地方 ——
+/// 真机上它就直接盖住了正在编辑的那一行。右下角是通知类界面的常规位置，也是唯一一块
+/// 「停留几秒不打扰任何人」的地方。
+fn position_vocab_card<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    width: f64,
+    height: f64,
+) -> tauri::Result<()> {
+    let Some(monitor) = window.current_monitor()? else {
+        return Ok(());
+    };
+    let scale = monitor.scale_factor();
+    let size = monitor.size();
+    let pos = monitor.position();
+    let (mon_w, mon_h) = (size.width as f64 / scale, size.height as f64 / scale);
+    let (mon_x, mon_y) = (pos.x as f64 / scale, pos.y as f64 / scale);
+    let x = mon_x + mon_w - width - VOCAB_CARD_EDGE_MARGIN;
+    // 80pt 给 Dock，与胶囊同源。
+    let y = mon_y + mon_h - height - 80.0;
+    window.set_position(tauri::LogicalPosition::new(x, y))
+}
+
 #[derive(Clone)]
 enum ActiveAsr {
     Volcengine(Arc<VolcengineStreamingASR>),
@@ -191,6 +351,8 @@ enum ActiveAsr {
     Qwen3Realtime(Arc<Qwen3RealtimeASR>),
     /// 阶跃星辰 StepAudio 实时（OpenAI Realtime 风格 WS，收尾靠静音帧驱动 VAD）。
     StepfunRealtime(Arc<crate::asr::StepfunRealtimeASR>),
+    /// 讯飞开放平台实时语音转写（RTASR）流式。
+    Xfyun(Arc<crate::asr::XfyunStreamingASR>),
     #[cfg(target_os = "windows")]
     FoundryLocalWhisper(Arc<FoundryLocalWhisperAsr>),
     /// Windows sherpa-onnx 本地 ASR（offline batch + 实验 online streaming）。
@@ -234,6 +396,7 @@ pub(crate) enum ActiveAsrProviderKind {
     ElevenLabs,
     WhisperCompatible,
     Volcengine,
+    Xfyun,
 }
 
 /// 「能否开始一次会话」所需的凭据形态（对应 `ensure_asr_credentials` 预检门）。
@@ -243,6 +406,8 @@ pub(crate) enum AsrPreflightCredential {
     AsrApiKey,
     /// 需要火山引擎 App Key + Access Key。
     VolcAppKey,
+    /// 需要讯飞 AppID + APIKey。
+    XfyunAppKey,
 }
 
 /// 概览页「已配置 / 未配置」状态所需的字段（对应 `asr_configured_for_provider`）。
@@ -257,6 +422,8 @@ pub(crate) enum AsrConfiguredFields {
     EndpointModelOnly,
     /// 火山引擎三件套。
     VolcAppKey,
+    /// 讯飞 AppID + APIKey。
+    XfyunAppKey,
 }
 
 impl ActiveAsrProviderKind {
@@ -270,6 +437,7 @@ impl ActiveAsrProviderKind {
             | ActiveAsrProviderKind::ElevenLabs
             | ActiveAsrProviderKind::WhisperCompatible => AsrPreflightCredential::AsrApiKey,
             ActiveAsrProviderKind::Volcengine => AsrPreflightCredential::VolcAppKey,
+            ActiveAsrProviderKind::Xfyun => AsrPreflightCredential::XfyunAppKey,
         }
     }
 
@@ -277,18 +445,18 @@ impl ActiveAsrProviderKind {
         match self {
             ActiveAsrProviderKind::Bailian
             | ActiveAsrProviderKind::Qwen3Realtime
-            | ActiveAsrProviderKind::ElevenLabs => {
-                AsrConfiguredFields::ApiKeyOnly
-            }
+            | ActiveAsrProviderKind::ElevenLabs => AsrConfiguredFields::ApiKeyOnly,
             ActiveAsrProviderKind::Mimo | ActiveAsrProviderKind::DashScopeMultimodal => {
                 AsrConfiguredFields::ApiKeyEndpointModel
             }
             // StepfunRealtime 只经 `stepfun` 的模型路由可达（隐藏 effective id），
             // 「已配置」判定看真实 active `stepfun` → WhisperCompatible；此处形态
             // 与之对齐，保证直接停在该 id 上也语义一致。
-            ActiveAsrProviderKind::WhisperCompatible
-            | ActiveAsrProviderKind::StepfunRealtime => AsrConfiguredFields::EndpointModelOnly,
+            ActiveAsrProviderKind::WhisperCompatible | ActiveAsrProviderKind::StepfunRealtime => {
+                AsrConfiguredFields::EndpointModelOnly
+            }
             ActiveAsrProviderKind::Volcengine => AsrConfiguredFields::VolcAppKey,
+            ActiveAsrProviderKind::Xfyun => AsrConfiguredFields::XfyunAppKey,
         }
     }
 }
@@ -308,6 +476,8 @@ pub(crate) fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
         ActiveAsrProviderKind::ElevenLabs
     } else if is_whisper_compatible_provider(id) {
         ActiveAsrProviderKind::WhisperCompatible
+    } else if is_xfyun_provider(id) {
+        ActiveAsrProviderKind::Xfyun
     } else {
         ActiveAsrProviderKind::Volcengine
     }
@@ -429,15 +599,105 @@ pub(crate) fn derive_bailian_endpoint(
 
 fn batch_asr_chunk_limit_ms(provider_id: &str) -> Option<u64> {
     match provider_id {
-        // OpenRouter 把音频 base64 进 JSON body，体积比二进制大 ~33%，长录音易撞
-        // body/时长上限，保守按 30s 切分（与 zhipu 同）。
-        "zhipu" | "openrouter" => Some(30_000),
-        _ => None,
+        // OpenRouter / ZenMux 把音频 base64 进 JSON body，体积比二进制大 ~33%，
+        // 长录音易撞 body/时长上限，保守按 30s 切分（与 zhipu 同）。
+        "zhipu" | "openrouter" | "zenmux" => Some(30_000),
+        // 其余预设默认不分片；openai-compatible 可由用户高级配置覆盖。
+        _ => read_advanced_asr_config(provider_id).chunk_duration_ms,
     }
+}
+
+/// 通用 OpenAI 兼容 ASR 预设 id。把任意 OpenAI 兼容 `/audio/transcriptions`
+/// 端点（自建 / 局域网 llama.cpp 等）当 ASR 用，行为默认最保守；verbose_json
+/// 与分片时长由用户按 provider 配置（存凭据 vault）。
+pub(crate) const OPENAI_COMPATIBLE_ASR_PROVIDER_ID: &str = "openai-compatible";
+
+/// ZenMux ASR 预设 id（issue #837）。与前端 `ASR_PRESETS` 的 `zenmux` 条目一致，
+/// 复用 Whisper 批式管线，但请求体走 JSON + base64（`ZenMuxJson`）。
+pub(crate) const ZENMUX_ASR_PROVIDER_ID: &str = "zenmux";
+
+/// `openai-compatible` 与 `zenmux` 预设的高级配置（per-provider 存于凭据 vault）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AdvancedAsrConfig {
+    /// 是否请求 `response_format=verbose_json`（配合幻听过滤；服务端不支持时保持 false）。
+    pub(crate) verbose_json: bool,
+    /// 单次请求的音频分片时长；None = 不分片整段发送。
+    pub(crate) chunk_duration_ms: Option<u64>,
+    /// ZenMux `enable_itn`（数字/单位归一化）。默认 true，与 ZenMux 文档示例及
+    /// 中文 ASR 预期一致；仅 zenmux 消费。
+    pub(crate) enable_itn: bool,
+}
+
+impl Default for AdvancedAsrConfig {
+    fn default() -> Self {
+        Self {
+            verbose_json: false,
+            chunk_duration_ms: None,
+            enable_itn: true,
+        }
+    }
+}
+
+/// 解析 per-provider 高级配置 JSON；缺失/非法一律回落保守默认。
+fn parse_advanced_asr_config(raw: Option<&str>) -> AdvancedAsrConfig {
+    let Some(raw) = raw else {
+        return AdvancedAsrConfig::default();
+    };
+    let value: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(value) => value,
+        Err(error) => {
+            log::warn!("[asr] 高级配置 JSON 解析失败，回落默认值: {error}");
+            return AdvancedAsrConfig::default();
+        }
+    };
+    AdvancedAsrConfig {
+        verbose_json: value
+            .get("verboseJson")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        // 与前端 advancedAsrConfig.ts 语义一致：整数直接取；浮点（如 30000.9）
+        // 接受但向下取整。负数 / 非数字 / 缺失一律回落 None（不分片）。
+        chunk_duration_ms: value.get("chunkDurationMs").and_then(|v| {
+            v.as_u64().filter(|ms| *ms > 0).or_else(|| {
+                v.as_f64()
+                    .filter(|ms| ms.is_finite() && *ms > 0.0 && *ms <= u64::MAX as f64)
+                    .map(|ms| ms.floor() as u64)
+            })
+        }),
+        // 缺失/非布尔回落默认 true（开启），与前端 advancedAsrConfig.ts 一致。
+        enable_itn: value
+            .get("enableItn")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+    }
+}
+
+/// 按 provider id 决定高级配置：`openai-compatible` 与 `zenmux` 采用用户配置，
+/// 其余命名厂商一律返回默认（保持硬编码行为）。
+fn advanced_asr_config_for(provider_id: &str, raw: Option<&str>) -> AdvancedAsrConfig {
+    if provider_id != OPENAI_COMPATIBLE_ASR_PROVIDER_ID && provider_id != ZENMUX_ASR_PROVIDER_ID {
+        return AdvancedAsrConfig::default();
+    }
+    parse_advanced_asr_config(raw)
+}
+
+/// 读取某 ASR provider 的高级配置。仅 `openai-compatible` / `zenmux` 读 vault；
+/// 其余命名厂商走硬编码行为（这里返回默认值），避免破坏已测通的路径。
+fn read_advanced_asr_config(provider_id: &str) -> AdvancedAsrConfig {
+    let raw =
+        CredentialsVault::get_for_asr_provider(provider_id, CredentialAccount::AsrAdvancedConfig)
+            .ok()
+            .flatten();
+    advanced_asr_config_for(provider_id, raw.as_deref())
 }
 
 pub struct Coordinator {
     inner: Arc<Inner>,
+}
+
+struct StylePackHotkeyRegistration {
+    binding: crate::types::ShortcutBinding,
+    _monitor: ComboHotkeyMonitor,
 }
 
 struct Inner {
@@ -460,6 +720,10 @@ struct Inner {
     /// store_asr_for_session 一并写入，end_session 取走落 history——比事后重读
     /// 全局设置可靠：会话中途切 provider/model 不会污染归因（PR #826 review）。
     asr_label: Mutex<Option<SessionResource<AsrCallLabel>>>,
+    /// 多模态（Omni）模式下的 dictation 录音 PCM 缓冲。只在
+    /// `multimodal_pipeline_enabled && pipeline_mode == multimodal` 时使用，
+    /// 与 asr 槽互斥——同一会话二者有且仅有一个。
+    omni_pcm: Mutex<Option<SessionResource<Arc<resources::PcmBufferConsumer>>>>,
     /// 本地 Qwen3-ASR 引擎缓存。跨会话复用，避免每次重加载 1.2GB+ 模型。
     /// 释放时机由 prefs.local_asr_keep_loaded_secs 决定。
     local_asr_cache: Arc<crate::asr::local::LocalAsrCache>,
@@ -476,6 +740,31 @@ struct Inner {
     /// 决定 DictationSession.has_audio_recording 字段。比单纯读 prefs.record_audio_for_debug
     /// 更准确：用户开了开关但路径无法创建（权限 / 磁盘满）也算 false。
     audio_archive_active: AtomicBool,
+    /// 上一次落字之后武装的手改监听（macOS）。
+    ///
+    /// 存在 `Inner` 上只为了「下一次听写开始时解除上一次的」这一条生命周期规则 ——
+    /// 覆盖这个 Option 会 drop 掉旧的 watcher，drop 即解除。另外三条（60 秒超时、
+    /// 前台 app 切换、焦点元素消失）由观察线程自己负责。
+    edit_watcher: Mutex<Option<crate::host_document::EditWatcher>>,
+    /// 观察器代次。每武装一次 +1；上报时对不上号的一律丢弃。
+    ///
+    /// 解除是**异步**的：drop `EditWatcher` 只是置一个 flag，观察线程要到下一次 runloop
+    /// 轮转（≤1s）才看得见，而 AX 通知回调正跑在那次轮转**里面**。也就是说「已解除」和
+    /// 「还能再上报一次」有一段重叠 —— 光靠 flag 只能缩小这个窗口，关不死它。
+    ///
+    /// 迟到的上报不是小事：卡片会把胶囊窗口缩到卡片大小，一条属于上一轮的建议在**新
+    /// 会话进行中**弹出来，等于把正在进行的那次听写的胶囊弄没了。真机上踩过一次，
+    /// 表现是「热键像是坏了」。
+    ///
+    /// 所以判据不放在线程那边，放在这里：只有代次对得上的上报才算数。
+    edit_watch_generation: std::sync::atomic::AtomicU64,
+    /// 等待用户确认的词条建议。只在内存里 —— 见 `PendingCorrection` 的说明。
+    pending_corrections: Mutex<Vec<crate::types::PendingCorrection>>,
+    /// 建议卡片是不是正占着胶囊窗口。
+    ///
+    /// 门控 `hide_vocab_suggestion_card`：没有卡片时它必须什么都不做，否则每次听写
+    /// 开始都会去 hide 胶囊窗口，和 `emit_capsule` 的 show 抢同一个窗口。
+    vocab_card_visible: AtomicBool,
     recording_mute: Mutex<SharedRecordingMuteState>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
@@ -497,9 +786,9 @@ struct Inner {
     /// 判定短按（Toggle 锁存）还是长按（Hold 松手即停）。见 dictation.rs 的
     /// AUTO_HOLD_THRESHOLD。
     hotkey_press_at: Mutex<Option<std::time::Instant>>,
-    /// end_session 成功收尾后将 phase 设为 Idle 时记录的时间戳 + POST_SESSION_COOLDOWN_MS。
-    /// handle_pressed 在 (Toggle, Idle) 分支检查此字段：未过期则忽略该次按键，
-    /// 防止胶囊离场动画期间误激活新听写（issue #545）。
+    /// 会话收尾（成功 / 取消 / 失败）将 phase 设为 Idle 时记录的时间戳 + POST_SESSION_COOLDOWN_MS。
+    /// handle_pressed 在 (Toggle, Idle) 分支检查此字段：未过期则忽略该次按键，防止胶囊离场
+    /// 动画期间误激活新听写（issue #545）；也让识别中排队的热键按下在收尾后一律静默丢弃（issue #856）。
     session_cooldown_until: Mutex<Option<std::time::Instant>>,
     shortcut_recording_active: AtomicBool,
     /// Less Computer modifier 热键的按下代次与待处理组合键事件。
@@ -512,11 +801,25 @@ struct Inner {
     translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
-    /// 翻译模式触发标志。每次 begin_session 重置为 false；hotkey 监听器在
-    /// Listening / Starting 阶段看到 Shift down 边沿时 set true。
-    /// end_session 在调 polish/translate 前读这个 flag + translation_target_language
-    /// 决定走哪条管线。详见 issue #4。
-    translation_modifier_seen: AtomicBool,
+    /// 风格包直达快捷键监听器（issue #759）：pack_id → 实际绑定 + monitor。
+    /// 绑定元数据让 supervisor 能区分「同一 pack_id 但按键已变化」，并在任何
+    /// 非事务设置路径注册失败后继续重试到实际状态与 prefs 一致。
+    style_pack_hotkeys: Mutex<std::collections::HashMap<String, StylePackHotkeyRegistration>>,
+    /// 选区润色快捷键：modifier-only 复用 `HotkeyMonitor`，其它组合键复用
+    /// `ComboHotkeyMonitor`。桌面（非 mobile）专属。
+    #[cfg(not(mobile))]
+    selection_polish_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
+    /// 预览确认模式暂存的结果和原选区目标；仅在用户确认时才允许插入。
+    #[cfg(not(mobile))]
+    selection_polish_preview: Mutex<Option<selection_polish::PendingSelectionPolishPreview>>,
+    /// 「本次会话真的要翻译」。每次 begin_session 重置为 false；hotkey 监听器在
+    /// Listening / Starting 阶段看到 Shift down 边沿（或安卓浮层请求）时，经
+    /// `arm_translation_if_effective` 判定翻译确实会生效（设了目标语言、且不等于唯一工作语言）
+    /// 后才 set true。
+    ///
+    /// 判定收在写入侧：读取侧之一是音频回调线程上的 emit_capsule，不能碰偏好锁。
+    /// 胶囊提示与 end_session 的 polish 分派因此读到同一个真值。详见 issue #4。
+    translation_active: AtomicBool,
     /// 划词语音问答（issue #118）：与 dictation hotkey 平行的全局快捷键
     /// 监听器（global-hotkey crate）。`None` 表示功能关闭或还没成功安装。
     qa_hotkey: Mutex<Option<QaHotkeyMonitor>>,
@@ -526,6 +829,15 @@ struct Inner {
     /// 因此无 GUI 的测试环境也能断言「按下热键 → 弹了哪种胶囊」）。写入是单次廉价
     /// 加锁，对 ~30Hz 录音回调可忽略。
     last_capsule_state: Mutex<Option<CapsuleState>>,
+    /// 每次 capsule payload 递增。选区润色的终态自动隐藏会带上该代数，防止旧 timer
+    /// 覆盖新的选区润色/语音/QA 可见状态。
+    capsule_event_epoch: AtomicU64,
+    /// 将 capsule 事件与自动隐藏线性化。这样一个旧 timer 要么在新的 payload 之前收起
+    /// 旧提示，要么发现代数已改变直接放弃，绝不会在新会话之后补发 Idle。
+    capsule_event_lock: Mutex<()>,
+    /// 选区润色的轻量提示仍在显示或处理中。已有语音/QA 的旧 auto-hide timer 必须在
+    /// 此期间让路，避免把选区润色浮窗提前收掉。
+    selection_polish_capsule_active: AtomicBool,
     /// QA 单独的 session 状态，与 dictation 的 SessionPhase 不冲突。
     qa_state: Mutex<QaSessionState>,
     /// 最近一次应用到 capsule 窗口的几何状态。避免录音 level tick 反复触发
@@ -536,8 +848,18 @@ struct Inner {
     /// `warming` 打成 true（前端渲染"待命"光效）；`level_handler` 首次触发（PCM 真的
     /// 流入）后置 false，光条"点亮"进入正式录音。begin_session 每次入场重置为 true。
     capsule_warming: AtomicBool,
+    /// 用户选择的胶囊样式缓存（0=Siri，1=Classic）。emit_capsule 在音频回调线程
+    /// ~30Hz 读它下发 payload.capsuleStyle；主线程闭包每帧从 prefs 同步该值——
+    /// 读偏好锁的代价只落在主线程（与 show_capsule 同源），音频线程零开销。
+    capsule_style: AtomicU8,
+    /// 胶囊窗口当前是否鼠标穿透（true=穿透）。经典药丸需要接收 ✕/✓ 点击时，主线程
+    /// 闭包把它翻 false；离开可交互状态立即恢复 true。初始 true 与 lib.rs 启动时
+    /// set_ignore_cursor_events(true) 保持一致。
+    capsule_cursor_passthrough: AtomicBool,
     /// QA 用的 ASR 句柄。必须跟 active_asr_provider 保持一致，避免浮窗走不同入口。
     qa_asr: Mutex<Option<SessionResource<ActiveAsr>>>,
+    /// QA 用的多模态（Omni）录音 PCM 缓冲。与 qa_asr 互斥。
+    qa_omni_pcm: Mutex<Option<SessionResource<Arc<resources::PcmBufferConsumer>>>>,
     /// QA 用的 Recorder 句柄。
     qa_recorder: Mutex<Option<SessionResource<Recorder>>>,
     /// QA SSE 流取消标志。begin_qa_session 重置为 false；cancel_qa_session 设 true；
@@ -659,6 +981,8 @@ impl Coordinator {
                 );
                 PreferencesStore::new_fallback()
             });
+            // 启动即同步系统代理开关（issue #869），让首个请求就按用户设置建客户端。
+            crate::net::set_use_system_proxy(prefs.get().use_system_proxy);
             let style_packs = StylePackStore::new(&prefs).unwrap_or_else(|e| {
                 log::error!(
                     "[coord] StylePackStore init failed: {e}; 降级为空样式包列表{PERSIST_DEGRADE_SUFFIX}"
@@ -696,8 +1020,13 @@ impl Coordinator {
                     state: Mutex::new(SessionState::default()),
                     asr: Mutex::new(None),
                     asr_label: Mutex::new(None),
+                    omni_pcm: Mutex::new(None),
                     recorder: Mutex::new(None),
                     audio_archive_active: AtomicBool::new(false),
+                    edit_watcher: Mutex::new(None),
+                    edit_watch_generation: std::sync::atomic::AtomicU64::new(0),
+                    pending_corrections: Mutex::new(Vec::new()),
+                    vocab_card_visible: AtomicBool::new(false),
                     recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                     hotkey: Mutex::new(None),
                     hotkey_status: Mutex::new(HotkeyStatus::default()),
@@ -716,15 +1045,26 @@ impl Coordinator {
                     translation_hotkey: Mutex::new(None),
                     switch_style_hotkey: Mutex::new(None),
                     open_app_hotkey: Mutex::new(None),
-                    translation_modifier_seen: AtomicBool::new(false),
+                    style_pack_hotkeys: Mutex::new(std::collections::HashMap::new()),
+                    #[cfg(not(mobile))]
+                    selection_polish_hotkey: Mutex::new(None),
+                    #[cfg(not(mobile))]
+                    selection_polish_preview: Mutex::new(None),
+                    translation_active: AtomicBool::new(false),
                     qa_hotkey: Mutex::new(None),
                     coding_agent_modifier_hotkey: Mutex::new(None),
                     coding_agent_combo_hotkey: Mutex::new(None),
                     last_capsule_state: Mutex::new(None),
+                    capsule_event_epoch: AtomicU64::new(0),
+                    capsule_event_lock: Mutex::new(()),
+                    selection_polish_capsule_active: AtomicBool::new(false),
                     qa_state: Mutex::new(QaSessionState::default()),
                     capsule_layout: Mutex::new(None),
                     capsule_warming: AtomicBool::new(false),
+                    capsule_style: AtomicU8::new(0),
+                    capsule_cursor_passthrough: AtomicBool::new(true),
                     qa_asr: Mutex::new(None),
+                    qa_omni_pcm: Mutex::new(None),
                     qa_recorder: Mutex::new(None),
                     qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
                     local_asr_cache: Arc::new(crate::asr::local::LocalAsrCache::new()),
@@ -770,6 +1110,8 @@ impl Coordinator {
             log::error!("[coord] PreferencesStore init failed: {e}; 降级为默认偏好设置");
             PreferencesStore::new_fallback()
         });
+        // 启动即同步系统代理开关（issue #869），让首个请求就按用户设置建客户端。
+        crate::net::set_use_system_proxy(prefs.get().use_system_proxy);
         let style_packs = StylePackStore::new(&prefs).unwrap_or_else(|e| {
             log::error!("[coord] StylePackStore init failed: {e}; 降级为空样式包列表");
             StylePackStore::new_fallback()
@@ -803,8 +1145,13 @@ impl Coordinator {
                 state: Mutex::new(SessionState::default()),
                 asr: Mutex::new(None),
                 asr_label: Mutex::new(None),
+                omni_pcm: Mutex::new(None),
                 recorder: Mutex::new(None),
                 audio_archive_active: AtomicBool::new(false),
+                edit_watcher: Mutex::new(None),
+                    edit_watch_generation: std::sync::atomic::AtomicU64::new(0),
+                pending_corrections: Mutex::new(Vec::new()),
+                vocab_card_visible: AtomicBool::new(false),
                 recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
@@ -823,15 +1170,26 @@ impl Coordinator {
                 translation_hotkey: Mutex::new(None),
                 switch_style_hotkey: Mutex::new(None),
                 open_app_hotkey: Mutex::new(None),
-                translation_modifier_seen: AtomicBool::new(false),
+                style_pack_hotkeys: Mutex::new(std::collections::HashMap::new()),
+                #[cfg(not(mobile))]
+                selection_polish_hotkey: Mutex::new(None),
+                #[cfg(not(mobile))]
+                selection_polish_preview: Mutex::new(None),
+                translation_active: AtomicBool::new(false),
                 qa_hotkey: Mutex::new(None),
                 coding_agent_modifier_hotkey: Mutex::new(None),
                 coding_agent_combo_hotkey: Mutex::new(None),
                 last_capsule_state: Mutex::new(None),
+                capsule_event_epoch: AtomicU64::new(0),
+                capsule_event_lock: Mutex::new(()),
+                selection_polish_capsule_active: AtomicBool::new(false),
                 qa_state: Mutex::new(QaSessionState::default()),
                 capsule_layout: Mutex::new(None),
                 capsule_warming: AtomicBool::new(false),
+                capsule_style: AtomicU8::new(0),
+                capsule_cursor_passthrough: AtomicBool::new(true),
                 qa_asr: Mutex::new(None),
+                qa_omni_pcm: Mutex::new(None),
                 qa_recorder: Mutex::new(None),
                 qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
                 local_asr_cache: Arc::new(crate::asr::local::LocalAsrCache::new()),
@@ -909,7 +1267,6 @@ impl Coordinator {
     pub fn local_asr_loaded_model(&self) -> Option<String> {
         self.inner.local_asr_cache.loaded_model_id()
     }
-
 
     /// 主动把当前本地 ASR 引擎状态推给前端（keepLoadedSecs 变更等命令侧调用）。
     pub fn emit_local_asr_engine_status(&self) {
@@ -1016,7 +1373,8 @@ impl Coordinator {
     }
 
     /// 让所有 hotkey supervisor loop（dictation / qa / combo / translation /
-    /// switch_style / open_app）在下一轮 sleep / poll 后退出。生产场景下进程退出
+    /// switch_style / open_app / style_pack / selection_polish）在下一轮 sleep / poll
+    /// 后退出。生产场景下进程退出
     /// 一并 reap 所有线程，但 integration test 和未来 RunEvent::Exit 钩子需要
     /// 显式退出路径。审计 3.1.2。
     #[allow(dead_code)]
@@ -1083,6 +1441,32 @@ impl Coordinator {
         }
     }
 
+    #[cfg(not(mobile))]
+    pub fn start_selection_polish_hotkey_listener(&self) {
+        let inner = Arc::clone(&self.inner);
+        std::thread::Builder::new()
+            .name("openless-selection-polish-hotkey-supervisor".into())
+            .spawn(move || selection_polish_hotkey_supervisor_loop(inner))
+            .ok();
+    }
+
+    #[cfg(not(mobile))]
+    pub fn stop_selection_polish_hotkey_listener(&self) {
+        take_selection_polish_hotkey_on_main_thread(&self.inner);
+    }
+
+    #[cfg(not(mobile))]
+    pub fn try_update_selection_polish_hotkey_binding(&self) -> Result<(), String> {
+        try_update_selection_polish_hotkey_binding(&self.inner)
+    }
+
+    #[cfg(not(mobile))]
+    pub fn update_selection_polish_hotkey_binding(&self) {
+        if let Err(error) = self.try_update_selection_polish_hotkey_binding() {
+            log::warn!("[coord] update selection polish hotkey binding failed: {error}");
+        }
+    }
+
     /// 启动自定义组合键监听器。当 `prefs.hotkey.trigger == Custom` 时，
     /// 代替 modifier-only 的 hotkey monitor。
     pub fn start_combo_hotkey_listener(&self) {
@@ -1131,6 +1515,30 @@ impl Coordinator {
 
     pub fn stop_open_app_hotkey_listener(&self) {
         take_action_hotkey_on_main_thread(&self.inner, ActionHotkeyKind::OpenApp);
+    }
+
+    /// 启动风格包直达快捷键监听（issue #759）。supervisor 线程等 AppHandle 就绪后
+    /// 按 prefs 全量注册，个别注册失败按 action hotkey 的节奏重试。
+    pub fn start_style_pack_hotkey_listeners(&self) {
+        let inner = Arc::clone(&self.inner);
+        std::thread::Builder::new()
+            .name("openless-style-pack-hotkey-supervisor".into())
+            .spawn(move || style_pack_hotkey_supervisor_loop(inner))
+            .ok();
+    }
+
+    pub fn stop_style_pack_hotkey_listeners(&self) {
+        clear_style_pack_hotkeys_on_main_thread(&self.inner);
+    }
+
+    /// 用户在设置里改了风格快捷键列表时调用：按最新 prefs 全量对齐注册状态。
+    pub fn update_style_pack_hotkey_bindings(&self) {
+        sync_style_pack_hotkeys_on_main_thread(&self.inner);
+    }
+
+    /// 事务式设置路径使用：等待主线程完成整表注册并返回精确失败原因。
+    pub fn try_update_style_pack_hotkey_bindings(&self) -> Result<(), String> {
+        try_sync_style_pack_hotkeys_on_main_thread(&self.inner)
     }
 
     /// 用户在设置里改了自定义组合键时调用。
@@ -1382,7 +1790,6 @@ impl Coordinator {
         close_qa_panel(&self.inner);
     }
 
-
     /// 用户点 ✕ / 按 Esc 关 Less Computer 浮窗：隐藏窗口 + 结束连续对话
     /// （下次说话开新会话，不再 --continue 续旧上下文）。
     pub fn less_computer_window_dismiss(&self) {
@@ -1392,6 +1799,14 @@ impl Coordinator {
         if let Some(app) = self.inner.app.lock().clone() {
             crate::hide_less_computer_window(&app);
             crate::hide_less_computer_glow(&app);
+        }
+    }
+
+    /// 从主设置页打开 Less Computer 浮窗，允许用户在没有麦克风/全局快捷键权限时
+    /// 先用文字测试已配置的 Coding Agent 后端。
+    pub fn less_computer_window_open(&self) {
+        if let Some(app) = self.inner.app.lock().clone() {
+            crate::show_less_computer_window(&app);
         }
     }
 
@@ -1408,10 +1823,13 @@ impl Coordinator {
             return;
         }
         let inner = Arc::clone(&self.inner);
-        tokio::spawn(async move {
+        // This method is entered by a synchronous Tauri command on WebKit's custom
+        // protocol callback. Direct Tokio spawning panics there because that AppKit thread
+        // has no entered Tokio runtime, and the panic cannot unwind across the ObjC
+        // callback (SIGABRT). Tauri's runtime handle is safe from either thread.
+        tauri::async_runtime::spawn(async move {
             let session_id = crate::coordinator_state::new_session_id();
-            if let Err(e) =
-                dictation::run_voice_agent_transcript(&inner, session_id, text, 0).await
+            if let Err(e) = dictation::run_voice_agent_transcript(&inner, session_id, text, 0).await
             {
                 log::warn!("[less-computer] text submit run failed: {e}");
             }
@@ -1428,6 +1846,17 @@ impl Coordinator {
 
     pub fn prefs(&self) -> &PreferencesStore {
         &self.inner.prefs
+    }
+    /// 设置保存后立即把胶囊样式同步进 Inner 原子缓存（0=Siri，1=Classic）。
+    /// emit_capsule 的 ~30Hz 主线程闭包本来也会同步，但入场帧的 payload 是在闭包
+    /// 同步之前克隆的（会带一帧旧样式），且 Windows 上主线程拥塞时闭包可能延迟
+    /// 执行——用户反馈「切换成默认风格后仍显示流光 Siri」。在保存路径直接同步后，
+    /// 任何平台的下一次录音从入场帧起就携带最新样式，不再依赖 emit 闭包的时序。
+    pub fn sync_capsule_style_from_preferences(&self) {
+        let classic = matches!(self.inner.prefs.get().capsule_style, CapsuleStyle::Classic);
+        self.inner
+            .capsule_style
+            .store(if classic { 1 } else { 0 }, Ordering::Relaxed);
     }
     pub fn sync_active_asr_provider_from_preferences(&self) -> Result<(), String> {
         let provider = self.inner.prefs.get().active_asr_provider;
@@ -1447,6 +1876,68 @@ impl Coordinator {
     }
     pub fn correction_rules(&self) -> &CorrectionRuleStore {
         &self.inner.correction_rules
+    }
+
+    /// 用户在卡片上点了勾 —— 这一条进词汇表。
+    pub fn accept_pending_correction(&self, id: &str) {
+        let Some(taken) = self.take_pending_correction(id) else {
+            return;
+        };
+        dictation::commit_learned_rule(
+            &self.inner,
+            &crate::host_document::LearnedRule {
+                pattern: taken.pattern,
+                replacement: taken.replacement,
+            },
+        );
+        self.refresh_vocab_card();
+    }
+
+    /// 用户在卡片上点了叉 —— 这一条丢掉，什么都不记。
+    ///
+    /// **不做「拒绝名单」。** 下次你再改同一个词它还会问；一份你看不见的名单只会让你
+    /// 将来纳闷「为什么这个词它不学了」。
+    pub fn reject_pending_correction(&self, id: &str) {
+        if self.take_pending_correction(id).is_none() {
+            return;
+        }
+        self.refresh_vocab_card();
+    }
+
+    fn take_pending_correction(&self, id: &str) -> Option<crate::types::PendingCorrection> {
+        let mut pending = self.inner.pending_corrections.lock();
+        pending
+            .iter()
+            .position(|p| p.id == id)
+            .map(|idx| pending.remove(idx))
+    }
+
+    /// 逐条点完之后重排卡片：还有剩的就按新行数重算高度，空了就收起来。
+    ///
+    /// 不重算高度的话，窗口会停在「原来那么多行」的尺寸上，而窗口在显示卡片期间是**不
+    /// 穿透鼠标**的 —— 那块已经空掉的透明区域会继续拦住底下的点击。
+    fn refresh_vocab_card(&self) {
+        if self.inner.pending_corrections.lock().is_empty() {
+            hide_vocab_suggestion_card(&self.inner);
+        } else {
+            show_vocab_suggestion_card(&self.inner);
+        }
+    }
+
+    /// 卡片 10 秒到期，或新一轮听写开始。
+    pub fn dismiss_vocab_suggestions(&self) {
+        hide_vocab_suggestion_card(&self.inner);
+    }
+
+    /// 用户关掉了「光标上下文」开关 —— 立刻停掉一切还在跑的观察，别等它自己超时。
+    ///
+    /// 置空即解除：`EditWatcher` 的 `Drop` 会把停止 flag 置位，观察线程在下一次
+    /// runloop 轮转（≤1s）时退出并反注册 AXObserver。同时把还挂着的建议卡片收掉 ——
+    /// 那些建议是这条链路的产物，开关关了就不该再让用户看见。
+    pub fn disarm_edit_watch(&self) {
+        disarm_edit_watch(&self.inner);
+        hide_vocab_suggestion_card(&self.inner);
+        log::info!("[cursor-context] edit watch disarmed: feature switched off");
     }
 
     pub fn update_hotkey_binding(&self) {
@@ -1505,13 +1996,15 @@ impl Coordinator {
                 // Linux: 启动 fcitx5 插件信号监听作为热键源。
                 #[cfg(target_os = "linux")]
                 {
-                    let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&self.inner);
+                    let (qa_trigger, selection_polish_trigger, translation_trigger) =
+                        modifier_shortcut_triggers(&self.inner);
                     let custom_key = custom_dictation_key_string(&self.inner);
                     crate::linux_fcitx::start_dictation_signal_listener(
                         fcitx_tx,
                         combo_tx_for_fcitx,
                         fcitx_binding.clone(),
                         qa_trigger,
+                        selection_polish_trigger,
                         translation_trigger,
                         custom_key,
                     );
@@ -1535,8 +2028,13 @@ impl Coordinator {
 
     pub fn update_modifier_shortcut_bindings(&self) {
         if let Some(monitor) = self.inner.hotkey.lock().as_ref() {
-            let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&self.inner);
-            monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
+            let (qa_trigger, selection_polish_trigger, translation_trigger) =
+                modifier_shortcut_triggers(&self.inner);
+            monitor.update_modifier_shortcuts(
+                qa_trigger,
+                selection_polish_trigger,
+                translation_trigger,
+            );
         }
     }
 
@@ -1554,10 +2052,10 @@ impl Coordinator {
 
     pub async fn start_dictation_with_translation(&self) -> Result<(), String> {
         begin_session(&self.inner).await?;
-        self.inner
-            .translation_modifier_seen
-            .store(true, Ordering::SeqCst);
-        log::info!("[coord] android overlay translation dictation started");
+        // 与桌面 Shift 走同一个 gate：目标语言没设 / 与唯一工作语言相同时不置位，
+        // 避免安卓浮层也出现「提示在翻译、实际没翻」。
+        let translation_armed = arm_translation_if_effective(&self.inner);
+        log::info!("[coord] android overlay dictation started (translation={translation_armed})");
         Ok(())
     }
 
@@ -1571,7 +2069,7 @@ impl Coordinator {
 
     pub async fn stop_dictation_with_translation(&self, translation: bool) -> Result<(), String> {
         if translation {
-            mark_translation_modifier_seen(&self.inner);
+            arm_translation_if_effective(&self.inner);
         }
         self.stop_dictation().await
     }
@@ -1810,21 +2308,43 @@ impl Coordinator {
     #[cfg(any(debug_assertions, test))]
     pub async fn inject_hotkey_click_for_dev(&self) -> Result<(), String> {
         log::info!("[coord] dev hotkey injection started");
-            handle_pressed(&self.inner, std::time::Instant::now(), 0).await;
-            handle_released(&self.inner, std::time::Instant::now()).await;
+        handle_pressed(&self.inner, std::time::Instant::now(), 0).await;
+        handle_released(&self.inner, std::time::Instant::now()).await;
         cancel_session(&self.inner);
         Ok(())
     }
 
-    pub async fn repolish(&self, raw_text: String, mode: PolishMode) -> Result<String, String> {
+    /// 用某个风格包重新润色一段已有原文。
+    ///
+    /// `style_pack_id`：
+    /// - `None` → 用当前激活的风格包。历史页的「重试」走这条：同样的输入再给模型看一遍，
+    ///   用来判断上一次的结果是模型抖动还是稳定行为。
+    /// - `Some(id)` → 用指定的风格包。历史页的「换风格重润色」走这条。
+    ///
+    /// 指定的包**不需要**处于激活状态，也不会改变激活状态：这只是一次一次性试算，
+    /// 不该有把用户当前风格换掉的副作用。
+    pub async fn repolish(
+        &self,
+        raw_text: String,
+        mode: PolishMode,
+        style_pack_id: Option<String>,
+    ) -> Result<String, String> {
         let hotwords = enabled_phrases(&self.inner);
         let prefs = self.inner.prefs.get();
-        let pack = self
-            .inner
-            .style_packs
-            .get_or_default_active(&prefs.active_style_pack_id)
-            .map_err(|e| e.to_string())?;
-        let style_system_prompt = pack.prompt.clone();
+        let pack = match style_pack_id.as_deref() {
+            // 显式指定时按 id 精确取，不走 get_or_default_active 的兜底链——用户点的是
+            // 「用这个风格看看」，静默回落到别的包会让结果无从解释。
+            Some(id) => self.inner.style_packs.get(id).map_err(|e| e.to_string())?,
+            None => self
+                .inner
+                .style_packs
+                .get_or_default_active(&prefs.active_style_pack_id)
+                .map_err(|e| e.to_string())?,
+        };
+        let style_system_prompt = crate::types::style_pack_prompt(
+            &pack,
+            crate::types::StylePromptKind::DictationAsr,
+        );
         let working_languages = prefs.working_languages;
         let chinese_script_preference = prefs.chinese_script_preference;
         let output_language_preference = prefs.output_language_preference;
@@ -1863,10 +2383,14 @@ impl Coordinator {
             output_language_preference,
             llm_thinking_enabled,
             front_app.as_deref(),
+            // repolish 发生在历史页里，此刻焦点在 OpenLess 自己的窗口上，读到的
+            // 只会是我们自己的 UI —— 没有可用的光标上下文。
+            None,
             &[],
             // repolish 不回写历史的模型/耗时字段，调用快照就地丢弃。
             &mut None,
             &mut None,
+            pipeline_multimodal_enabled(&self.inner.prefs.get()),
         )
         .await
         .map_err(|e| e.to_string())
@@ -1874,10 +2398,7 @@ impl Coordinator {
 
     /// 返回 (转写文本, 本次实际构建的 ASR (provider, model) 快照)。快照供命令层把
     /// 「重转用了哪个模型」写回历史（构建时归因，PR #826 review）。
-    pub async fn retranscribe_pcm(
-        &self,
-        pcm: Vec<u8>,
-    ) -> Result<(String, AsrCallLabel), String> {
+    pub async fn retranscribe_pcm(&self, pcm: Vec<u8>) -> Result<(String, AsrCallLabel), String> {
         self.retranscribe_pcm_inner(pcm, false, None).await
     }
 
@@ -1954,6 +2475,13 @@ impl Coordinator {
                     .map_err(|_| "重新转录超时".to_string())?
                     .map_err(|e| e.to_string())?
             }
+            ActiveAsr::Xfyun(asr) => {
+                asr.send_last_frame().await.map_err(|e| e.to_string())?;
+                tokio::time::timeout(timeout, asr.await_final_result())
+                    .await
+                    .map_err(|_| "重新转录超时".to_string())?
+                    .map_err(|e| e.to_string())?
+            }
             ActiveAsr::Whisper(w) => tokio::time::timeout(timeout, w.transcribe())
                 .await
                 .map_err(|_| "重新转录超时".to_string())?
@@ -1964,9 +2492,9 @@ impl Coordinator {
                 .map_err(|e| e.to_string())?,
             ActiveAsr::DashScopeMultimodal(m) => {
                 tokio::time::timeout(m.transcribe_timeout(audio_secs), m.transcribe())
-                .await
-                .map_err(|_| "重新转录超时".to_string())?
-                .map_err(|e| e.to_string())?
+                    .await
+                    .map_err(|_| "重新转录超时".to_string())?
+                    .map_err(|e| e.to_string())?
             }
             ActiveAsr::ElevenLabs(e) => {
                 tokio::time::timeout(elevenlabs_timeout, e.transcribe())
@@ -2027,6 +2555,9 @@ impl Coordinator {
             prefs.chinese_script_preference,
             prefs.output_language_preference,
             None,
+            // front_app 一样传 None：这是脱离运行时的静态预览，前台 app 和光标上下文
+            // 都要等真正听写时才有值。
+            None,
             false,
         );
         let multi_turn = crate::polish::assemble_polish_system_prompt(
@@ -2035,6 +2566,7 @@ impl Coordinator {
             &prefs.working_languages,
             prefs.chinese_script_preference,
             prefs.output_language_preference,
+            None,
             None,
             true,
         );
@@ -2237,9 +2769,11 @@ pub(super) fn insert_via_non_tsf_fallback(
     let prefs = inner.prefs.get();
     let sendinput_options = dictation::windows_sendinput_options_from_prefs(&prefs);
     let status = finish_non_tsf_insertion_fallback(
-        || inner
-            .inserter
-            .insert_via_unicode_keystrokes(polished, sendinput_options),
+        || {
+            inner
+                .inserter
+                .insert_via_unicode_keystrokes(polished, sendinput_options)
+        },
         || inner.inserter.copy_fallback(polished),
     );
 
@@ -2341,23 +2875,38 @@ mod non_tsf_fallback_tests {
 
 // ─────────────────────────── helpers ───────────────────────────
 
-
-
 fn read_whisper_credentials() -> (String, String, String) {
     let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
         .ok()
         .flatten()
         .unwrap_or_default();
+    let active_asr = CredentialsVault::get_active_asr();
+    let (default_endpoint, default_model) = whisper_credential_defaults(&active_asr);
     let base_url = CredentialsVault::get(CredentialAccount::AsrEndpoint)
         .ok()
         .flatten()
-        .unwrap_or_default();
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(default_endpoint);
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
         .ok()
         .flatten()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "whisper-1".to_string());
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(default_model);
     (api_key, base_url, model)
+}
+
+/// whisper 兼容系 provider 的「空槽默认值」。zenmux 有厂商默认端点/模型
+/// （与前端 preset 一致）；其余预设沿用空 endpoint + `whisper-1`（默认值由
+/// 前端切换 provider 时写入 vault）。纯函数，便于单测。
+fn whisper_credential_defaults(provider_id: &str) -> (String, String) {
+    if provider_id == ZENMUX_ASR_PROVIDER_ID {
+        (
+            crate::asr::whisper::ZENMUX_DEFAULT_ENDPOINT.to_string(),
+            crate::asr::whisper::ZENMUX_DEFAULT_MODEL.to_string(),
+        )
+    } else {
+        (String::new(), "whisper-1".to_string())
+    }
 }
 
 fn read_mimo_credentials() -> (String, String, String) {
@@ -2543,10 +3092,12 @@ fn read_volc_credentials() -> VolcengineCredentials {
     // 密钥槽位随鉴权模式：AppIdToken 读旧版 Access Token，ApiKey 读独立的方舟 API Key，
     // 两者互不污染，切换模式不会把旧模式的凭据带进新模式的握手。
     let secret = match auth_mode {
-        VolcengineAuthMode::AppIdToken => CredentialsVault::get(CredentialAccount::VolcengineAccessKey)
-            .ok()
-            .flatten()
-            .unwrap_or_default(),
+        VolcengineAuthMode::AppIdToken => {
+            CredentialsVault::get(CredentialAccount::VolcengineAccessKey)
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        }
         VolcengineAuthMode::ApiKey => CredentialsVault::get(CredentialAccount::VolcengineApiKey)
             .ok()
             .flatten()
@@ -2565,6 +3116,18 @@ fn read_volc_credentials() -> VolcengineCredentials {
     }
 }
 
+fn read_xfyun_credentials() -> crate::asr::XfyunCredentials {
+    let app_id = CredentialsVault::get(CredentialAccount::XfyunAppId)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let api_key = CredentialsVault::get(CredentialAccount::XfyunApiKey)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    crate::asr::XfyunCredentials { app_id, api_key }
+}
+
 fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
     inner
         .vocab
@@ -2577,7 +3140,6 @@ fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
         })
         .collect()
 }
-
 
 /// 读 Gemini 凭据。所有 LLM provider 共用 ark.* 槽位（persistence 没做 per-provider
 /// 隔离），所以这里也是从 `ArkApiKey` / `ArkModelId` / `ArkEndpoint` 三个槽读，
@@ -2667,6 +3229,86 @@ fn build_active_llm_provider(llm_thinking_enabled: bool) -> anyhow::Result<Activ
     )))
 }
 
+/// 是否启用多模态识别管线：实验开关 + 模式切换都满足才生效。
+pub(crate) fn pipeline_multimodal_enabled(prefs: &crate::types::UserPreferences) -> bool {
+    prefs.multimodal_pipeline_enabled
+        && prefs.pipeline_mode == crate::types::PipelineMode::Multimodal
+}
+
+/// 多模态（Omni）模型通道的凭据预检（友好错误信息，供录音前拦截）。
+pub(crate) fn ensure_omni_credentials() -> Result<(), String> {
+    let api_key = CredentialsVault::get(CredentialAccount::OmniApiKey)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let model = CredentialsVault::get(CredentialAccount::OmniModel)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let base_url = CredentialsVault::get(CredentialAccount::OmniEndpoint)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    if api_key.trim().is_empty() {
+        return Err("多模态模型 API Key 为空：请在 服务 → AI 提供商 → 多模态模型 中配置".into());
+    }
+    if model.trim().is_empty() {
+        return Err("多模态模型 id 为空：请在 服务 → AI 提供商 → 多模态模型 中配置".into());
+    }
+    let active = CredentialsVault::get_active_omni();
+    if active != crate::omni::OMNI_GEMINI_PROVIDER_ID && base_url.trim().is_empty() {
+        return Err("多模态模型 Base URL 为空：请在 服务 → AI 提供商 → 多模态模型 中配置".into());
+    }
+    Ok(())
+}
+
+fn omni_default_base_url(provider: &str) -> &'static str {
+    match provider {
+        "openai" => "https://api.openai.com/v1",
+        crate::omni::OMNI_GEMINI_PROVIDER_ID => "https://generativelanguage.googleapis.com/v1beta",
+        "dashscope-omni" => "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        _ => "",
+    }
+}
+
+/// 读取 omni 命名空间凭据并构建多模态模型通道（与 build_active_llm_provider
+/// 平行的唯一构建点）。Gemini 按 provider id / base_url 路由到原生通道。
+pub(crate) fn build_active_omni_provider(
+    thinking_enabled: bool,
+) -> anyhow::Result<crate::omni::OmniProvider> {
+    let active = CredentialsVault::get_active_omni();
+    let api_key = CredentialsVault::get(CredentialAccount::OmniApiKey)?.unwrap_or_default();
+    let model = CredentialsVault::get(CredentialAccount::OmniModel)?.unwrap_or_default();
+    let base_url = CredentialsVault::get(CredentialAccount::OmniEndpoint)?.unwrap_or_default();
+    if api_key.trim().is_empty() {
+        anyhow::bail!("多模态模型 API Key 为空");
+    }
+    if model.trim().is_empty() {
+        anyhow::bail!("多模态模型 id 为空");
+    }
+    let base_url = if base_url.trim().is_empty() {
+        omni_default_base_url(&active).to_string()
+    } else {
+        base_url.trim().to_string()
+    };
+    if base_url.is_empty() {
+        anyhow::bail!("多模态模型 Base URL 为空");
+    }
+    // 与 LLM / ASR 通道一致：拒绝指向内网/回环/元数据服务的地址（SSRF 防线）。
+    crate::endpoint_security::validate_http_endpoint(&base_url)
+        .map_err(|_| anyhow::anyhow!("endpointInvalid"))?;
+    let config = crate::omni::OmniConfig {
+        provider_id: active.clone(),
+        base_url,
+        api_key,
+        model,
+        extra_headers: CredentialsVault::get_active_omni_extra_headers(),
+        temperature: crate::polish::openai_compatible_temperature_for_provider(
+            &active,
+            CredentialsVault::get_active_omni_temperature(),
+        ),
+        thinking_enabled,
+    };
+    Ok(crate::omni::OmniProvider::new(config))
+}
+
 fn resolve_ark_endpoint(api_key: &str) -> anyhow::Result<String> {
     let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?.filter(|s| !s.is_empty());
     resolve_ark_endpoint_with_policy(api_key, endpoint)
@@ -2679,12 +3321,148 @@ fn resolve_ark_endpoint_with_policy(
     if api_key.trim().is_empty() && endpoint.is_none() {
         anyhow::bail!("API Key 为空");
     }
-    Ok(endpoint
-        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string()))
+    let resolved = endpoint
+        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string());
+    // 与 validate_provider_credentials / list_provider_models 同一校验函数：仅保证是
+    // 合法 http(s) URL，地址不设限制（用户显式配置，前端有 http 风险提示）。
+    crate::endpoint_security::validate_http_endpoint(&resolved)?;
+    Ok(resolved)
 }
 
 #[cfg(test)]
 mod tests {
+    /// 造一条词典条目。传给 `prioritize_vocab_for_asr` 时必须是词典的原始顺序
+    /// （最近添加在前）。
+    fn vocab_entry(phrase: &str, hits: u64) -> crate::types::DictionaryEntry {
+        crate::types::DictionaryEntry {
+            id: phrase.to_string(),
+            phrase: phrase.to_string(),
+            note: None,
+            enabled: true,
+            hits,
+            created_at: String::new(),
+        }
+    }
+
+    fn learned_vocab_entry(phrase: &str, hits: u64) -> crate::types::DictionaryEntry {
+        let mut entry = vocab_entry(phrase, hits);
+        entry.note = Some(super::dictation::LEARNED_VOCAB_NOTE.to_string());
+        entry
+    }
+
+    /// 真机复现：刚添加的碎片排在词典最前，把命中 18 次的 `hermes`、7 次的
+    /// `win-shukong` 挤出了 240 字符的 ASR 预算。保底席位之后必须按命中排。
+    #[test]
+    fn asr_vocab_orders_by_hits_once_past_the_fresh_seats() {
+        let mut entries: Vec<_> = (0..super::FRESH_VOCAB_SEATS)
+            .map(|i| vocab_entry(&format!("fresh{i}"), 0))
+            .collect();
+        entries.push(vocab_entry("scrap", 1));
+        entries.push(vocab_entry("hermes", 18));
+        entries.push(vocab_entry("win-shukong", 7));
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+
+        let pos = |p: &str| ordered.iter().position(|x| x == p).expect("phrase kept");
+        assert!(pos("hermes") < pos("scrap"), "命中多的必须排在刚收进来的碎片前面");
+        assert!(pos("win-shukong") < pos("scrap"));
+        assert!(pos("hermes") < pos("win-shukong"), "命中多的在前");
+    }
+
+    /// 纯按命中排会让刚添加的词永远进不去预算——而用户刚加它，多半就是因为刚
+    /// 被它坑过。最近添加的若干条要有保底席位。
+    #[test]
+    fn asr_vocab_reserves_seats_for_freshly_added_phrases() {
+        let mut entries = vec![vocab_entry("Pathwyze", 0)];
+        entries.extend((0..30).map(|i| vocab_entry(&format!("old{i}"), 100 + i)));
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+
+        assert_eq!(
+            ordered.first().map(String::as_str),
+            Some("Pathwyze"),
+            "命中为 0 的新词也要占住最前的保底席位"
+        );
+    }
+
+    /// 同词异形一起进词表既浪费预算，又让模型无所适从。留命中多的那个写法——
+    /// 位置取最靠前那次，但内容不能被刚收进来、命中为 0 的变体顶掉。
+    #[test]
+    fn asr_vocab_dedupes_case_insensitively_keeping_the_most_hit_spelling() {
+        let entries = vec![
+            vocab_entry("claude", 0),
+            vocab_entry("mac-mini", 27),
+            vocab_entry("Claude", 33),
+        ];
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+
+        assert_eq!(
+            ordered,
+            vec!["Claude".to_string(), "mac-mini".to_string()],
+            "保留 Claude 的写法，但沿用 claude 那次更靠前的位置"
+        );
+    }
+
+    #[test]
+    fn learned_vocab_does_not_consume_fresh_manual_seats() {
+        let mut entries = Vec::new();
+        for i in 0..super::FRESH_VOCAB_SEATS {
+            entries.push(learned_vocab_entry(&format!("learned{i}"), 1_000 - i as u64));
+            entries.push(vocab_entry(&format!("manual{i}"), 0));
+        }
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+        let expected_manual: Vec<String> = (0..super::FRESH_VOCAB_SEATS)
+            .map(|i| format!("manual{i}"))
+            .collect();
+
+        assert_eq!(
+            &ordered[..super::FRESH_VOCAB_SEATS],
+            expected_manual.as_slice(),
+            "学习词条即使排在词典前面，也不能占用手动新增的保底席位"
+        );
+    }
+
+    #[test]
+    fn learned_vocab_does_not_backfill_unused_manual_seats() {
+        let entries = vec![
+            learned_vocab_entry("learned-low", 1),
+            vocab_entry("only-manual", 0),
+            learned_vocab_entry("learned-high", 20),
+        ];
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+
+        assert_eq!(ordered, vec!["only-manual", "learned-high", "learned-low"]);
+    }
+
+    #[test]
+    fn all_learned_vocab_is_ranked_by_hits() {
+        let entries = vec![
+            learned_vocab_entry("cold", 0),
+            learned_vocab_entry("hot", 12),
+            learned_vocab_entry("warm", 5),
+        ];
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+
+        assert_eq!(ordered, vec!["hot", "warm", "cold"]);
+    }
+
+    #[test]
+    fn asr_vocab_dedupes_across_manual_and_learned_sources() {
+        let entries = vec![
+            vocab_entry("claude", 0),
+            learned_vocab_entry("Claude", 33),
+            learned_vocab_entry("other", 10),
+        ];
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+
+        assert_eq!(ordered, vec!["Claude", "other"]);
+    }
+
     #[test]
     fn volc_resource_history_label_allows_volc_namespace_ids() {
         // issue #373 场景的两个真实 resource id 必须放行。
@@ -2704,8 +3482,16 @@ mod tests {
         // 非 volc. 命名空间 / 含异常字符 / 超长的值可能携带租户信息，一律不落历史。
         assert_eq!(super::volc_resource_history_label(""), None);
         assert_eq!(super::volc_resource_history_label("my-secret-tenant"), None);
-        assert_eq!(super::volc_resource_history_label("volc.a b"), None, "空格不在字符集");
-        assert_eq!(super::volc_resource_history_label("volc.引擎"), None, "非 ASCII 拒绝");
+        assert_eq!(
+            super::volc_resource_history_label("volc.a b"),
+            None,
+            "空格不在字符集"
+        );
+        assert_eq!(
+            super::volc_resource_history_label("volc.引擎"),
+            None,
+            "非 ASCII 拒绝"
+        );
         let too_long = format!("volc.{}", "x".repeat(64));
         assert_eq!(super::volc_resource_history_label(&too_long), None);
     }
@@ -2720,6 +3506,24 @@ mod tests {
 
     fn session_id(n: u128) -> SessionId {
         Uuid::from_u128(n)
+    }
+
+    #[test]
+    fn pipeline_multimodal_enabled_requires_both_flag_and_mode() {
+        let mut prefs = crate::types::UserPreferences::default();
+        assert!(!super::pipeline_multimodal_enabled(&prefs));
+        prefs.multimodal_pipeline_enabled = true;
+        assert!(
+            !super::pipeline_multimodal_enabled(&prefs),
+            "只开实验开关但模式还是 traditional 时不得启用"
+        );
+        prefs.pipeline_mode = crate::types::PipelineMode::Multimodal;
+        assert!(super::pipeline_multimodal_enabled(&prefs));
+        prefs.multimodal_pipeline_enabled = false;
+        assert!(
+            !super::pipeline_multimodal_enabled(&prefs),
+            "实验开关关闭时即使模式为 multimodal 也不得启用"
+        );
     }
 
     #[test]
@@ -2847,6 +3651,32 @@ mod tests {
         std::env::remove_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN");
     }
 
+    #[test]
+    fn sync_capsule_style_from_preferences_updates_atomic_immediately() {
+        // 设置保存路径会调 sync_capsule_style_from_preferences：原子缓存必须立即反映
+        // 用户选择，让下一次录音的入场帧就携带新样式——不依赖 emit_capsule 主线程
+        // 闭包的 ~30Hz 同步（Windows 主线程拥塞时闭包延迟 → 整场显示旧样式）。
+        let coordinator = Coordinator::new();
+        coordinator.sync_capsule_style_from_preferences();
+        assert_eq!(coordinator.inner.capsule_style.load(Ordering::Relaxed), 0);
+
+        {
+            let mut prefs = coordinator.inner.prefs.get();
+            prefs.capsule_style = CapsuleStyle::Classic;
+            coordinator.inner.prefs.set(prefs).unwrap();
+        }
+        coordinator.sync_capsule_style_from_preferences();
+        assert_eq!(coordinator.inner.capsule_style.load(Ordering::Relaxed), 1);
+
+        {
+            let mut prefs = coordinator.inner.prefs.get();
+            prefs.capsule_style = CapsuleStyle::Siri;
+            coordinator.inner.prefs.set(prefs).unwrap();
+        }
+        coordinator.sync_capsule_style_from_preferences();
+        assert_eq!(coordinator.inner.capsule_style.load(Ordering::Relaxed), 0);
+    }
+
     #[tokio::test]
     async fn begin_session_dry_run_enters_listening_and_clears_stale_edges() {
         let _guard = ENV_LOCK.lock().await;
@@ -2965,6 +3795,110 @@ mod tests {
     }
 
     #[test]
+    fn openai_compatible_preset_is_whisper_compatible_and_conservative_by_default() {
+        use crate::asr::whisper::AsrRequestFormat;
+
+        assert!(is_whisper_compatible_provider(
+            OPENAI_COMPATIBLE_ASR_PROVIDER_ID
+        ));
+        assert_eq!(
+            active_asr_provider_kind(OPENAI_COMPATIBLE_ASR_PROVIDER_ID),
+            ActiveAsrProviderKind::WhisperCompatible
+        );
+        assert_eq!(
+            whisper_request_format(OPENAI_COMPATIBLE_ASR_PROVIDER_ID),
+            AsrRequestFormat::Multipart
+        );
+        assert!(!whisper_uses_hotwords(OPENAI_COMPATIBLE_ASR_PROVIDER_ID));
+        // 默认最保守：无 verbose_json、不分片。
+        assert_eq!(
+            advanced_asr_config_for(OPENAI_COMPATIBLE_ASR_PROVIDER_ID, None),
+            AdvancedAsrConfig::default()
+        );
+    }
+
+    #[test]
+    fn openai_compatible_advanced_config_controls_whisper_switches() {
+        assert_eq!(
+            advanced_asr_config_for(
+                OPENAI_COMPATIBLE_ASR_PROVIDER_ID,
+                Some(r#"{"verboseJson":true,"chunkDurationMs":30000}"#),
+            ),
+            AdvancedAsrConfig {
+                verbose_json: true,
+                chunk_duration_ms: Some(30_000),
+                enable_itn: true,
+            }
+        );
+        // 命名厂商忽略该配置，保持硬编码行为。
+        assert_eq!(
+            advanced_asr_config_for(
+                "siliconflow",
+                Some(r#"{"verboseJson":true,"chunkDurationMs":30000}"#),
+            ),
+            AdvancedAsrConfig::default()
+        );
+        assert!(whisper_supports_verbose_json("whisper"));
+        assert!(!whisper_supports_verbose_json("siliconflow"));
+        assert_eq!(batch_asr_chunk_limit_ms("siliconflow"), None);
+        assert_eq!(
+            batch_asr_chunk_limit_ms(OPENAI_COMPATIBLE_ASR_PROVIDER_ID),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_advanced_asr_config_falls_back_on_missing_or_invalid_json() {
+        assert_eq!(
+            parse_advanced_asr_config(None),
+            AdvancedAsrConfig::default()
+        );
+        assert_eq!(
+            parse_advanced_asr_config(Some("not-json")),
+            AdvancedAsrConfig::default()
+        );
+        assert_eq!(
+            parse_advanced_asr_config(Some(r#"{"verboseJson":true}"#)),
+            AdvancedAsrConfig {
+                verbose_json: true,
+                chunk_duration_ms: None,
+                enable_itn: true,
+            }
+        );
+        // 分片时长 0 或缺失 = 不分片。
+        assert_eq!(
+            parse_advanced_asr_config(Some(r#"{"chunkDurationMs":0}"#)),
+            AdvancedAsrConfig::default()
+        );
+        assert_eq!(
+            parse_advanced_asr_config(Some(r#"{"verboseJson":false,"chunkDurationMs":30000}"#)),
+            AdvancedAsrConfig {
+                verbose_json: false,
+                chunk_duration_ms: Some(30_000),
+                enable_itn: true,
+            }
+        );
+        // 浮点分片时长与前端一致向下取整：30000.9 → 30000。
+        assert_eq!(
+            parse_advanced_asr_config(Some(r#"{"chunkDurationMs":30000.9}"#)),
+            AdvancedAsrConfig {
+                verbose_json: false,
+                chunk_duration_ms: Some(30_000),
+                enable_itn: true,
+            }
+        );
+        // 负数 / 字符串分片时长 → 不分片。
+        assert_eq!(
+            parse_advanced_asr_config(Some(r#"{"chunkDurationMs":-1}"#)),
+            AdvancedAsrConfig::default()
+        );
+        assert_eq!(
+            parse_advanced_asr_config(Some(r#"{"chunkDurationMs":"abc"}"#)),
+            AdvancedAsrConfig::default()
+        );
+    }
+
+    #[test]
     fn openrouter_is_whisper_compatible_json_provider() {
         use crate::asr::whisper::AsrRequestFormat;
         // issue #582：OpenRouter 走 whisper 兼容路由，但请求体是 JSON+base64。
@@ -2983,6 +3917,38 @@ mod tests {
         assert!(!whisper_supports_verbose_json("openrouter"));
         // base64 膨胀，长录音保守按 30s 切分。
         assert_eq!(batch_asr_chunk_limit_ms("openrouter"), Some(30_000));
+    }
+
+    #[test]
+    fn zenmux_credential_defaults_and_advanced_config() {
+        use crate::asr::whisper::{ZENMUX_DEFAULT_ENDPOINT, ZENMUX_DEFAULT_MODEL};
+        // base64 进 JSON body 体积膨胀，与 OpenRouter 同按 30s 切分。
+        assert_eq!(batch_asr_chunk_limit_ms("zenmux"), Some(30_000));
+        // 空槽默认值：zenmux 回落厂商默认端点/模型（与前端 preset 一致）；
+        // 其余 whisper 兼容预设沿用空 endpoint + whisper-1。
+        assert_eq!(
+            whisper_credential_defaults("zenmux"),
+            (
+                ZENMUX_DEFAULT_ENDPOINT.to_string(),
+                ZENMUX_DEFAULT_MODEL.to_string()
+            )
+        );
+        assert_eq!(
+            whisper_credential_defaults("whisper"),
+            (String::new(), "whisper-1".to_string())
+        );
+        assert_eq!(
+            whisper_credential_defaults("openrouter"),
+            (String::new(), "whisper-1".to_string())
+        );
+
+        // enable_itn 默认 true；用户配置显式 false 可覆盖；仅 openai-compatible /
+        // zenmux 读用户配置，其余命名厂商忽略（保持硬编码行为）。
+        assert!(advanced_asr_config_for("zenmux", None).enable_itn);
+        assert!(advanced_asr_config_for("zenmux", Some(r#"{"verboseJson":true}"#)).enable_itn);
+        assert!(!advanced_asr_config_for("zenmux", Some(r#"{"enableItn":false}"#)).enable_itn);
+        assert!(advanced_asr_config_for("whisper", Some(r#"{"enableItn":false}"#)).enable_itn);
+        assert!(!advanced_asr_config_for("zenmux", Some(r#"{"enableItn":false}"#)).verbose_json);
     }
 
     #[test]
@@ -3079,8 +4045,8 @@ mod tests {
     // 穷尽 match，这里逐 kind 钉死映射，防止未来悄悄改动某个 provider 的凭据形态。
     #[test]
     fn preflight_credential_maps_every_kind() {
-        use AsrPreflightCredential::*;
         use ActiveAsrProviderKind::*;
+        use AsrPreflightCredential::*;
         assert_eq!(Bailian.preflight_credential(), AsrApiKey);
         assert_eq!(Qwen3Realtime.preflight_credential(), AsrApiKey);
         assert_eq!(Mimo.preflight_credential(), AsrApiKey);
@@ -3088,6 +4054,7 @@ mod tests {
         assert_eq!(ElevenLabs.preflight_credential(), AsrApiKey);
         assert_eq!(WhisperCompatible.preflight_credential(), AsrApiKey);
         assert_eq!(Volcengine.preflight_credential(), VolcAppKey);
+        assert_eq!(Xfyun.preflight_credential(), XfyunAppKey);
     }
 
     #[test]
@@ -3103,8 +4070,7 @@ mod tests {
             crate::asr::qwen_realtime::PROVIDER_ID
         );
         assert_eq!(
-            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime-2026-02-10")
-                .unwrap(),
+            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime-2026-02-10").unwrap(),
             crate::asr::qwen_realtime::PROVIDER_ID
         );
         assert_eq!(
@@ -3170,22 +4136,20 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("不支持的百炼 ASR 模型"));
         // qwen3-asr-flash-filetrans 仅接受公网 URL，与本地录音链路不兼容，同样拒绝。
-        let error =
-            resolve_effective_asr_provider(crate::asr::bailian::PROVIDER_ID, "qwen3-asr-flash-filetrans")
-                .unwrap_err();
+        let error = resolve_effective_asr_provider(
+            crate::asr::bailian::PROVIDER_ID,
+            "qwen3-asr-flash-filetrans",
+        )
+        .unwrap_err();
         assert!(error.contains("不支持的百炼 ASR 模型"));
     }
 
     #[test]
     fn validates_only_supported_dashscope_multimodal_models() {
         assert!(validate_dashscope_multimodal_model("").is_ok());
-        assert!(
-            validate_dashscope_multimodal_model("fun-asr-flash-2026-06-15").is_ok()
-        );
+        assert!(validate_dashscope_multimodal_model("fun-asr-flash-2026-06-15").is_ok());
         assert!(validate_dashscope_multimodal_model("qwen-audio-3.0-asr-flash").is_ok());
-        assert!(
-            validate_dashscope_multimodal_model("qwen-audio-3.0-asr-flash-streaming").is_err()
-        );
+        assert!(validate_dashscope_multimodal_model("qwen-audio-3.0-asr-flash-streaming").is_err());
     }
 
     #[test]
@@ -3220,8 +4184,8 @@ mod tests {
 
     #[test]
     fn configured_fields_maps_every_kind() {
-        use AsrConfiguredFields::*;
         use ActiveAsrProviderKind::*;
+        use AsrConfiguredFields::*;
         assert_eq!(Bailian.configured_fields(), ApiKeyOnly);
         assert_eq!(Qwen3Realtime.configured_fields(), ApiKeyOnly);
         assert_eq!(Mimo.configured_fields(), ApiKeyEndpointModel);
@@ -3229,6 +4193,7 @@ mod tests {
         assert_eq!(ElevenLabs.configured_fields(), ApiKeyOnly);
         assert_eq!(WhisperCompatible.configured_fields(), EndpointModelOnly);
         assert_eq!(Volcengine.configured_fields(), VolcAppKey);
+        assert_eq!(Xfyun.configured_fields(), XfyunAppKey);
     }
 
     #[cfg(target_os = "windows")]
@@ -3412,6 +4377,40 @@ mod tests {
     }
 
     #[test]
+    fn resolve_ark_endpoint_allows_any_custom_endpoint() {
+        // 地址选择权完全交给用户：http 域名、局域网 IP、元数据地址均放行，
+        // 前端对 http:// 输入展示明文风险提示。
+        let endpoint = resolve_ark_endpoint_with_policy(
+            "",
+            Some("http://example.com:12345/v1/chat/completions".to_string()),
+        )
+        .expect("custom LLM HTTP hostname with a custom port must remain usable");
+        assert_eq!(endpoint, "http://example.com:12345/v1/chat/completions");
+
+        resolve_ark_endpoint_with_policy(
+            "",
+            Some("http://192.168.1.50:12345/v1/chat/completions".to_string()),
+        )
+        .expect("custom LLM LAN HTTP endpoint must remain usable");
+
+        resolve_ark_endpoint_with_policy(
+            "",
+            Some("http://169.254.169.254/latest/meta-data/".to_string()),
+        )
+        .expect("user-explicitly-configured endpoint must be allowed (user decides)");
+    }
+
+    #[test]
+    fn resolve_ark_endpoint_rejects_malformed_endpoint() {
+        let error = resolve_ark_endpoint_with_policy(
+            "",
+            Some("ftp://example.com/v1/chat/completions".to_string()),
+        )
+        .expect_err("non-http(s) scheme must be rejected");
+        assert!(error.to_string().contains("http 或 https"));
+    }
+
+    #[test]
     fn deferred_asr_bridge_flushes_startup_audio_before_live_chunks() {
         #[derive(Default)]
         struct RecordingConsumer {
@@ -3472,10 +4471,22 @@ mod tests {
         // 旧 schedule 触发时若期间有更新的 emit，应跳过隐藏（voice agent 取消双 emit 竞争）。
         emit_capsule(&coordinator.inner, CapsuleState::Done, 0.0, 0, None, None);
         schedule_capsule_idle(&coordinator.inner, 30);
-        emit_capsule(&coordinator.inner, CapsuleState::Cancelled, 0.0, 0, None, None);
+        emit_capsule(
+            &coordinator.inner,
+            CapsuleState::Cancelled,
+            0.0,
+            0,
+            None,
+            None,
+        );
         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
         assert_eq!(
-            coordinator.inner.last_capsule_state.lock().as_ref().copied(),
+            coordinator
+                .inner
+                .last_capsule_state
+                .lock()
+                .as_ref()
+                .copied(),
             Some(CapsuleState::Cancelled),
             "旧 schedule 不应把更新的 Cancelled 状态提前隐藏"
         );
@@ -3488,7 +4499,12 @@ mod tests {
         schedule_capsule_idle(&coordinator.inner, 30);
         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
         assert_eq!(
-            coordinator.inner.last_capsule_state.lock().as_ref().copied(),
+            coordinator
+                .inner
+                .last_capsule_state
+                .lock()
+                .as_ref()
+                .copied(),
             Some(CapsuleState::Idle),
             "无新 emit 时 schedule 应隐藏胶囊"
         );
@@ -3576,6 +4592,23 @@ mod tests {
         assert_eq!(state.session_id, session_id(41));
     }
 
+    // #856：识别中按下热键想录下一条的 Pressed 会在会话收尾后被串行 bridge 取出（落在
+    // 冷却期内）—— 现在一律静默丢弃，不再像「排队接力」那样放行开录下一条（无反馈排队 +
+    // 延迟开录的惊吓成本大于省下的等待时间；Esc 取消后也不会因此再弹出一条新录音）。
+    #[tokio::test]
+    async fn toggle_press_within_cooldown_is_dropped() {
+        let coordinator = Coordinator::new();
+        // Idle + 冷却未过期：模拟「识别中按下 → 会话收尾 → bridge 取出该 Pressed」的时刻。
+        *coordinator.inner.session_cooldown_until.lock() = Some(
+            std::time::Instant::now() + std::time::Duration::from_millis(POST_SESSION_COOLDOWN_MS),
+        );
+
+        handle_pressed_edge(&coordinator.inner, std::time::Instant::now(), 1).await;
+
+        // 静默丢弃：没有开录下一条（phase 仍是 Idle）。
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+    }
+
     #[tokio::test]
     async fn repeated_pressed_edge_during_hold_session_does_not_restart() {
         let coordinator = Coordinator::new();
@@ -3635,7 +4668,11 @@ mod tests {
             .hotkey_trigger_held
             .store(true, Ordering::SeqCst);
 
-        handle_released_edge(&coordinator.inner, pressed_at + std::time::Duration::from_millis(100)).await;
+        handle_released_edge(
+            &coordinator.inner,
+            pressed_at + std::time::Duration::from_millis(100),
+        )
+        .await;
 
         // 短按松手不结束录音，等下一次按下再停。
         assert_eq!(
@@ -3664,7 +4701,10 @@ mod tests {
         )
         .await;
 
-        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Listening);
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
         assert!(coordinator.inner.hotkey_press_at.lock().is_none());
     }
 
@@ -3682,7 +4722,11 @@ mod tests {
             .hotkey_trigger_held
             .store(true, Ordering::SeqCst);
 
-        handle_released_edge(&coordinator.inner, pressed_at + std::time::Duration::from_millis(500)).await;
+        handle_released_edge(
+            &coordinator.inner,
+            pressed_at + std::time::Duration::from_millis(500),
+        )
+        .await;
 
         // 无 recorder / ASR 的测试会话下，end_session 直接收尾到 Idle。
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
@@ -4124,6 +5168,45 @@ mod tests {
 
         assert!(coordinator.inner.asr.lock().is_none());
     }
+
+    #[test]
+    fn selection_polish_capsule_epoch_rejects_stale_auto_hide() {
+        let coordinator = Coordinator::new();
+        let terminal_epoch =
+            emit_selection_polish_capsule(&coordinator.inner, CapsuleState::Done, "已替换");
+        assert!(selection_polish_capsule_epoch_is_current(
+            &coordinator.inner,
+            terminal_epoch
+        ));
+
+        let next_epoch = emit_selection_polish_capsule(
+            &coordinator.inner,
+            CapsuleState::Polishing,
+            "正在润色...",
+        );
+        assert_ne!(terminal_epoch, next_epoch);
+        assert!(
+            !selection_polish_capsule_epoch_is_current(&coordinator.inner, terminal_epoch),
+            "上一轮的终态 timer 不能收起下一轮处理中提示"
+        );
+        assert!(selection_polish_capsule_epoch_is_current(
+            &coordinator.inner,
+            next_epoch
+        ));
+
+        emit_capsule(
+            &coordinator.inner,
+            CapsuleState::Recording,
+            0.0,
+            0,
+            None,
+            None,
+        );
+        assert!(
+            !selection_polish_capsule_epoch_is_current(&coordinator.inner, next_epoch),
+            "选区终态 timer 不能在新的语音状态上调用 Idle"
+        );
+    }
 }
 
 fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
@@ -4135,6 +5218,91 @@ fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
         .filter(|e| e.enabled)
         .map(|e| e.phrase)
         .collect()
+}
+
+/// 词典启用词条，**按送进 ASR 词汇偏置的优先级排好序**。
+///
+/// LLM 侧的热词块没有名额限制（[`enabled_phrases`] 直接用词典顺序就行），ASR 侧
+/// 有：`whisper::PROMPT_CHAR_BUDGET` 只给 240 个字符，装不下的词条被直接丢弃。
+/// 于是「送进去的顺序」就等于「谁能被听见」。
+///
+/// 而词典本身的顺序是**最近添加的在最前**（[`DictionaryStore::add`] 用
+/// `insert(0)`，为的是词汇表页面把刚加的词排在上面）。两个各自都合理的决定撞在
+/// 一起，结果是预算永远优先喂给最新的词，最老的先掉出去——而最老的那批恰恰是
+/// 攒了最多命中的常用词。真机上的表现：一份 40 条的词典里，命中 18 次、7 次、
+/// 10 次的三个专有名词全部排在预算外，从来没送到过 ASR；用户在词汇表里看得见
+/// 它们、以为在生效，实际上一次都没生效过。
+///
+/// 排序规则：
+/// 1. 最近手动添加的前 [`FRESH_VOCAB_SEATS`] 条保底——刚加的词还没机会攒命中，纯按
+///    命中排会让它永远进不去，而用户刚加它多半就是因为刚被它坑过。手改学习词条不占
+///    这些席位；它们本来就可能是半截词，必须靠真实命中自己爬进预算。
+/// 2. 其余按命中次数降序。
+/// 3. 同词异形（`claude` / `Claude`）只留命中多的那个写法。
+fn asr_vocab_phrases(inner: &Arc<Inner>) -> Vec<String> {
+    let entries: Vec<crate::types::DictionaryEntry> = inner
+        .vocab
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e.enabled)
+        .collect();
+    prioritize_vocab_for_asr(entries)
+}
+
+/// 最近添加的词条无条件占住的名额，见 [`asr_vocab_phrases`]。
+const FRESH_VOCAB_SEATS: usize = 5;
+
+/// [`asr_vocab_phrases`] 的纯函数部分，方便直接测排序规则。
+///
+/// `entries` 必须是词典的原始顺序（最近添加在前）——保底席位靠它取「最近」，
+/// 不去解析 `created_at` 字符串（历史文件由 Swift 版写入，格式不保证一致）。
+fn prioritize_vocab_for_asr(entries: Vec<crate::types::DictionaryEntry>) -> Vec<String> {
+    let mut fresh_manual = Vec::with_capacity(FRESH_VOCAB_SEATS.min(entries.len()));
+    let mut ranked = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let learned = entry.note.as_deref() == Some(dictation::LEARNED_VOCAB_NOTE);
+        if !learned && fresh_manual.len() < FRESH_VOCAB_SEATS {
+            fresh_manual.push(entry);
+        } else {
+            ranked.push(entry);
+        }
+    }
+    // 保底席位之外的全部词条按命中降序；`sort_by_key` 是稳定排序，同命中次数的保持
+    // 词典原顺序（最近添加在前）。学习词条也在这里，不会被拿来填空缺的手动保底席位。
+    ranked.sort_by_key(|e| std::cmp::Reverse(e.hits));
+    fresh_manual.extend(ranked);
+    let ordered = fresh_manual;
+
+    // 同一个词的不同写法（`claude` / `Claude`）只留一个：既省预算，也免得两种
+    // 写法一起进词表让模型无所适从。留**命中多**的那个写法，但位置取最靠前那次
+    // ——否则一个刚被收进来、命中为 0 的小写变体会把攒了几十次命中的正确写法顶掉。
+    let mut best: std::collections::HashMap<String, (usize, crate::types::DictionaryEntry)> =
+        std::collections::HashMap::new();
+    for (index, entry) in ordered.into_iter().enumerate() {
+        let key = entry.phrase.trim().to_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        match best.entry(key) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert((index, entry));
+            }
+            std::collections::hash_map::Entry::Occupied(mut slot) => {
+                if entry.hits > slot.get().1.hits {
+                    let position = slot.get().0;
+                    slot.insert((position, entry));
+                }
+            }
+        }
+    }
+
+    let mut picked: Vec<(usize, String)> = best
+        .into_values()
+        .map(|(index, entry)| (index, entry.phrase))
+        .collect();
+    picked.sort_by_key(|(index, _)| *index);
+    picked.into_iter().map(|(_, phrase)| phrase).collect()
 }
 
 /// 终止态（Done / Error）后延迟 N ms 把胶囊改回 Idle，让浮窗自动消失。
@@ -4218,14 +5386,21 @@ fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
         }
         // 必须 dictation **和** QA 同时空闲才能隐藏胶囊。否则旧 dictation Done timer
         // 的尾巴会在新 QA 录音/思考中把胶囊意外收掉（issue #118 v2 复现）。
-        let dictation_idle = inner_clone.state.lock().phase == SessionPhase::Idle;
-        let qa_idle = inner_clone.qa_state.lock().phase == QaPhase::Idle;
-        if dictation_idle && qa_idle {
-            emit_capsule(&inner_clone, CapsuleState::Idle, 0.0, 0, None, None);
-        }
+        // 选区润色进行中或出现新 payload 时，函数内部依据 capsule epoch 放弃隐藏。
+        hide_capsule_if_all_sessions_idle(&inner_clone);
     });
 }
 
+/// 选区润色终态的短暂展示。旧的 timer 只能收起自己那一代的 payload；若用户已经
+/// 触发了下一轮 selection，或在此期间开始语音/QA，会直接放弃，不碰当前 capsule。
+#[cfg(not(mobile))]
+fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, event_epoch: u64, delay_ms: u64) {
+    let inner_clone = Arc::clone(inner);
+    async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        hide_selection_polish_capsule_if_current(&inner_clone, event_epoch);
+    });
+}
 
 // ─────────────────────────── audio bridge ───────────────────────────
 

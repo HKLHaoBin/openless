@@ -27,10 +27,25 @@ export {
     setCredential,
     setActiveAsrProvider,
     setActiveLlmProvider,
+    setActiveOmniProvider,
     readCredential,
     validateProviderCredentials,
     listProviderModels,
 } from "./asr-credentials"
+
+// channels（渠道卡片）
+export type { Channel, ChannelKind, ChannelTestResult } from "./channels"
+export {
+    listChannels,
+    createChannel,
+    setChannelProviderType,
+    deleteChannelIfBlank,
+    renameChannel,
+    deleteChannel,
+    setChannelEnabled,
+    reorderChannels,
+    recordChannelTest,
+} from "./channels"
 
 // history
 export {
@@ -50,6 +65,9 @@ export {
     setVocabEnabled,
     listCorrectionRules,
     addCorrectionRule,
+    acceptPendingCorrection,
+    rejectPendingCorrection,
+    dismissVocabSuggestions,
     removeCorrectionRule,
     setCorrectionRuleEnabled,
     listVocabPresets,
@@ -102,9 +120,11 @@ export {
     setComboHotkey,
     validateShortcutBinding,
     setDictationHotkey,
+    setSelectionPolishHotkey,
     setTranslationHotkey,
     setSwitchStyleHotkey,
     setOpenAppHotkey,
+    setStylePackHotkeys,
     setShortcutRecordingActive,
 } from "./hotkeys"
 
@@ -127,9 +147,16 @@ export {
     qaSubmitText,
 } from "./qa"
 
+export {
+    getSelectionPolishPreview,
+    confirmSelectionPolishPreview,
+    cancelSelectionPolishPreview,
+} from './selection-polish-preview'
+
 // less-computer
 export {
     lessComputerWindowDismiss,
+    lessComputerWindowOpen,
     lessComputerApprove,
     lessComputerSubmitText,
     lessComputerSync,
@@ -170,6 +197,7 @@ export type {
 export {
     codingAgentDetect,
     codingAgentDetectOpencode,
+    codingAgentListOpencodeModels,
     codingAgentRunTest,
     codingAgentCancelTest,
     codingAgentCommandRisk,
@@ -180,6 +208,7 @@ export {
     listMarketplace,
     fetchMarketplaceDetail,
     installMarketplacePack,
+    downloadMarketplacePack,
     uploadMarketplacePack,
     likeMarketplacePack,
     marketplaceMyLikes,
@@ -213,4 +242,4 @@ export {
 } from "./marketplace-cache"
 
 // utils
-export { openExternal, exportErrorLog, logClientError } from "./utils"
+export { openExternal, exportErrorLog, logClientError, debugReadCursorContext } from "./utils"

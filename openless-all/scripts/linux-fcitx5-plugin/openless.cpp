@@ -21,6 +21,7 @@
  *  信号:
  *    DictationKeyEvent(uub: sym, states, isPress) — 听写热键按下/抬起
  *    QaShortcutEvent(uub: sym, states, isPress)   — QA 快捷键按下/抬起
+ *    SelectionPolishEvent(uub: sym, states, isPress) — 选区润色快捷键按下/抬起
  *    TranslationModifierEvent(uub: sym, states, isPress) — 翻译修饰键按下/抬起
  */
 
@@ -68,6 +69,8 @@ public:
           triggerRawStates_(0),
           qaRawSym_(0),
           qaRawStates_(0),
+          selectionPolishRawSym_(0),
+          selectionPolishRawStates_(0),
           translationRawSym_(0),
           translationRawStates_(0),
           hasCustomDictationKey_(false),
@@ -139,10 +142,20 @@ public:
                             }
                             return false;
                         }())) {
-                        auto dsym = triggerRawSym_ != 0 ? triggerRawSym_
-                            : static_cast<uint32_t>(triggerKeyList_[0].sym());
-                        auto dstates = triggerRawStates_ != 0 ? triggerRawStates_
-                            : static_cast<uint32_t>(triggerKeyList_[0].states());
+                        // 修复崩溃: raw 路径(SetHotkeyRaw)匹配时若 triggerRawStates_==0,
+                        // 原代码会无条件取 triggerKeyList_[0];而 raw 模式常伴随空 KeyList
+                        // (见 openless.conf: TriggerKey= 为空), 对空 vector 取下标 [0]
+                        // 是未定义行为, 直接导致 fcitx5 段错误 (Key::states 读野指针)。
+                        // 修正: 只有 KeyList 路径匹配时才访问列表, raw 路径直接用 raw 值。
+                        uint32_t dsym = triggerRawSym_;
+                        uint32_t dstates = triggerRawStates_;
+                        if (triggerRawSym_ == 0 && !triggerKeyList_.empty()) {
+                            dsym = static_cast<uint32_t>(triggerKeyList_[0].sym());
+                            dstates = static_cast<uint32_t>(triggerKeyList_[0].states());
+                        }
+                        if (dsym == 0) {
+                            return;
+                        }
                         if (!hasCustomDictationKey_ && isModifierKeySym(dsym)) {
                             dictationTriggerHeld_ = isPress;
                             if (isPress) {
@@ -167,6 +180,16 @@ public:
                         FCITX_LOGC(openless, Debug)
                             << "QA shortcut";
                         qaShortcutEvent(qaRawSym_, qaRawStates_, isPress);
+                        keyEvent.filterAndAccept();
+                        return;
+                    }
+                    if (selectionPolishRawSym_ != 0 &&
+                        sym == selectionPolishRawSym_ &&
+                        states == selectionPolishRawStates_) {
+                        FCITX_LOGC(openless, Debug)
+                            << "Selection polish shortcut";
+                        selectionPolishEvent(selectionPolishRawSym_,
+                                             selectionPolishRawStates_, isPress);
                         keyEvent.filterAndAccept();
                         return;
                     }
@@ -407,6 +430,18 @@ public:
             << "SetQaHotkeyRaw: sym=" << sym << " states=" << states;
     }
 
+    void setSelectionPolishHotkeyRaw(uint32_t sym, uint32_t states) {
+        selectionPolishRawSym_ = sym;
+        selectionPolishRawStates_ = states;
+        RawConfig raw;
+        readAsIni(raw, configFile());
+        raw.setValueByPath("SelectionPolishRawSym", std::to_string(sym));
+        raw.setValueByPath("SelectionPolishRawStates", std::to_string(states));
+        safeSaveAsIni(raw, configFile());
+        FCITX_LOGC(openless, Info)
+            << "SetSelectionPolishHotkeyRaw: sym=" << sym << " states=" << states;
+    }
+
     void setTranslationHotkeyRaw(uint32_t sym, uint32_t states) {
         translationRawSym_ = sym;
         translationRawStates_ = states;
@@ -426,10 +461,12 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setHotkeyRaw, "SetHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setCustomDictationTrigger, "SetCustomDictationTrigger", "s", "");
     FCITX_OBJECT_VTABLE_METHOD(setQaHotkeyRaw, "SetQaHotkeyRaw", "uu", "");
+    FCITX_OBJECT_VTABLE_METHOD(setSelectionPolishHotkeyRaw, "SetSelectionPolishHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setTranslationHotkeyRaw, "SetTranslationHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyEvent, "DictationKeyEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyCombined, "DictationKeyCombined", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(qaShortcutEvent, "QaShortcutEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(selectionPolishEvent, "SelectionPolishEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(translationModifierEvent, "TranslationModifierEvent", "uub");
 
     Instance *instance() { return instance_; }
@@ -455,6 +492,14 @@ public:
         {
             auto *v = raw.valueByPath("QaRawStates");
             qaRawStates_ = v ? std::stoul(*v, nullptr, 0) : 0;
+        }
+        {
+            auto *v = raw.valueByPath("SelectionPolishRawSym");
+            selectionPolishRawSym_ = v ? std::stoul(*v, nullptr, 0) : 0;
+        }
+        {
+            auto *v = raw.valueByPath("SelectionPolishRawStates");
+            selectionPolishRawStates_ = v ? std::stoul(*v, nullptr, 0) : 0;
         }
         {
             auto *v = raw.valueByPath("TranslationRawSym");
@@ -505,6 +550,8 @@ private:
     uint32_t triggerRawStates_;
     uint32_t qaRawSym_;
     uint32_t qaRawStates_;
+    uint32_t selectionPolishRawSym_;
+    uint32_t selectionPolishRawStates_;
     uint32_t translationRawSym_;
     uint32_t translationRawStates_;
     Key customDictationKey_;

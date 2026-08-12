@@ -8,6 +8,11 @@ export function defaultQaShortcut(): ShortcutBinding {
   };
 }
 
+/** 选区润色的默认触发键，与后端默认值保持一致。 */
+export function defaultSelectionPolishShortcut(): ShortcutBinding {
+  return { primary: 'RightAlt', modifiers: [] };
+}
+
 export function defaultAppShortcutModifiers(): string[] {
   return currentPlatform().isMac ? ['cmd', 'shift'] : ['ctrl', 'shift'];
 }
@@ -24,6 +29,12 @@ export function defaultOpenAppShortcut(): ShortcutBinding {
 
 export function defaultLessComputerShortcut(): ShortcutBinding {
   return { primary: 'LeftControl', modifiers: [] };
+}
+
+// 默认录音快捷键：右侧 Control。与 mock-data 默认值 / Rust legacy trigger
+// （shortcut_binding.rs 的 rightControl 映射）保持一致。
+export function defaultDictationHotkey(): ShortcutBinding {
+  return { primary: 'RightControl', modifiers: [] };
 }
 
 export function getHotkeyTriggerLabel(trigger: HotkeyTrigger | null | undefined): string {

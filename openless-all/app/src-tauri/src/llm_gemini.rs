@@ -15,6 +15,7 @@
 
 use std::time::Duration;
 
+use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::polish::{
@@ -71,13 +72,17 @@ pub struct GeminiProvider {
 impl GeminiProvider {
     pub fn new(config: GeminiConfig) -> Self {
         // Reuse a cached client keyed by timeout so the connection pool survives
-        // across utterances instead of re-handshaking every polish.
+        // across utterances instead of re-handshaking every polish. 代理开关
+        // 切换时 net::set_use_system_proxy 会清空缓存，这里按新策略重建。
         let timeout = config.request_timeout_secs;
-        let client = crate::net::cached_client((timeout, false), || {
-            reqwest::Client::builder()
-                .timeout(Duration::from_secs(timeout))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new())
+        let no_proxy =
+            crate::net::should_bypass_proxy(&config.base_url, crate::net::use_system_proxy());
+        let client = crate::net::cached_client((timeout, no_proxy), || {
+            let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(timeout));
+            if no_proxy {
+                builder = builder.no_proxy();
+            }
+            builder.build().unwrap_or_else(|_| reqwest::Client::new())
         });
         Self { config, client }
     }
@@ -92,6 +97,7 @@ impl GeminiProvider {
         chinese_script_preference: ChineseScriptPreference,
         output_language_preference: OutputLanguagePreference,
         front_app: Option<&str>,
+        cursor_context: Option<&str>,
         prior_turns: &[(String, String)],
     ) -> Result<String, LLMError> {
         let (system_prompt, user_prompt) = compose_polish_prompts(
@@ -103,6 +109,7 @@ impl GeminiProvider {
             chinese_script_preference,
             output_language_preference,
             front_app,
+            cursor_context,
             !prior_turns.is_empty(),
         );
 
@@ -147,6 +154,33 @@ impl GeminiProvider {
             "[llm] POST {} provider=gemini model={} translate=true",
             crate::net::sanitized_url_for_logs(&url),
             self.config.model
+        );
+
+        let body_text = self.send_unary(&url, &body).await?;
+        let raw = extract_assistant_content(&body_text)?;
+        Ok(clean_polish_output(&raw))
+    }
+
+    /// 多模态（Omni）识别管线（issue #902）的 Gemini 通道：音频 + 提示词一次调用。
+    /// `wav_bytes` 为 `Some` 时以 `inlineData(audio/wav)` 追加到 user parts（已是
+    /// 编码好的 WAV 文件字节，PCM→WAV 的转换由 omni 层统一完成）；
+    /// `None` 时退化为纯文本调用（选区润色 / 历史重润色等文本管线复用同一通道，
+    /// 读取的是 omni 命名空间的凭据，与传统 LLM 配置隔离）。
+    pub(crate) async fn complete_omni(
+        &self,
+        system_prompt: &str,
+        user_text: &str,
+        wav_bytes: Option<&[u8]>,
+    ) -> Result<String, LLMError> {
+        let contents = omni_gemini_contents(user_text, wav_bytes);
+        let body = self.build_generate_body(system_prompt, contents);
+        let url = generate_content_url(&self.config.base_url, &self.config.model);
+
+        log::info!(
+            "[omni] POST {} provider=gemini model={} audio={}",
+            crate::net::sanitized_url_for_logs(&url),
+            self.config.model,
+            wav_bytes.is_some()
         );
 
         let body_text = self.send_unary(&url, &body).await?;
@@ -423,6 +457,22 @@ fn build_polish_history_contents(
     }
     contents.push(user_content(user_prompt));
     contents
+}
+
+/// Gemini 多模态调用的一轮 user contents：文本 part 恒在首位，音频 part 可选。
+/// `wav_bytes` 是编码好的 WAV 文件字节，base64 后经 `inlineData(audio/wav)` 下发。
+fn omni_gemini_contents(user_text: &str, wav_bytes: Option<&[u8]>) -> Vec<Value> {
+    let mut parts = vec![json!({ "text": user_text })];
+    if let Some(wav) = wav_bytes {
+        let data = base64::engine::general_purpose::STANDARD.encode(wav);
+        parts.push(json!({
+            "inlineData": {
+                "mimeType": "audio/wav",
+                "data": data,
+            }
+        }));
+    }
+    vec![json!({ "role": "user", "parts": parts })]
 }
 
 /// QA chat messages → Gemini contents：assistant role 重命名为 model。

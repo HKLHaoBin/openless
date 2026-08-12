@@ -50,25 +50,6 @@
 </p>
 
 <p align="center">
-  <a href="https://jiangmuran.com/" target="_blank" rel="noopener">
-    <img src="assets/people/jiangmuran.png" width="120" height="120" alt="jiangmuran" />
-  </a>
-</p>
-
-<p align="center">
-  <a href="https://jiangmuran.com/" target="_blank" rel="noopener"><strong>jiangmuran</strong></a><br/>
-  <sub>⭐ Featured Sponsor · jiangmuran.com</sub>
-</p>
-
-<p align="center">
-  Special thanks to <strong>jiangmuran</strong> for the sustained support that keeps OpenLess moving forward.
-</p>
-
-<p align="center">
-  <sub>— with thanks to —</sub>
-</p>
-
-<p align="center">
   <a href="https://www.knin.net" target="_blank" rel="noopener">
     <img alt="悠雾云数据 (Youwu Cloud Data)" src="https://www.knin.net/upload/logo.png" height="52" />
   </a>
@@ -93,13 +74,6 @@
         <strong>Chris233</strong>
       </a><br/>
       <sub>chris233.qzz.io</sub>
-    </td>
-    <td align="center" width="170">
-      <a href="https://github.com/Cooper-X-Oak" target="_blank" rel="noopener">
-        <img src="assets/people/cooper.png" width="80" height="80" alt="Cooper" /><br/>
-        <strong>Cooper</strong>
-      </a><br/>
-      <sub>github.com/Cooper-X-Oak</sub>
     </td>
   </tr>
 </table>
@@ -127,8 +101,9 @@ That is what **authorizing the infrastructure once, at launch** means: on first 
 
 ## ✨ What's new
 
-Two capabilities that sediment yet more of the coordination you used to repeat every day into defaults:
+Capabilities that sediment yet more of the coordination you used to repeat every day into defaults:
 
+- 📖 **A dictionary that learns.** Until now the dictionary only knew what you typed into it by hand. Now, when you correct a word OpenLess just wrote, it asks — once, on a small card — whether to remember it, and one click puts it in. Paired with **cursor context** (opt-in, macOS), which lets the polish model read what you are writing around your cursor, OpenLess stops being a transcriber that guesses at homophones and starts being an input method that knows your words. Every suggestion is reviewed by you; nothing is learned silently.
 - 🎨 **Style Pack Marketplace.** OpenLess no longer ships a single fixed "polish" voice. Build your own **style packs** with custom system prompts, switch between them with a hotkey, and **install community packs in one click** — or publish your own to share. When a style is tuned to your exact task (cold emails, commit messages, 小红书 posts, formal reports, your team's tone), the output is not merely cleaner — it is *noticeably better*, because the model is finally writing the way you intend.
 - ⚡ **Streaming insertion.** Text now flows to your cursor **character by character** as it is polished, rather than making you wait for the complete result. Perceived latency drops sharply, so dictation feels nearly as fast as thinking — and it automatically falls back to a one-shot paste when an application cannot accept streamed keystrokes.
 
@@ -159,7 +134,7 @@ The closest alternatives are subscription SaaS products: a monthly fee, no optio
 OpenLess targets the same end-user experience, but:
 
 - **Fully open source, local-first.** The code lives in this repository, and all of your data stays on your machine.
-- **Bring your own cloud credentials.** Volcengine streaming ASR with Ark / DeepSeek-compatible chat completions. No vendor lock-in.
+- **Bring your own cloud credentials.** A dozen-plus ASR and polish providers — Volcengine, iFlytek, Alibaba Cloud Bailian, StepFun, OpenAI-compatible endpoints, and more — or any endpoint you bring. No vendor lock-in.
 - **Tuned for AI prompts.** The structured mode reshapes loose speech into a prompt complete with context, constraints, and requests — ready to paste into ChatGPT, Claude, or Cursor.
 - **It will not answer for you.** The model only cleans up your text. If you say "what features does this app still need?", it returns that as a clean question — it does not hand you a feature list. For that, ask the AI itself.
 
@@ -193,12 +168,12 @@ OpenLess does one thing: it **turns speech into usable written text — AI promp
 
 | Tool | Form | How OpenLess differs |
 | --- | --- | --- |
-| [Typeless](https://www.typeless.com/) | Closed-source macOS / Windows / iOS, subscription | Open source; explicit AI-prompt mode; bring-your-own ASR + LLM; data and dictionary stay on your machine |
+| [Typeless](https://www.typeless.com/) | Closed-source macOS / Windows / iOS, subscription | Open source; explicit AI-prompt mode; bring-your-own ASR + LLM; data and dictionary stay on your machine — including what the dictionary learns from your corrections, which is never uploaded and never added without your confirmation |
 | [Wispr Flow](https://wisprflow.ai) | Closed-source macOS / Windows, subscription | Open source; bring-your-own ASR + LLM; transparent prompt-handling rules |
 | [Lazy](https://heylazy.com) | Closed-source notes / capture tool | Not a notes container — inserts straight into any input field |
 | [Superwhisper](https://superwhisper.com) | Closed-source macOS, subscription | Open source; cloud ASR today, local ASR on the roadmap |
 
-## Status (v1.3.6)
+## Status
 
 Every item below is one more layer sedimented into a default — a capability you authorize once and then never manage again. This is the infrastructure you stand on after launch:
 
@@ -206,9 +181,9 @@ Every item below is one more layer sedimented into a default — a capability yo
 - 🎨 **Style Pack Marketplace** — browse, install, and like community **style packs** from the in-app Marketplace, and publish your own (custom system prompt per pack, switchable by hotkey). Backed by a moderated marketplace backend; uploads are reviewed before they go public.
 - ⚡ **Streaming insertion** — polished text is written to the cursor character by character to reduce perceived latency, with an automatic one-shot-paste fallback. Toggle in Settings → Recording.
 - **Toggle and push-to-talk** recording modes, plus a **MediaPlayPause trigger** so wired-earbud inline controls can start and stop recording. `Esc` cancels at any phase, including polish and insertion.
-- **Cloud ASR**: Volcengine streaming ASR, OpenAI Whisper-compatible batch ASR, Apple Speech (macOS).
-- **Local ASR**: bundled Qwen3-ASR (0.6B / 1.7B) via vendored `Open-Less/qwen-asr`; Windows Foundry Local Whisper variants.
-- **Polish providers**: Ark / DeepSeek / OpenAI / Doubao / Anthropic-compatible chat completions, plus any OpenAI-compatible endpoint you bring.
+- **Cloud ASR**: Volcengine streaming ASR (bigasr), iFlytek realtime ASR (RTASR), Alibaba Cloud Bailian (classic realtime / Qwen3 realtime / Fun-ASR-Flash file transcription), StepFun StepAudio (batch + realtime), Zhipu GLM-ASR, Xiaomi MiMo ASR, ElevenLabs Scribe, OpenAI-compatible batch transcription (OpenAI Whisper / Groq / SiliconFlow SenseVoice / OpenRouter / ZenMux), and Apple Speech (macOS).
+- **Local ASR**: bundled Qwen3-ASR (0.6B / 1.7B) via vendored `Open-Less/qwen-asr` (macOS); Windows Foundry Local Whisper and sherpa-onnx (experimental) variants.
+- **Polish providers**: Ark (Volcengine), DeepSeek, OpenAI, Google Gemini, Codex OAuth, SiliconFlow, Atlas Cloud, Xiaomi MiMo, CometAPI, OpenRouter, Alibaba Cloud Coding Plan, CodingPlanX, MiniMax, and StepFun — plus any OpenAI-compatible endpoint you bring.
 - **Four output modes**: raw, light polish, structured (**AI-prompt mode**), and formal. Plus a **translation hotkey** that converts speech directly into the configured target language ([#43](../../issues/43)).
 - **Selection-ask QA panel** — a separate hotkey opens a floating panel that runs voice Q&A against the highlighted text in any app ([#118](../../issues/118)).
 - **Main window**: Overview / History / Vocab / Style / Marketplace / Settings. Persistent tray icon, plus a mini status capsule that floats on screen and follows the display you are typing on (multi-monitor).
@@ -266,6 +241,8 @@ For the full end-user walkthrough, see [USAGE.md](USAGE.md).
 ## Build from source (developers)
 
 The active codebase lives in `openless-all/app/` (Tauri 2 + Rust + React/TS). The macOS build links a vendored C ASR engine ([`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr), forked from `antirez/qwen-asr`) pulled in as a git submodule under `src-tauri/vendor/qwen-asr/`, so initialize submodules on first clone.
+
+Rust 1.88 is the minimum supported toolchain for source builds; the latest stable Rust is recommended. CI verifies both Rust 1.88 and stable on macOS, Windows, and Linux.
 
 ```bash
 # First clone only — pull in vendored submodules
@@ -337,6 +314,7 @@ New credential writes do not persist plaintext secrets. The repository contains 
 You will need:
 
 - **Volcengine streaming ASR**: APP ID, Access Token, Resource ID.
+- **iFlytek realtime ASR (RTASR)**: AppID, API Key. See [docs/xfyun-asr.md](docs/xfyun-asr.md).
 - **Ark polish**: API Key, Model ID, Endpoint. The Ark default endpoint is `https://ark.cn-beijing.volces.com/api/v3/chat/completions`.
 
 ## Prompt-handling principles
@@ -363,9 +341,18 @@ Long-term reference rewrites are stored as `raw → polished → rule` triples a
 The dictionary handles your proper nouns, product names, names of people, and new words. Today it supports:
 
 - Manually adding the correct spelling, a category, and notes. You do not need to maintain misspellings or context hints.
-- Enabled entries are sent as Volcengine ASR `context.hotwords` so they are recognized correctly during transcription.
+- Enabled entries are sent to the ASR provider that supports hotwords (Volcengine `context.hotwords`, StepFun `hotwords`, Whisper-compatible `prompt` — except ZenMux, whose JSON protocol does not carry `prompt`/`hotwords`, Bailian vocabulary ID) so they are recognized correctly during transcription. iFlytek realtime ASR has no request-level hotword parameter — configure personalized hotwords in the iFlytek console instead.
 - Entries are also injected into the polish prompt: the model decides per sentence whether to substitute. If "Cloud" clearly refers to the AI product `Claude` in context, it is corrected; if it genuinely means cloud computing, it is left as is.
-- The app auto-learns candidate corrections such as `Claude`, `ChatGPT`, and `OpenLess` from your history and offers them later.
+- **The dictionary learns from you.** When you hand-correct a word OpenLess just typed, a card appears asking whether to remember it. One ✓ and it is in — no settings page, no forms. Every suggestion is reviewed by you: nothing is ever added silently. Requires the opt-in **cursor context** setting below, and is macOS-only for now.
+- **Entries that earn their keep get priority.** The hotword budget sent to ASR providers is finite (a few hundred characters). Entries are ranked by hit count, with a few reserved seats for words you just added by hand, so the terms you actually use keep their place instead of being pushed out by whatever you added most recently.
+
+### Cursor context (opt-in, macOS)
+
+Settings → Privacy → Data storage → **Cursor context**. Off by default.
+
+When on, each dictation reads a few hundred characters around your cursor **in the app you are writing in** and sends them with the polish request, so the model knows what you are writing about. Chinese homophones (接口/借口, 大鱼/大禹) are indistinguishable to an acoustic model but obvious from context. This is also what makes dictionary learning possible: OpenLess can only notice that you fixed a word if it can see the text it just typed.
+
+What it never reads: password fields, macOS Secure Input, password managers, and terminals — those are blocked before a single accessibility call is made. While the setting is off, no accessibility calls happen at all and the prompt is byte-for-byte identical to a build without the feature.
 
 The main window is organized as Home / History / Dictionary / Settings. The Dictionary tab opens a separate editor window when you click "New". The Home tab shows total dictation time, total characters, average characters per minute, estimated time saved, and dictionary participation statistics.
 
@@ -379,7 +366,7 @@ The active implementation is Tauri 2 (`openless-all/app/`). Releases are split i
 types.rs         Pure value types: DictationSession, PolishMode, HotkeyBinding, errors
 hotkey.rs        Global hotkey (CGEventTap on macOS, WH_KEYBOARD_LL on Windows, rdev on Linux)
 recorder.rs      Mic → 16 kHz mono Int16 PCM, RMS callback
-asr/             Volcengine streaming ASR (WebSocket) + Whisper HTTP
+asr/             Streaming ASR clients (Volcengine / Bailian / Qwen3 / StepFun / iFlytek over WebSocket) + Whisper-compatible batch HTTP
 polish.rs        OpenAI-compatible chat completions (Ark / DeepSeek / etc.)
 insertion.rs     AX focused-element → clipboard + Cmd+V → copy-only fallback
 persistence.rs   History / preferences / vocab JSON + platform credential vault
@@ -398,7 +385,6 @@ See [CLAUDE.md](CLAUDE.md) for invariants and module-wiring rules.
 
 Planned but not yet shipped:
 
-- Dictation translation mode: hold a separate hotkey, speak in your language, insert in the target language ([#43](../../issues/43)).
 - Cross-session style memory: polish learns the user's tone over time ([#46](../../issues/46)).
 - Snippets (no UI or trigger logic yet).
 - History enhancements: copy button, search, re-polish, re-insert.

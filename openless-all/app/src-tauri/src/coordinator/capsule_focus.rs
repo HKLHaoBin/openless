@@ -56,85 +56,17 @@ pub(super) fn capture_focus_target() -> Option<usize> {
 ///
 /// macOS 走 NSWorkspace.frontmostApplication（公开 API，无需额外权限）；
 /// Windows 复用前台 HWND 拿窗口标题；Linux/其他平台返回 None。
-#[cfg(target_os = "macos")]
 pub(super) fn capture_frontmost_app() -> Option<String> {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
-
-    unsafe {
-        let cls = AnyClass::get("NSWorkspace")?;
-        let workspace: *mut AnyObject = msg_send![cls, sharedWorkspace];
-        if workspace.is_null() {
-            return None;
-        }
-        let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
-        if app.is_null() {
-            return None;
-        }
-        let name_obj: *mut AnyObject = msg_send![app, localizedName];
-        let bundle_obj: *mut AnyObject = msg_send![app, bundleIdentifier];
-        let name = nsstring_to_string(name_obj);
-        let bundle = nsstring_to_string(bundle_obj);
-        match (name, bundle) {
-            (Some(n), Some(b)) => Some(format!("{n} ({b})")),
-            (Some(n), None) => Some(n),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
-        }
+    // 曾经这里有一份和 `selection.rs` 逐字重复的 NSWorkspace/Win32 实现（三个 cfg
+    // 分支、连 nsstring 转换 helper 都是复制的）。收口到 selection：那边现在把取值
+    // 拆成了结构化的 `current_front_app_parts`，`host_document` 的 bundle 黑名单要用。
+    // 一处实现，三个消费方。
+    match crate::selection::current_front_app_parts() {
+        (Some(name), Some(bundle)) => Some(format!("{name} ({bundle})")),
+        (Some(name), None) => Some(name),
+        (None, Some(bundle)) => Some(bundle),
+        (None, None) => None,
     }
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn nsstring_to_string(ns_string: *mut objc2::runtime::AnyObject) -> Option<String> {
-    use objc2::msg_send;
-    if ns_string.is_null() {
-        return None;
-    }
-    let utf8: *const std::os::raw::c_char = unsafe { msg_send![ns_string, UTF8String] };
-    if utf8.is_null() {
-        return None;
-    }
-    let cstr = unsafe { std::ffi::CStr::from_ptr(utf8) };
-    let s = cstr.to_string_lossy().into_owned();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
-}
-
-#[cfg(target_os = "windows")]
-pub(super) fn capture_frontmost_app() -> Option<String> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
-    };
-
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return None;
-        }
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u16; (len + 1) as usize];
-        let copied = GetWindowTextW(hwnd, &mut buf);
-        if copied <= 0 {
-            return None;
-        }
-        let title = String::from_utf16_lossy(&buf[..copied as usize]);
-        if title.is_empty() {
-            None
-        } else {
-            Some(title)
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub(super) fn capture_frontmost_app() -> Option<String> {
-    None
 }
 
 #[cfg(target_os = "windows")]
@@ -438,7 +370,69 @@ pub(super) fn emit_capsule(
     elapsed_ms: u64,
     message: Option<String>,
     inserted_chars: Option<u32>,
-) {
+) -> u64 {
+    emit_capsule_with_context(
+        inner,
+        state,
+        level,
+        elapsed_ms,
+        message,
+        inserted_chars,
+        false,
+    )
+}
+
+/// 选区润色复用原有无焦点 capsule 窗口，但用独立标记让前端显示一行轻量状态提示，
+/// 不污染语音/QA 的光效和终态文案。
+pub(super) fn emit_selection_polish_capsule(
+    inner: &Arc<Inner>,
+    state: CapsuleState,
+    message: impl Into<String>,
+) -> u64 {
+    emit_capsule_with_context(inner, state, 0.0, 0, Some(message.into()), None, true)
+}
+
+fn emit_capsule_with_context(
+    inner: &Arc<Inner>,
+    state: CapsuleState,
+    level: f32,
+    elapsed_ms: u64,
+    message: Option<String>,
+    inserted_chars: Option<u32>,
+    selection_polish: bool,
+) -> u64 {
+    let _event_guard = inner.capsule_event_lock.lock();
+    emit_capsule_with_context_locked(
+        inner,
+        state,
+        level,
+        elapsed_ms,
+        message,
+        inserted_chars,
+        selection_polish,
+    )
+}
+
+/// `capsule_event_lock` 已由调用方持有的内部实现。自动隐藏路径必须能在验证 epoch
+/// 后、发出 Idle 前一直持锁，才能保证旧 timer 不会盖掉刚到的新 payload。
+fn emit_capsule_with_context_locked(
+    inner: &Arc<Inner>,
+    state: CapsuleState,
+    level: f32,
+    elapsed_ms: u64,
+    message: Option<String>,
+    inserted_chars: Option<u32>,
+    selection_polish: bool,
+) -> u64 {
+    // 每次 payload 都推进代数。这样一个选区润色终态的旧 timer 在之后出现任何
+    // selection / voice / QA 状态时都失效，不会把新的可见状态强行收回 Idle。
+    let event_epoch = inner
+        .capsule_event_epoch
+        .fetch_add(1, Ordering::SeqCst)
+        .wrapping_add(1);
+    inner
+        .selection_polish_capsule_active
+        .store(selection_polish, Ordering::SeqCst);
     // 在 app 句柄校验之前记录，便于无 GUI 的测试断言「按下热键 → 弹了哪种胶囊」。
     // replace 顺带取回上一帧 state，用于判断本次是不是「入场帧」（见下方 defer_capsule_emit）。
     let prev_state = inner.last_capsule_state.lock().replace(state);
@@ -451,12 +445,16 @@ pub(super) fn emit_capsule(
     let esc_exclusive = esc_exclusive_for_capsule(state, inner.state.lock().phase);
     crate::hotkey::set_esc_exclusive(esc_exclusive);
     let app_opt = inner.app.lock().clone();
-    let Some(app) = app_opt else { return };
-    let translation = inner.translation_modifier_seen.load(Ordering::SeqCst);
-    let operating = inner.state.lock().voice_agent;
+    let Some(app) = app_opt else {
+        return event_epoch;
+    };
+    // 选区润色不属于语音翻译 / Less Computer，会话之间残留的标志不能带进其提示。
+    let translation = !selection_polish && inner.translation_active.load(Ordering::SeqCst);
+    let operating = !selection_polish && inner.state.lock().voice_agent;
     // 预备态只对 Recording 有意义：麦克风还没吐第一帧 PCM 时（capsule_warming=true）把
     // warming 打成 true，前端渲染「待命」光效；level_handler 首触发后翻 false → 光条点亮。
-    let warming = matches!(state, CapsuleState::Recording)
+    let warming = !selection_polish
+        && matches!(state, CapsuleState::Recording)
         && inner.capsule_warming.load(Ordering::SeqCst);
     let payload = CapsulePayload {
         state,
@@ -467,6 +465,13 @@ pub(super) fn emit_capsule(
         translation,
         operating,
         warming,
+        selection_polish,
+        // 用户选择的胶囊样式：读 Inner 上的原子缓存（主线程闭包每帧从 prefs 同步），
+        // 不在音频回调线程碰偏好锁。设置里切换后下一次录音即生效。
+        capsule_style: match inner.capsule_style.load(Ordering::Relaxed) {
+            1 => CapsuleStyle::Classic,
+            _ => CapsuleStyle::Siri,
+        },
     };
 
     #[cfg(target_os = "android")]
@@ -585,6 +590,9 @@ pub(super) fn emit_capsule(
     let app_for_main = app.clone();
     // 入场帧要在 window.show 之后、闭包内部把 state 回发给前端，需要 payload 的独立副本
     // move 进闭包；非入场帧走闭包外的即时同步 emit（下方），这里就是 None。
+    // 注意：入场帧的 payload 在闭包同步 capsule_style 原子之前克隆，最多带一帧旧样式
+    //（设置里刚切换后的首次录音，第 2 帧 ~33ms 即纠正）。这是刻意取舍——不要在音频
+    // 线程改回直接读 prefs。前端第 1 帧处于 capsule-in 动画期间（380ms），无感知。
     let payload_for_deferred_emit = if defer_capsule_emit {
         Some(payload.clone())
     } else {
@@ -602,7 +610,18 @@ pub(super) fn emit_capsule(
             }
             return;
         };
-        let show_capsule = inner_for_main.prefs.get().show_capsule;
+        // `show_capsule` 是原有“录音胶囊”偏好；Selection Polish 没有独立开关，且它的
+        // 无选区/失败提示是这条无界面工作流的唯一反馈，所以始终展示轻量提示。
+        let prefs_snapshot = inner_for_main.prefs.get();
+        let show_capsule = selection_polish || prefs_snapshot.show_capsule;
+        // 把胶囊样式同步进 Inner 原子缓存：emit_capsule（音频回调线程）从这里读
+        // payload.capsuleStyle，避免在音频线程碰偏好锁。主线程每帧克隆 prefs 本就有
+        //（show_capsule 同源），多读一个字段零额外代价。
+        let classic_style = matches!(prefs_snapshot.capsule_style, CapsuleStyle::Classic);
+        inner_for_main.capsule_style.store(
+            if classic_style { 1 } else { 0 },
+            Ordering::Relaxed,
+        );
         // Linux: 不操作胶囊窗口（不 show/hide，不 reposition）。
         // 文字通过 fcitx5 插件直接 commit，用户始终在目标 app 中。
         #[cfg(target_os = "linux")]
@@ -618,6 +637,31 @@ pub(super) fn emit_capsule(
         // `hide_capsule_window_if_present()` Win32 hard-hide 在 visible=false 分支
         // 处理，不依赖把 Done/Cancelled/Error 打成 invisible。详见 PR #140 评论。
         maybe_position_capsule_bottom_center(&inner_for_main, &window, translation);
+        // 经典药丸（Openless 默认风格）的 ✕/✓ 按钮需要接收点击：录音/转写/润色期间
+        // 关掉鼠标穿透（按钮可点，代价是窗口底部 460×180 区域在这几秒内拦截点击——
+        // 与 1.3.x 经典胶囊同款取舍）；终态 toast、隐藏、Siri 光效、选区润色提示一律
+        // 保持穿透，不遮挡底层 app。set_ignore_cursor_events 只在值变化时调用一次。
+        // Android 没有胶囊窗口，tauri 的 set_ignore_cursor_events 在其上不可用。
+        #[cfg(not(mobile))]
+        {
+            let interactive = classic_style
+                && visible
+                && !selection_polish
+                && matches!(
+                    state,
+                    CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+                );
+            let want_passthrough = !interactive;
+            if inner_for_main
+                .capsule_cursor_passthrough
+                .swap(want_passthrough, Ordering::SeqCst)
+                != want_passthrough
+            {
+                if let Err(e) = window.set_ignore_cursor_events(want_passthrough) {
+                    log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
+                }
+            }
+        }
         if show_capsule && visible {
             // 用户报"看不到胶囊"时第一时间能在 log 里确认：胶囊路径有跑、show_capsule
             // 开关是 true、当前进入 visible 帧 —— 排除 prefs 没存住 / emit_capsule 没触
@@ -675,6 +719,49 @@ pub(super) fn emit_capsule(
     // Linux 上胶囊隐藏时提示音仍应工作，所以同时发给 main 窗口。始终即时，与胶囊窗口
     // 显示时机解耦。
     let _ = app.emit_to("main", "capsule:state", &payload);
+    event_epoch
+}
+
+/// 返回一个选区润色终态 timer 是否仍有资格收起 capsule。
+///
+/// 该判断同时覆盖两类竞态：同一功能的新一轮触发，以及随后开始的语音/QA 会话。
+pub(super) fn selection_polish_capsule_epoch_is_current(
+    inner: &Arc<Inner>,
+    expected_epoch: u64,
+) -> bool {
+    inner.selection_polish_capsule_active.load(Ordering::SeqCst)
+        && inner.capsule_event_epoch.load(Ordering::SeqCst) == expected_epoch
+}
+
+/// 旧 dictation/QA timer 的收起路径。它与所有 emit 共享一把短锁：如果 Selection
+/// Polish 已经显示，就让路；如果新语音/QA 先一步发了状态，也会在锁序上排在 Idle 前。
+pub(super) fn hide_capsule_if_all_sessions_idle(inner: &Arc<Inner>) {
+    // 先读 session lock，再进 capsule lock。QA 收尾路径会持有 qa_state 并 emit；反过来
+    // 在这里持 capsule lock 等 qa_state 会产生锁反转。event epoch 负责在两次读取之间
+    // 有任何新 payload 时取消本次 Idle。
+    let dictation_idle = inner.state.lock().phase == SessionPhase::Idle;
+    let qa_idle = inner.qa_state.lock().phase == QaPhase::Idle;
+    let selection_polish_active = inner.selection_polish_capsule_active.load(Ordering::SeqCst);
+    let observed_epoch = inner.capsule_event_epoch.load(Ordering::SeqCst);
+    if !dictation_idle || !qa_idle || selection_polish_active {
+        return;
+    }
+
+    let _event_guard = inner.capsule_event_lock.lock();
+    if inner.capsule_event_epoch.load(Ordering::SeqCst) == observed_epoch
+        && !inner.selection_polish_capsule_active.load(Ordering::SeqCst)
+    {
+        emit_capsule_with_context_locked(inner, CapsuleState::Idle, 0.0, 0, None, None, false);
+    }
+}
+
+/// 只在同一代 Selection Polish 终态仍是最新可见 capsule 时收起它。锁会让“检查 +
+/// 发送 Idle”成为一个不可插队的顺序点，因此旧 timer 不可能在新会话之后覆盖 UI。
+pub(super) fn hide_selection_polish_capsule_if_current(inner: &Arc<Inner>, expected_epoch: u64) {
+    let _event_guard = inner.capsule_event_lock.lock();
+    if selection_polish_capsule_epoch_is_current(inner, expected_epoch) {
+        emit_capsule_with_context_locked(inner, CapsuleState::Idle, 0.0, 0, None, None, false);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

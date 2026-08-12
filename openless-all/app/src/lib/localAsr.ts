@@ -264,6 +264,32 @@ export function fetchLocalAsrRemoteInfo(
     )
 }
 
+/** HF 模型卡片：下载量 / 收藏 / 简介（下载弹窗右侧展示）。 */
+export interface HfModelCard {
+    modelId: string
+    mirror: string
+    downloads: number
+    likes: number
+    description: string
+}
+
+export function fetchLocalAsrHfCard(
+    modelId: string,
+    mirror?: string,
+): Promise<HfModelCard> {
+    return invokeOrMock(
+        "local_asr_fetch_hf_card",
+        { modelId, mirror },
+        () => ({
+            modelId,
+            mirror: mirror ?? "huggingface",
+            downloads: 0,
+            likes: 0,
+            description: "",
+        }),
+    )
+}
+
 export function downloadLocalAsrModel(
     modelId: string,
     mirror?: string,
@@ -463,6 +489,7 @@ export type SherpaOnnxModelAlias =
     | "sense-voice-small-zh"
     | "paraformer-zh"
     | "whisper-small-multi"
+    | "whisper-large-v3-multi"
     | "qwen3-asr-0.6b-int8"
 
 export type SherpaOnnxMirror = "huggingface" | "hf-mirror" | "github-release"
@@ -507,6 +534,11 @@ export const SHERPA_ONNX_ASR_MODELS: SherpaOnnxModelOption[] = [
         descKey: "localAsr.sherpaModelWhisperDesc",
     },
     {
+        alias: "whisper-large-v3-multi",
+        labelKey: "localAsr.sherpaModelWhisperLargeV3",
+        descKey: "localAsr.sherpaModelWhisperLargeV3Desc",
+    },
+    {
         alias: "qwen3-asr-0.6b-int8",
         labelKey: "localAsr.sherpaModelQwen3",
         descKey: "localAsr.sherpaModelQwen3Desc",
@@ -546,6 +578,13 @@ export function getSherpaOnnxAsrCatalog(): Promise<SherpaOnnxCatalogModel[]> {
             cached: false,
             downloadedBytes: 0,
             fileSizeMb: 480,
+        },
+        {
+            alias: "whisper-large-v3-multi" as const,
+            displayName: "Whisper Large V3",
+            cached: false,
+            downloadedBytes: 0,
+            fileSizeMb: 1700,
         },
         {
             alias: "qwen3-asr-0.6b-int8" as const,

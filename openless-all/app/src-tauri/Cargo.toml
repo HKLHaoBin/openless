@@ -1,10 +1,10 @@
 [package]
 name = "openless"
-version = "1.3.15-Beta.2"
+version = "1.3.16"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.88"
 
 [lib]
 name = "openless_lib"
@@ -29,6 +29,10 @@ serde_json = "1"
 # OpenRouter ASR 把音频以标准 base64（带 padding）放进 JSON body（issue #582）。
 base64 = "0.22"
 sha2 = "0.10"
+# 讯飞 RTASR/IFASR 签名：signa = Base64(HmacSHA1(MD5(appid + ts), apiKey))。
+md-5 = "0.10"
+# HmacSHA1 的摘要实现（signa 签名用）；已在依赖树（传递依赖），提升为直接依赖零成本。
+sha1 = "0.10"
 # issue #609 F-03：history.json 完整性校验（HMAC-SHA256），密钥存系统凭据库。
 hmac = "0.12"
 # issue #609 H-02：HMAC 比较走常量时间，避免计时侧信道。已在依赖树（sha2/hmac 传递），
@@ -70,7 +74,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 global-hotkey = "0.6"
-enigo = "0.2"
+enigo = "0.3"
 arboard = { version = "3", features = ["wayland-data-control"] }
 rcgen = "^0.13"
 local-ip-address = "^0.6"

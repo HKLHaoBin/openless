@@ -121,8 +121,13 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
                 let adapter = monitor.kind();
                 *inner.hotkey.lock() = Some(monitor);
                 if let Some(monitor) = inner.hotkey.lock().as_ref() {
-                    let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
-                    monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
+                    let (qa_trigger, selection_polish_trigger, translation_trigger) =
+                        modifier_shortcut_triggers(&inner);
+                    monitor.update_modifier_shortcuts(
+                        qa_trigger,
+                        selection_polish_trigger,
+                        translation_trigger,
+                    );
                 }
                 *inner.hotkey_status.lock() = HotkeyStatus {
                     adapter,
@@ -142,13 +147,15 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
                 // Linux: 启动 fcitx5 插件信号监听作为热键源。
                 #[cfg(target_os = "linux")]
                 {
-                    let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
+                    let (qa_trigger, selection_polish_trigger, translation_trigger) =
+                        modifier_shortcut_triggers(&inner);
                     let custom_key = custom_dictation_key_string(&inner);
                     crate::linux_fcitx::start_dictation_signal_listener(
                         fcitx_tx,
                         combo_tx_for_fcitx,
                         fcitx_binding.clone(),
                         qa_trigger,
+                        selection_polish_trigger,
                         translation_trigger,
                         custom_key,
                     );
@@ -201,8 +208,13 @@ pub(super) fn qa_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
             inner.qa_hotkey.lock().take();
             if let Some(monitor) = inner.hotkey.lock().as_ref() {
-                let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
-                monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
+                let (qa_trigger, selection_polish_trigger, translation_trigger) =
+                    modifier_shortcut_triggers(&inner);
+                monitor.update_modifier_shortcuts(
+                    qa_trigger,
+                    selection_polish_trigger,
+                    translation_trigger,
+                );
             }
             std::thread::sleep(std::time::Duration::from_secs(5));
             continue;
@@ -288,6 +300,132 @@ pub(super) fn qa_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<QaHotk
                 async_runtime::spawn(async move { handle_qa_hotkey_pressed(&inner_cloned).await });
             }
         }
+    }
+}
+
+// ─────────────────────── Selection Polish hotkey ───────────────────────
+// 选区润色为桌面（Windows-first）工作流，mobile 不注册全局热键。
+
+#[cfg(not(mobile))]
+pub(super) fn selection_polish_hotkey_supervisor_loop(inner: Arc<Inner>) {
+    let mut attempts = 0_u32;
+    loop {
+        if inner.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+        match try_update_selection_polish_hotkey_binding(&inner) {
+            Ok(()) => return,
+            Err(error) => {
+                attempts += 1;
+                if attempts <= 3 || attempts % 10 == 0 {
+                    log::warn!(
+                        "[selection-polish] hotkey registration attempt #{attempts} failed: {error}; retrying in 3s"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        }
+    }
+}
+
+#[cfg(not(mobile))]
+pub(super) fn try_update_selection_polish_hotkey_binding(inner: &Arc<Inner>) -> Result<(), String> {
+    let binding = inner.prefs.get().selection_polish_hotkey.clone();
+    let Some(binding) = binding else {
+        take_selection_polish_hotkey_on_main_thread(inner);
+        update_selection_polish_modifier_shortcut(inner);
+        return Ok(());
+    };
+
+    if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
+        take_selection_polish_hotkey_on_main_thread(inner);
+        update_selection_polish_modifier_shortcut(inner);
+        return Ok(());
+    }
+
+    // A generic combo is registered by global-hotkey on the UI thread. It is
+    // deliberately not routed through the side-aware singleton: side-specific
+    // combos remain dictation-only until that monitor supports multiple owners.
+    update_selection_polish_modifier_shortcut(inner);
+    let app = inner.app.lock().clone().ok_or_else(|| {
+        "AppHandle unavailable while registering Selection Polish hotkey".to_string()
+    })?;
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let inner_for_main = Arc::clone(inner);
+    app.run_on_main_thread(move || {
+        let result = update_selection_polish_hotkey_on_main_thread(inner_for_main, binding)
+            .map_err(|error| error.to_string());
+        let _ = result_tx.send(result);
+    })
+    .map_err(|error| error.to_string())?;
+    result_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|_| "Selection Polish hotkey registration timed out".to_string())?
+}
+
+#[cfg(not(mobile))]
+fn update_selection_polish_modifier_shortcut(inner: &Arc<Inner>) {
+    if let Some(monitor) = inner.hotkey.lock().as_ref() {
+        let (qa_trigger, selection_polish_trigger, translation_trigger) =
+            modifier_shortcut_triggers(inner);
+        monitor.update_modifier_shortcuts(
+            qa_trigger,
+            selection_polish_trigger,
+            translation_trigger,
+        );
+    }
+}
+
+#[cfg(not(mobile))]
+fn update_selection_polish_hotkey_on_main_thread(
+    inner: Arc<Inner>,
+    binding: crate::types::ShortcutBinding,
+) -> Result<(), ComboHotkeyError> {
+    if let Some(monitor) = inner.selection_polish_hotkey.lock().as_ref() {
+        return monitor.update_binding(binding);
+    }
+    let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+    let monitor = ComboHotkeyMonitor::start(binding, tx)?;
+    *inner.selection_polish_hotkey.lock() = Some(monitor);
+    let bridge_inner = Arc::clone(&inner);
+    std::thread::Builder::new()
+        .name("openless-selection-polish-hotkey-bridge".into())
+        .spawn(move || selection_polish_hotkey_bridge_loop(bridge_inner, rx))
+        .map_err(|error| {
+            ComboHotkeyError::RegisterFailed(format!("spawn bridge thread: {error}"))
+        })?;
+    Ok(())
+}
+
+#[cfg(not(mobile))]
+fn selection_polish_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
+    while let Ok(event) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst)
+            || !matches!(event, ComboHotkeyEvent::Pressed { .. })
+        {
+            continue;
+        }
+        let coordinator = Coordinator {
+            inner: Arc::clone(&inner),
+        };
+        async_runtime::spawn(async move {
+            if let Err(error) = coordinator.trigger_selection_polish().await {
+                log::warn!("[selection-polish] combo hotkey workflow failed: {error}");
+            }
+        });
+    }
+}
+
+#[cfg(not(mobile))]
+pub(super) fn take_selection_polish_hotkey_on_main_thread(inner: &Arc<Inner>) {
+    let app = inner.app.lock().clone();
+    if let Some(app) = app {
+        let inner = Arc::clone(inner);
+        let _ = app.run_on_main_thread(move || {
+            inner.selection_polish_hotkey.lock().take();
+        });
+    } else {
+        inner.selection_polish_hotkey.lock().take();
     }
 }
 
@@ -445,6 +583,8 @@ pub(super) fn less_computer_modifier_bridge_loop(inner: Arc<Inner>, rx: mpsc::Re
             // Esc 取消与组合键撤销都不在此枚举里：分别走 esc_cancel_bridge_loop /
             // combo_abort_bridge_loop（见各自函数注释）。
             HotkeyEvent::TranslationModifierPressed | HotkeyEvent::QaShortcutPressed => {}
+            #[cfg(not(mobile))]
+            HotkeyEvent::SelectionPolishShortcutPressed => {}
         }
     }
 }
@@ -765,8 +905,13 @@ pub(super) fn translation_hotkey_supervisor_loop(inner: Arc<Inner>) {
         {
             take_translation_hotkey_on_main_thread(&inner);
             if let Some(monitor) = inner.hotkey.lock().as_ref() {
-                let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
-                monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
+                let (qa_trigger, selection_polish_trigger, translation_trigger) =
+                    modifier_shortcut_triggers(&inner);
+                monitor.update_modifier_shortcuts(
+                    qa_trigger,
+                    selection_polish_trigger,
+                    translation_trigger,
+                );
             }
             // 对齐主 supervisor 的 exit-on-success：装/卸交给 try_update_translation_hotkey_binding 主动路径，issue #470
             return;
@@ -850,7 +995,7 @@ pub(super) fn translation_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiv
             continue;
         }
         if matches!(evt, ComboHotkeyEvent::Pressed { .. }) {
-            mark_translation_modifier_seen(&inner);
+            arm_translation_if_effective(&inner);
         }
     }
 }
@@ -965,6 +1110,17 @@ pub(super) fn handle_action_hotkey_pressed(inner: &Arc<Inner>, kind: ActionHotke
     }
 }
 
+/// 全局快捷键切风格后的轻量提示：用户多半在别的前台 app 里按键，不弹提示
+/// 无法知道切没切成功、切到了哪个风格。复用选区润色的无焦点一行提示胶囊
+/// （✓ + 文案，2s 自动隐藏，不抢焦点不挡点击）；录音中按键最多闪一帧，
+/// 下一个 ~30Hz 电平帧会立即夺回胶囊显示，auto-hide timer 也会因代数失效。
+#[cfg(not(mobile))]
+pub(super) fn show_style_switch_capsule(inner: &Arc<Inner>, name: &str) {
+    let event_epoch =
+        emit_selection_polish_capsule(inner, CapsuleState::Done, format!("已切换：{name}"));
+    schedule_selection_polish_capsule_idle(inner, event_epoch, CAPSULE_AUTO_HIDE_DELAY_MS);
+}
+
 pub(super) fn switch_to_previous_style(inner: &Arc<Inner>) {
     let mut prefs = inner.prefs.get();
     let packs = match inner.style_packs.list() {
@@ -998,6 +1154,8 @@ pub(super) fn switch_to_previous_style(inner: &Arc<Inner>) {
             "[coord] switch style hotkey changed active style pack to {}",
             prefs.active_style_pack_id
         );
+        #[cfg(not(mobile))]
+        show_style_switch_capsule(inner, &enabled[next_index].name);
         if let Some(app) = inner.app.lock().clone() {
             let _ = app.emit("prefs:changed", &prefs);
             let _ = app.emit_to("main", "prefs:changed", &prefs);
@@ -1085,6 +1243,218 @@ pub(super) fn action_hotkey_bridge_thread_name(kind: ActionHotkeyKind) -> &'stat
     }
 }
 
+// ─────────────────── style pack hotkeys (issue #759) ───────────────────
+
+fn replace_style_pack_hotkey_registrations<R>(
+    entries: &[crate::types::StylePackHotkey],
+    registrations: &mut std::collections::HashMap<String, R>,
+    mut register: impl FnMut(&crate::types::StylePackHotkey) -> Result<R, String>,
+) -> Result<(), String> {
+    registrations.clear();
+    for entry in entries {
+        match register(entry) {
+            Ok(registration) => {
+                registrations.insert(entry.pack_id.clone(), registration);
+            }
+            Err(error) => {
+                registrations.clear();
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn style_pack_hotkey_registrations_match<R>(
+    desired: &[crate::types::StylePackHotkey],
+    registrations: &std::collections::HashMap<String, R>,
+    binding_of: impl for<'a> Fn(&'a R) -> &'a crate::types::ShortcutBinding,
+) -> bool {
+    desired.len() == registrations.len()
+        && desired.iter().all(|entry| {
+            registrations
+                .get(&entry.pack_id)
+                .is_some_and(|registration| binding_of(registration) == &entry.binding)
+        })
+}
+
+fn configured_style_pack_hotkeys(inner: &Arc<Inner>) -> Vec<crate::types::StylePackHotkey> {
+    inner
+        .prefs
+        .get()
+        .style_pack_hotkeys
+        .into_iter()
+        .filter(|entry| {
+            !is_unconfigured_shortcut(&entry.binding) && !is_modifier_only_shortcut(&entry.binding)
+        })
+        .collect()
+}
+
+/// 常驻 supervisor：持续比较 prefs 与实际注册表。状态一致时低频复查；配置变化、
+/// 主动同步失败或只注册了部分条目时按 3s 节奏重试，直到收敛或 shutdown。
+pub(super) fn style_pack_hotkey_supervisor_loop(inner: Arc<Inner>) {
+    let mut attempts: u32 = 0;
+    loop {
+        if inner.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let desired = configured_style_pack_hotkeys(&inner);
+        let registrations_match = {
+            let registrations = inner.style_pack_hotkeys.lock();
+            style_pack_hotkey_registrations_match(&desired, &registrations, |registration| {
+                &registration.binding
+            })
+        };
+        if registrations_match {
+            attempts = 0;
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
+
+        match try_sync_style_pack_hotkeys_on_main_thread(&inner) {
+            Ok(()) => {
+                log::info!(
+                    "[coord] style pack hotkey listeners synchronized after {} attempt(s)",
+                    attempts + 1
+                );
+                attempts = 0;
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+            Err(error) => {
+                attempts += 1;
+                if attempts <= 3 || attempts % 10 == 0 {
+                    log::warn!(
+                        "[coord] style pack hotkeys 第 {attempts} 次同步失败: {error}; 3s 后重试"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        }
+    }
+}
+
+/// 按 prefs 全量对齐风格包快捷键注册状态。**必须在主线程执行**（macOS Carbon
+/// 要求 manager 在主线程构造）。策略为整表重建：先 drop 全部旧注册再逐条注册，
+/// 避免「两个包互换按键」时新键仍被旧注册占用。任意条目失败会清空本轮全部注册。
+pub(super) fn sync_style_pack_hotkeys(inner: &Arc<Inner>) -> Result<(), String> {
+    let entries = configured_style_pack_hotkeys(inner);
+    let mut registrations = inner.style_pack_hotkeys.lock();
+    replace_style_pack_hotkey_registrations(&entries, &mut registrations, |entry| {
+        let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+        let monitor = ComboHotkeyMonitor::start(entry.binding.clone(), tx).map_err(|error| {
+            format!(
+                "style pack hotkey {} registration failed: {error}",
+                entry.pack_id
+            )
+        })?;
+        let bridge_inner = Arc::clone(inner);
+        let pack_id = entry.pack_id.clone();
+        std::thread::Builder::new()
+            .name("openless-style-pack-hotkey-bridge".into())
+            .spawn(move || style_pack_hotkey_bridge_loop(bridge_inner, rx, pack_id))
+            .map_err(|error| {
+                format!(
+                    "style pack hotkey {} bridge thread failed: {error}",
+                    entry.pack_id
+                )
+            })?;
+        Ok(StylePackHotkeyRegistration {
+            binding: entry.binding.clone(),
+            _monitor: monitor,
+        })
+    })
+}
+
+/// 事务式设置路径：派发到主线程并等待最多 5s，确保调用方能回滚偏好并展示错误。
+pub(super) fn try_sync_style_pack_hotkeys_on_main_thread(inner: &Arc<Inner>) -> Result<(), String> {
+    let app = inner
+        .app
+        .lock()
+        .clone()
+        .ok_or_else(|| "AppHandle 未 bind，无法注册风格包快捷键".to_string())?;
+    let (result_tx, result_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+    let sync_inner = Arc::clone(inner);
+    app.run_on_main_thread(move || {
+        let _ = result_tx.send(sync_style_pack_hotkeys(&sync_inner));
+    })
+    .map_err(|error| error.to_string())?;
+    result_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|_| "注册风格包快捷键超时".to_string())?
+}
+
+/// 设置导入、删除风格包等不可整体回滚路径使用的主动同步。失败只记录日志，
+/// 常驻 supervisor 会根据 prefs 与实际注册表差异继续重试。
+pub(super) fn sync_style_pack_hotkeys_on_main_thread(inner: &Arc<Inner>) {
+    let app = inner.app.lock().clone();
+    let Some(app) = app else {
+        log::warn!("[coord] sync style pack hotkeys: AppHandle 未 bind，等待 supervisor 重试");
+        return;
+    };
+    let sync_inner = Arc::clone(inner);
+    if let Err(error) = app.run_on_main_thread(move || {
+        if let Err(error) = sync_style_pack_hotkeys(&sync_inner) {
+            log::warn!("[coord] style pack hotkeys 主动同步失败: {error}");
+        }
+    }) {
+        log::warn!("[coord] dispatch style pack hotkeys sync failed: {error}");
+    }
+}
+
+pub(super) fn clear_style_pack_hotkeys_on_main_thread(inner: &Arc<Inner>) {
+    let app = inner.app.lock().clone();
+    if let Some(app) = app {
+        let inner = Arc::clone(inner);
+        let _ = app.run_on_main_thread(move || {
+            inner.style_pack_hotkeys.lock().clear();
+        });
+    } else {
+        inner.style_pack_hotkeys.lock().clear();
+    }
+}
+
+pub(super) fn style_pack_hotkey_bridge_loop(
+    inner: Arc<Inner>,
+    rx: mpsc::Receiver<ComboHotkeyEvent>,
+    pack_id: String,
+) {
+    while let Ok(evt) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
+        if matches!(evt, ComboHotkeyEvent::Pressed { .. }) {
+            handle_style_pack_hotkey_pressed(&inner, &pack_id);
+        }
+    }
+}
+
+/// 复用 `activate_style_pack_by_id`（禁用包自动启用、写 prefs、sync、广播、刷托盘），
+/// 与前端「点选风格包」走完全相同的激活路径；包已被删除时仅 warn 不做事。
+pub(super) fn handle_style_pack_hotkey_pressed(inner: &Arc<Inner>, pack_id: &str) {
+    let Some(app) = inner.app.lock().clone() else {
+        log::warn!("[coord] style pack hotkey {pack_id} pressed but AppHandle not bound");
+        return;
+    };
+    let coord = Coordinator {
+        inner: Arc::clone(inner),
+    };
+    match crate::commands::activate_style_pack_by_id(&coord, &app, pack_id) {
+        Ok(pack) => {
+            log::info!(
+                "[coord] style pack hotkey activated {} ({})",
+                pack.id,
+                pack.name
+            );
+            #[cfg(not(mobile))]
+            show_style_switch_capsule(inner, &pack.name);
+        }
+        Err(error) => {
+            log::warn!("[coord] style pack hotkey {pack_id} activation failed: {error}")
+        }
+    }
+}
+
 pub(super) fn is_builtin_translation_shift(binding: &crate::types::ShortcutBinding) -> bool {
     binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift")
 }
@@ -1123,6 +1493,7 @@ pub(super) fn modifier_shortcut_triggers(
 ) -> (
     Option<crate::types::HotkeyTrigger>,
     Option<crate::types::HotkeyTrigger>,
+    Option<crate::types::HotkeyTrigger>,
 ) {
     let prefs = inner.prefs.get();
     let qa_trigger = prefs
@@ -1134,17 +1505,45 @@ pub(super) fn modifier_shortcut_triggers(
     } else {
         crate::shortcut_binding::legacy_modifier_trigger(&prefs.translation_hotkey)
     };
-    (qa_trigger, translation_trigger)
+    let selection_polish_trigger = prefs
+        .selection_polish_hotkey
+        .as_ref()
+        .and_then(crate::shortcut_binding::legacy_modifier_trigger);
+    (qa_trigger, selection_polish_trigger, translation_trigger)
 }
 
-pub(super) fn mark_translation_modifier_seen(inner: &Arc<Inner>) {
+/// 在这里、而不是在读取侧判定「翻译是否真的会发生」：本函数在桥接线程（翻译热键事件 /
+/// 主热键循环）和安卓 overlay 命令路径上调用，均非音频回调线程，读一次 prefs 无妨；
+/// 而 `translation_active` 的读取侧之一是 emit_capsule —— 它在音频回调线程按帧执行，
+/// 不能碰偏好锁（见 capsule_focus.rs 注释）。
+///
+/// 收紧后这个 flag 的语义从「按过 Shift」变成「本次会话真的要翻译」，胶囊提示与 polish
+/// 分派读同一个值，不会再出现「胶囊说正在翻译、后端其实没翻」的漂移（用户未设目标语言
+/// 时按 Shift 就会撞上）。返回 true 表示本次会话翻译已置位。
+pub(super) fn arm_translation_if_effective(inner: &Arc<Inner>) -> bool {
     let phase = inner.state.lock().phase;
-    if matches!(phase, SessionPhase::Starting | SessionPhase::Listening) {
-        inner
-            .translation_modifier_seen
-            .store(true, Ordering::SeqCst);
-        log::info!("[coord] translation modifier seen during {phase:?}");
+    if !matches!(phase, SessionPhase::Starting | SessionPhase::Listening) {
+        return false;
     }
+    let prefs = inner.prefs.get();
+    if !crate::types::translation_effective(
+        true,
+        &prefs.translation_target_language,
+        &prefs.working_languages,
+    ) {
+        // 明确记录「按了但不翻」的原因，否则用户只能看到胶囊不提示、无从判断是没生效
+        // 还是没按到。
+        log::info!(
+            "[coord] translation requested during {phase:?} but translation is a no-op \
+             (target={:?} working={:?}); staying in plain polish",
+            prefs.translation_target_language,
+            prefs.working_languages
+        );
+        return false;
+    }
+    inner.translation_active.store(true, Ordering::SeqCst);
+    log::info!("[coord] translation active during {phase:?}");
+    true
 }
 
 pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
@@ -1183,12 +1582,26 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                     || crate::shortcut_binding::legacy_modifier_trigger(&translation_hotkey)
                         .is_some()
                 {
-                    mark_translation_modifier_seen(&inner_cloned);
+                    arm_translation_if_effective(&inner_cloned);
                 }
             }
             HotkeyEvent::QaShortcutPressed => {
                 async_runtime::block_on(async {
                     handle_qa_hotkey_pressed(&inner_cloned).await;
+                });
+            }
+            #[cfg(not(mobile))]
+            HotkeyEvent::SelectionPolishShortcutPressed => {
+                let coordinator = Coordinator {
+                    inner: Arc::clone(&inner_cloned),
+                };
+                // Selection Polish has no paired release edge. Run the cloud
+                // workflow independently so its network wait cannot stall the
+                // shared modifier-key bridge (Esc, dictation, QA, etc.).
+                async_runtime::spawn(async move {
+                    if let Err(error) = coordinator.trigger_selection_polish().await {
+                        log::warn!("[selection-polish] hotkey workflow failed: {error}");
+                    }
                 });
             }
         }
@@ -1341,6 +1754,112 @@ pub(super) fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, k
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn style_hotkey(pack_id: &str, primary: &str) -> crate::types::StylePackHotkey {
+        crate::types::StylePackHotkey {
+            pack_id: pack_id.into(),
+            binding: crate::types::ShortcutBinding {
+                primary: primary.into(),
+                modifiers: vec!["alt".into()],
+            },
+        }
+    }
+
+    #[test]
+    fn style_pack_hotkey_registration_failure_leaves_no_partial_table() {
+        let entries = [
+            style_hotkey("builtin.raw", "1"),
+            style_hotkey("imported.x", "2"),
+        ];
+        let mut registrations = std::collections::HashMap::from([("old".into(), 9_u8)]);
+
+        let result =
+            replace_style_pack_hotkey_registrations(&entries, &mut registrations, |entry| {
+                if entry.pack_id == "imported.x" {
+                    Err("register imported.x failed".into())
+                } else {
+                    Ok(1)
+                }
+            });
+
+        assert_eq!(result.unwrap_err(), "register imported.x failed");
+        assert!(registrations.is_empty());
+    }
+
+    #[test]
+    fn style_pack_hotkey_registration_success_replaces_entire_table() {
+        let entries = [
+            style_hotkey("builtin.raw", "1"),
+            style_hotkey("imported.x", "2"),
+        ];
+        let mut registrations = std::collections::HashMap::from([("old".into(), 9_u8)]);
+
+        replace_style_pack_hotkey_registrations(&entries, &mut registrations, |entry| {
+            Ok(if entry.pack_id == "builtin.raw" { 1 } else { 2 })
+        })
+        .unwrap();
+
+        assert_eq!(registrations.len(), 2);
+        assert_eq!(registrations.get("builtin.raw"), Some(&1));
+        assert_eq!(registrations.get("imported.x"), Some(&2));
+        assert!(!registrations.contains_key("old"));
+    }
+
+    #[test]
+    fn style_pack_hotkey_registration_state_matches_exact_bindings() {
+        let desired = [
+            style_hotkey("builtin.raw", "1"),
+            style_hotkey("imported.x", "2"),
+        ];
+        let registrations = desired
+            .iter()
+            .map(|entry| (entry.pack_id.clone(), entry.binding.clone()))
+            .collect();
+
+        assert!(style_pack_hotkey_registrations_match(
+            &desired,
+            &registrations,
+            |binding| binding,
+        ));
+    }
+
+    #[test]
+    fn style_pack_hotkey_registration_state_detects_changed_or_missing_bindings() {
+        let desired = [
+            style_hotkey("builtin.raw", "1"),
+            style_hotkey("imported.x", "2"),
+        ];
+        let changed = std::collections::HashMap::from([
+            (
+                "builtin.raw".into(),
+                style_hotkey("builtin.raw", "9").binding,
+            ),
+            ("imported.x".into(), desired[1].binding.clone()),
+        ]);
+        let partial =
+            std::collections::HashMap::from([("builtin.raw".into(), desired[0].binding.clone())]);
+
+        assert!(!style_pack_hotkey_registrations_match(
+            &desired,
+            &changed,
+            |binding| binding,
+        ));
+        assert!(!style_pack_hotkey_registrations_match(
+            &desired,
+            &partial,
+            |binding| binding,
+        ));
+        assert!(style_pack_hotkey_registrations_match(
+            &[],
+            &std::collections::HashMap::<String, crate::types::ShortcutBinding>::new(),
+            |binding| binding,
+        ));
+        assert!(!style_pack_hotkey_registrations_match(
+            &[style_hotkey("builtin.raw", "1")],
+            &std::collections::HashMap::<String, crate::types::ShortcutBinding>::new(),
+            |binding| binding,
+        ));
+    }
 
     /// 轮询 `inner.state.cancelled` 直到满足条件，超时返回 false。
     fn wait_until(mut cond: impl FnMut() -> bool, timeout: std::time::Duration) -> bool {
