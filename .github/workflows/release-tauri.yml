@@ -270,27 +270,37 @@ jobs:
           # Pass 2：MSI 独立跑——允许失败，Repair 步骤兜底 light.exe 重链。
           # Beta 版跳过 MSI：Windows Installer / WiX 无法表示 `1.2.3-Beta.1`
           # 这类非纯数字 prerelease 标识，稳定版仍然照常产出 MSI。
+          # workflow_dispatch 走分支 ref 时 OPENLESS_RELEASE_CHANNEL 仍是 stable，
+          # 但 tauri.conf.json 可能已是 Beta 版本号——也要跳过 MSI。
+          app_version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          skip_msi=0
+          if [ "${OPENLESS_RELEASE_CHANNEL:-stable}" = "beta" ]; then
+            skip_msi=1
+            echo "[info] Skipping MSI bundle for beta release channel."
+          elif echo "$app_version" | grep -qiE -- '-(beta|alpha|rc)\.'; then
+            skip_msi=1
+            echo "[info] Skipping MSI bundle: app version $app_version has non-numeric prerelease (WiX incompatible)."
+          fi
+          if [ "$skip_msi" -eq 1 ]; then
+            echo "OPENLESS_SKIP_WINDOWS_MSI=1" >> "$GITHUB_ENV"
+          else
+            echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
+          fi
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
             npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
             nsis_exit=$?
-            if [ "${OPENLESS_RELEASE_CHANNEL:-stable}" = "beta" ]; then
-              echo "OPENLESS_SKIP_WINDOWS_MSI=1" >> "$GITHUB_ENV"
-              echo "[info] Skipping MSI bundle for beta release channel."
+            if [ "$skip_msi" -eq 1 ]; then
               msi_exit=0
             else
-              echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
               npm run tauri -- build --bundles msi --config '{"bundle":{"createUpdaterArtifacts":true}}'
               msi_exit=$?
             fi
           else
             npm run tauri -- build --bundles nsis
             nsis_exit=$?
-            if [ "${OPENLESS_RELEASE_CHANNEL:-stable}" = "beta" ]; then
-              echo "OPENLESS_SKIP_WINDOWS_MSI=1" >> "$GITHUB_ENV"
-              echo "[info] Skipping MSI bundle for beta release channel."
+            if [ "$skip_msi" -eq 1 ]; then
               msi_exit=0
             else
-              echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
               npm run tauri -- build --bundles msi
               msi_exit=$?
             fi
@@ -604,6 +614,14 @@ jobs:
           name: openless-windows-x64
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      - name: Upload Windows MSI artifacts
+        if: matrix.platform == 'windows-latest' && env.OPENLESS_SKIP_WINDOWS_MSI != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-windows-x64-msi
+          path: |
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: error
 
@@ -614,8 +632,16 @@ jobs:
           name: openless-windows-x64-updater
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe.sig
-            openless-all/app/src-tauri/target/release/bundle/msi/*.msi.sig
             openless-all/app/src-tauri/target/release/bundle/latest-windows-x86_64*.json
+          if-no-files-found: error
+
+      - name: Upload Windows MSI updater artifacts
+        if: matrix.platform == 'windows-latest' && env.TAURI_SIGNING_PRIVATE_KEY != '' && env.OPENLESS_SKIP_WINDOWS_MSI != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-windows-x64-msi-updater
+          path: |
+            openless-all/app/src-tauri/target/release/bundle/msi/*.msi.sig
           if-no-files-found: error
 
       - name: Upload fcitx5 plugin artifact (standalone)
