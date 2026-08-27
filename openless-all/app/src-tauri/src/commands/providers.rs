@@ -1298,10 +1298,10 @@ mod tests {
     #[test]
     fn validate_and_list_models_use_shared_credential_client() {
         let src = include_str!("providers.rs");
-        assert!(src.contains("crate::net::credential_http()"));
-        // 生产路径不再裸建 Client；测试里仍可用 builder 构造错误对象。
-        assert_eq!(src.matches("reqwest::Client::builder()").count(), 1);
-        assert!(!src.contains("reqwest::Client::new()"));
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        assert!(production.contains("crate::net::credential_http()"));
+        assert!(!production.contains("reqwest::Client::builder()"));
+        assert!(!production.contains("reqwest::Client::new()"));
     }
 
     #[test]

@@ -287,9 +287,10 @@ mod tests {
     #[test]
     fn transcribe_uses_shared_credential_client() {
         let src = include_str!("elevenlabs.rs");
-        assert!(src.contains("crate::net::credential_http()"));
-        assert!(!src.contains("Client::new()"));
-        assert!(!src.contains("Client::builder()"));
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        assert!(production.contains("crate::net::credential_http()"));
+        assert!(!production.contains("Client::new()"));
+        assert!(!production.contains("Client::builder()"));
     }
 
     #[test]
