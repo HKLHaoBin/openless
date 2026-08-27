@@ -131,6 +131,24 @@ mod lan_addresses;
 mod recorder;
 #[path = "../../src/shortcut_binding.rs"]
 mod shortcut_binding;
+mod net {
+    // 与 `src/net.rs` 的默认值和 clamp 范围对齐；此 harness 不编入完整 net 模块。
+    pub(crate) const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 8;
+    pub(crate) const DEFAULT_POOL_IDLE_TIMEOUT_SECS: u64 = 300;
+    pub(crate) const DEFAULT_REQUEST_TIMEOUT_FLOOR_SECS: u64 = 30;
+
+    pub(crate) fn clamp_connect_timeout_secs(secs: u64) -> u64 {
+        secs.clamp(5, 60)
+    }
+
+    pub(crate) fn clamp_pool_idle_timeout_secs(secs: u64) -> u64 {
+        secs.clamp(60, 1800)
+    }
+
+    pub(crate) fn clamp_request_timeout_floor_secs(secs: u64) -> u64 {
+        secs.clamp(15, 300)
+    }
+}
 #[path = "../../src/types.rs"]
 mod types;
 #[cfg(target_os = "windows")]
