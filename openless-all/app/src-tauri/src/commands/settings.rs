@@ -276,9 +276,9 @@ pub(crate) fn reconcile_hotkey_collisions(
                             &candidate.binding,
                         )
                 })
-                && !higher.iter().any(|held| {
-                    crate::shortcut_binding::bindings_overlap(held, &candidate.binding)
-                })
+                && !higher
+                    .iter()
+                    .any(|held| crate::shortcut_binding::bindings_overlap(held, &candidate.binding))
         };
         if candidate_ok(entry) {
             kept.push(entry.clone());
@@ -316,6 +316,12 @@ pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
     mut prefs: UserPreferences,
     apply_keyboard_list: impl Fn(&UserPreferences) -> Result<(), String>,
 ) -> Result<(), String> {
+    prefs.http_connect_timeout_secs =
+        crate::net::clamp_connect_timeout_secs(prefs.http_connect_timeout_secs);
+    prefs.http_pool_idle_timeout_secs =
+        crate::net::clamp_pool_idle_timeout_secs(prefs.http_pool_idle_timeout_secs);
+    prefs.http_request_timeout_secs =
+        crate::net::clamp_request_timeout_floor_secs(prefs.http_request_timeout_secs);
     let mut previous = coord.read_settings();
     sync_dictation_hotkey_legacy_fields(&mut previous);
     sync_dictation_hotkey_legacy_fields(&mut prefs);
@@ -326,9 +332,7 @@ pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
         reject_hotkey_collisions(&prefs).map_err(|leftover| {
             format!("{collision_error}; 自动化解 {adjusted} 项后仍无法通过校验: {leftover}")
         })?;
-        log::warn!(
-            "[settings] 热键冲突已自动化解（调整 {adjusted} 项）后保存: {collision_error}"
-        );
+        log::warn!("[settings] 热键冲突已自动化解（调整 {adjusted} 项）后保存: {collision_error}");
     }
     let dictation_shortcut_changed = previous.dictation_hotkey != prefs.dictation_hotkey;
     let dictation_mode_changed = previous.hotkey.mode != prefs.hotkey.mode;
@@ -439,6 +443,32 @@ pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
     Ok(())
 }
 
+fn apply_http_network_prefs(previous: &UserPreferences, prefs: &UserPreferences) {
+    // connect/idle 变了会清池；只改请求下限不清池。代理没变不要调用
+    // set_use_system_proxy，否则会无谓把已预热的连接丢掉。
+    let proxy_changed = previous.use_system_proxy != prefs.use_system_proxy;
+    let timeouts_changed = previous.http_connect_timeout_secs != prefs.http_connect_timeout_secs
+        || previous.http_pool_idle_timeout_secs != prefs.http_pool_idle_timeout_secs
+        || previous.http_request_timeout_secs != prefs.http_request_timeout_secs;
+    if timeouts_changed {
+        crate::net::set_http_timeouts(
+            prefs.http_connect_timeout_secs,
+            prefs.http_pool_idle_timeout_secs,
+            prefs.http_request_timeout_secs,
+        );
+    }
+    if proxy_changed {
+        crate::net::set_use_system_proxy(prefs.use_system_proxy);
+    }
+    if proxy_changed
+        || timeouts_changed
+        || previous.pipeline_mode != prefs.pipeline_mode
+        || previous.active_omni_provider != prefs.active_omni_provider
+    {
+        crate::net_warmup::schedule_warmup();
+    }
+}
+
 #[cfg(not(mobile))]
 #[tauri::command]
 pub fn set_settings(
@@ -461,10 +491,7 @@ pub fn set_settings(
     // 主线程闭包的 ~30Hz 同步（Windows 主线程拥塞时闭包延迟 → 整场显示旧样式）。
     // 前端也会通过 prefs:changed 广播收到新样式，录音中切换即时换肤。
     coord.sync_capsule_style_from_preferences();
-    // 系统代理开关变化时立即重建客户端连接池（issue #869）。
-    if remote_prev.use_system_proxy != prefs.use_system_proxy {
-        crate::net::set_use_system_proxy(prefs.use_system_proxy);
-    }
+    apply_http_network_prefs(&remote_prev, &prefs);
     // 关掉「光标上下文」时立刻解除已经武装的手改观察器。
     //
     // 不这么做的话，上一次听写留下的观察器会一直活到它自己的 60 秒硬超时（或前台 app
@@ -520,10 +547,7 @@ pub fn set_settings(
     let prefs = coord.prefs().get();
     // 保存即同步胶囊样式原子（Android 通知胶囊 payload 同源，见 emit_capsule）。
     coord.sync_capsule_style_from_preferences();
-    // 系统代理开关变化时立即重建客户端连接池（issue #869）。
-    if previous.use_system_proxy != prefs.use_system_proxy {
-        crate::net::set_use_system_proxy(prefs.use_system_proxy);
-    }
+    apply_http_network_prefs(&previous, &prefs);
     #[cfg(target_os = "android")]
     coord.apply_android_overlay_settings_change(&previous, &prefs);
     let _ = app.emit("prefs:changed", &prefs);
@@ -1053,14 +1077,17 @@ mod persist_settings_tests {
         next.windows_show_openless_in_keyboard_list = false;
         next.active_asr_provider = "other-asr".into();
 
-        let result = persist_settings_with_keyboard_apply(&writer, next, |_| {
-            Err("apply failed".into())
-        });
+        let result =
+            persist_settings_with_keyboard_apply(&writer, next, |_| Err("apply failed".into()));
 
         assert!(result.is_err());
         assert_eq!(*writer.write_calls.borrow(), 0);
         assert!(writer.asr_sync_calls.borrow().is_empty());
-        assert!(writer.read_settings().windows_show_openless_in_keyboard_list);
+        assert!(
+            writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
     }
 
     #[test]
@@ -1074,7 +1101,11 @@ mod persist_settings_tests {
 
         assert!(result.is_ok());
         assert_eq!(*writer.write_calls.borrow(), 1);
-        assert!(!writer.read_settings().windows_show_openless_in_keyboard_list);
+        assert!(
+            !writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
     }
 
     #[test]
@@ -1101,7 +1132,11 @@ mod persist_settings_tests {
         assert!(result.is_err());
         assert_eq!(*writer.write_calls.borrow(), 0);
         assert_eq!(*apply_calls.borrow(), 2);
-        assert!(writer.read_settings().windows_show_openless_in_keyboard_list);
+        assert!(
+            writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
     }
 
     #[test]
@@ -1184,7 +1219,11 @@ mod persist_settings_tests {
         assert!(result.is_ok());
         assert_eq!(*writer.write_calls.borrow(), 2);
         assert_eq!(*apply_calls.borrow(), 1);
-        assert!(!writer.read_settings().windows_show_openless_in_keyboard_list);
+        assert!(
+            !writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
     }
 }
 

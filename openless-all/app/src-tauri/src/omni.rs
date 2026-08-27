@@ -9,13 +9,14 @@
 //! - Gemini 原生 generateContent：`inlineData(audio/wav)` part（复用 `llm_gemini.rs`）。
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::polish::{
     append_utf8_sse_chunk, apply_openai_compatible_thinking_control, chat_completions_url,
-    extract_assistant_content, finish_utf8_sse_chunks, http_client_builder,
+    extract_assistant_content, finish_utf8_sse_chunks,
     openai_model_is_gpt5_family, safe_str_slice, send_with_transient_retry, LLMError,
 };
 
@@ -57,18 +58,10 @@ pub struct OpenAICompatibleOmni {
 
 impl OpenAICompatibleOmni {
     pub fn new(config: OmniConfig) -> Self {
-        // 与 OpenAICompatibleLLMProvider 同款：按 (超时, 是否绕过代理) 缓存连接池，
-        // 跨句子复用 TLS 握手。代理开关切换时 net 缓存会清空重建。
-        let timeout = OMNI_DEFAULT_REQUEST_TIMEOUT_SECS;
-        let no_proxy =
-            crate::net::should_bypass_proxy(&config.base_url, crate::net::use_system_proxy());
-        let base_url = config.base_url.clone();
-        let client = crate::net::cached_client((timeout, no_proxy), || {
-            http_client_builder(&base_url, timeout)
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new())
-        });
-        Self { config, client }
+        Self {
+            config,
+            client: crate::net::credential_http(),
+        }
     }
 
     fn omni_body(&self, stream: bool, messages: Vec<Value>) -> Value {
@@ -125,6 +118,7 @@ impl OpenAICompatibleOmni {
         let mut request = self
             .client
             .post(url)
+            .timeout(Duration::from_secs(OMNI_DEFAULT_REQUEST_TIMEOUT_SECS))
             .header("Content-Type", "application/json");
         if !self.config.api_key.trim().is_empty() {
             request = request.header("Authorization", format!("Bearer {}", self.config.api_key));
@@ -165,6 +159,7 @@ impl OpenAICompatibleOmni {
         let mut request = self
             .client
             .post(url)
+            .timeout(Duration::from_secs(OMNI_DEFAULT_REQUEST_TIMEOUT_SECS))
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream");
         if !self.config.api_key.trim().is_empty() {

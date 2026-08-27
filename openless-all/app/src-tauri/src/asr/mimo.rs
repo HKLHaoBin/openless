@@ -54,6 +54,10 @@ impl MimoBatchASR {
         result
     }
 
+    pub fn buffer_duration_ms(&self) -> u64 {
+        pcm_duration_ms(&self.buffer.lock())
+    }
+
     async fn transcribe_inner(&self, pcm: &[u8]) -> Result<RawTranscript> {
         if self.api_key.trim().is_empty() {
             anyhow::bail!("MiMo API key missing");
@@ -80,7 +84,7 @@ impl MimoBatchASR {
         let wav = encode_wav_16k_mono(&samples);
         let body = mimo_chat_body(&self.model, &wav);
         let url = mimo_chat_completions_url(&self.base_url)?;
-        let client = crate::net::http();
+        let client = crate::net::credential_http();
         let resp = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key.trim()))

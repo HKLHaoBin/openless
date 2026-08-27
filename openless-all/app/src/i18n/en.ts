@@ -734,6 +734,12 @@ export const en: typeof zhCN = {
       title: 'Network',
       useSystemProxyLabel: 'Use system proxy',
       useSystemProxyDesc: 'When on, requests follow the system proxy. When off, all requests connect directly (usually lower latency for domestic services), but overseas services such as GitHub sign-in and updates may fail. Realtime voice streams and Less Computer are unaffected.',
+      connectTimeoutLabel: 'Handshake timeout (seconds)',
+      connectTimeoutDesc: 'Max time for the TCP/TLS handshake. Raise to 15–30 on slow or inspected networks so the first dictation is not reported as a timeout. Range 5–60, default 8.',
+      poolIdleTimeoutLabel: 'Keep-alive (seconds)',
+      poolIdleTimeoutDesc: 'How long an idle connection stays in the pool so the next dictation can skip the handshake. Range 60–1800, default 300.',
+      requestTimeoutLabel: 'Request timeout floor (seconds)',
+      requestTimeoutDesc: 'Minimum wait for transcription and Q&A. Long recordings still add extra time from audio length. Range 15–300, default 30.',
     },
     dataStorage: {
       title: 'Data storage',

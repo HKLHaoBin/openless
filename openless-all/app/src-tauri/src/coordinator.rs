@@ -74,10 +74,10 @@ mod polish_flow;
 mod qa;
 mod qa_session;
 mod resources;
-#[cfg(all(not(mobile), target_os = "windows"))]
-pub(crate) mod selection_voice_session;
 #[cfg(not(mobile))]
 pub(crate) mod selection_polish;
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(crate) mod selection_voice_session;
 mod silence_auto_stop;
 
 use asr_wiring::*;
@@ -304,7 +304,11 @@ pub(crate) fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
         let Some(window) = app.get_webview_window("capsule") else {
             return;
         };
-        let _ = app.emit_to("capsule", "vocab:suggested", Vec::<crate::types::PendingCorrection>::new());
+        let _ = app.emit_to(
+            "capsule",
+            "vocab:suggested",
+            Vec::<crate::types::PendingCorrection>::new(),
+        );
         // 先隐藏再改几何：复原要同时动尺寸和位置，窗口还亮着时改就有概率被合成出
         // 一帧「卡片被拉宽、还横着飞过半个屏幕」。
         let _ = window.hide();
@@ -493,11 +497,9 @@ pub(crate) fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason
         )) {
             log::warn!("[fallback-card] resize failed: {e}");
         }
-        if let Err(e) = position_fallback_card(
-            &window,
-            FALLBACK_CARD_WIDTH,
-            FALLBACK_CARD_INITIAL_HEIGHT,
-        ) {
+        if let Err(e) =
+            position_fallback_card(&window, FALLBACK_CARD_WIDTH, FALLBACK_CARD_INITIAL_HEIGHT)
+        {
             log::warn!("[fallback-card] position failed: {e}");
         }
         // 位置同理：`maybe_position_capsule_bottom_center` 的去重缓存只记「显示器 +
@@ -523,11 +525,7 @@ fn report_insert_fallback_card_height(
     let active_presentation_id = inner
         .insert_fallback_card_visible
         .load(Ordering::SeqCst)
-        .then(|| {
-            inner
-                .insert_fallback_presentation_id
-                .load(Ordering::SeqCst)
-        });
+        .then(|| inner.insert_fallback_presentation_id.load(Ordering::SeqCst));
     let Some(height) =
         validated_fallback_card_height(active_presentation_id, presentation_id, height)?
     else {
@@ -1309,9 +1307,7 @@ impl Drop for CancellableRetranscribeGuard {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RetranscribeCompletion {
     Disarm,
-    ReleaseFoundry(
-        Option<crate::asr::local::foundry_runtime::FoundryPrimaryRecoveryToken>,
-    ),
+    ReleaseFoundry(Option<crate::asr::local::foundry_runtime::FoundryPrimaryRecoveryToken>),
 }
 
 #[cfg(target_os = "windows")]
@@ -1397,7 +1393,13 @@ impl Coordinator {
                 PreferencesStore::new_fallback()
             });
             // 启动即同步系统代理开关（issue #869），让首个请求就按用户设置建客户端。
+            crate::net::set_http_timeouts(
+                prefs.get().http_connect_timeout_secs,
+                prefs.get().http_pool_idle_timeout_secs,
+                prefs.get().http_request_timeout_secs,
+            );
             crate::net::set_use_system_proxy(prefs.get().use_system_proxy);
+            crate::net_warmup::schedule_warmup();
             let style_packs = StylePackStore::new(&prefs).unwrap_or_else(|e| {
                 log::error!(
                     "[coord] StylePackStore init failed: {e}; 降级为空样式包列表{PERSIST_DEGRADE_SUFFIX}"
@@ -1547,7 +1549,13 @@ impl Coordinator {
             PreferencesStore::new_fallback()
         });
         // 启动即同步系统代理开关（issue #869），让首个请求就按用户设置建客户端。
+        crate::net::set_http_timeouts(
+            prefs.get().http_connect_timeout_secs,
+            prefs.get().http_pool_idle_timeout_secs,
+            prefs.get().http_request_timeout_secs,
+        );
         crate::net::set_use_system_proxy(prefs.get().use_system_proxy);
+        crate::net_warmup::schedule_warmup();
         let style_packs = StylePackStore::new(&prefs).unwrap_or_else(|e| {
             log::error!("[coord] StylePackStore init failed: {e}; 降级为空样式包列表");
             StylePackStore::new_fallback()
@@ -1847,6 +1855,7 @@ impl Coordinator {
     #[allow(dead_code)]
     pub fn request_shutdown(&self) {
         self.inner.shutdown.store(true, Ordering::SeqCst);
+        crate::net_warmup::cancel_warmup();
     }
 
     pub fn start_hotkey_listener(&self) {
@@ -2589,7 +2598,6 @@ impl Coordinator {
         }
     }
 
-
     #[cfg(not(mobile))]
     pub async fn stop_remote_dictation(&self) -> Result<(), String> {
         if self.inner.state.lock().phase == SessionPhase::Starting {
@@ -3084,7 +3092,7 @@ impl Coordinator {
         start.open_streaming_session().await?;
         let consumer = start.recorder_consumer();
         consumer.consume_pcm_chunk(&pcm);
-        let timeout = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+        let timeout = std::time::Duration::from_secs(coordinator_global_timeout_secs());
         let audio_secs = crate::asr::pcm::pcm_duration_ms(&pcm) as f64 / 1000.0;
         let elevenlabs_timeout = crate::asr::elevenlabs::transcribe_timeout(
             crate::asr::pcm::pcm_duration_ms(&pcm) as f64 / 1000.0,
@@ -5040,12 +5048,13 @@ mod tests {
     fn windows_local_asr_timeout_floors_at_global_timeout_for_short_audio() {
         assert_eq!(
             windows_local_asr_transcribe_timeout(5.0),
-            std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+            std::time::Duration::from_secs(coordinator_global_timeout_secs())
         );
     }
 
     #[test]
     fn windows_local_asr_timeout_scales_with_audio_duration() {
+        let _guard = crate::net::HttpTimeoutTestGuard::lock();
         // 65s 录音：65 × 1.0 = 65，+20 = 85s。长音频不再撞 30s 墙。
         assert_eq!(
             windows_local_asr_transcribe_timeout(65.0),
@@ -5058,12 +5067,13 @@ mod tests {
         // 5s 录音：5 × 0.6 = 3, +10 = 13, max(30) = 30。短录音兜底。
         assert_eq!(
             local_qwen_transcribe_timeout(5.0),
-            std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+            std::time::Duration::from_secs(coordinator_global_timeout_secs())
         );
     }
 
     #[test]
     fn local_qwen_timeout_scales_with_audio_duration() {
+        let _guard = crate::net::HttpTimeoutTestGuard::lock();
         // 60s 录音：60 × 0.6 = 36, +10 = 46s。覆盖 RTF ≈ 0.5 的边界。
         assert_eq!(
             local_qwen_transcribe_timeout(60.0),
@@ -5074,10 +5084,10 @@ mod tests {
     #[test]
     fn local_qwen_timeout_ceils_partial_seconds() {
         // 10.1s 录音：10.1 × 0.6 = 6.06, ceil = 7, +10 = 17, max(30) = 30。
-        // COORDINATOR_GLOBAL_TIMEOUT_SECS 提升到 30 后，短音频统一被兜底值覆盖。
+        // coordinator_global_timeout_secs() 提升到 30 后，短音频统一被兜底值覆盖。
         assert_eq!(
             local_qwen_transcribe_timeout(10.1),
-            std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+            std::time::Duration::from_secs(coordinator_global_timeout_secs())
         );
     }
 
@@ -5086,7 +5096,7 @@ mod tests {
         // 0 时长（空 buffer 边界）：0 × 0.6 = 0, +10 = 10, max(30) = 30。
         assert_eq!(
             local_qwen_transcribe_timeout(0.0),
-            std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+            std::time::Duration::from_secs(coordinator_global_timeout_secs())
         );
     }
 
@@ -5095,12 +5105,13 @@ mod tests {
         // 10s 录音：10 × 0.5 = 5, +20 = 25, max(30) = 30。短音频兜底。
         assert_eq!(
             whisper_transcribe_timeout(10.0),
-            std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+            std::time::Duration::from_secs(coordinator_global_timeout_secs())
         );
     }
 
     #[test]
     fn whisper_timeout_scales_with_audio_duration() {
+        let _guard = crate::net::HttpTimeoutTestGuard::lock();
         // 60s 录音：60 × 0.5 = 30, +20 = 50。覆盖多分片 HTTP 请求。
         assert_eq!(
             whisper_transcribe_timeout(60.0),
@@ -5109,7 +5120,22 @@ mod tests {
     }
 
     #[test]
+    fn whisper_timeout_floor_follows_request_timeout_pref() {
+        let _guard = crate::net::HttpTimeoutTestGuard::lock();
+        crate::net::set_http_timeouts(8, 300, 45);
+        assert_eq!(
+            whisper_transcribe_timeout(10.0),
+            std::time::Duration::from_secs(45)
+        );
+        assert_eq!(
+            whisper_transcribe_timeout(60.0),
+            std::time::Duration::from_secs(50)
+        );
+    }
+
+    #[test]
     fn whisper_timeout_ceils_partial_seconds() {
+        let _guard = crate::net::HttpTimeoutTestGuard::lock();
         // 45.3s 录音：45.3 × 0.5 = 22.65, ceil = 23, +20 = 43, max(30) = 43。
         assert_eq!(
             whisper_transcribe_timeout(45.3),
@@ -6172,16 +6198,17 @@ const CAPSULE_CANCEL_HIDE_DELAY_MS: u64 = 0;
 const POST_SESSION_COOLDOWN_MS: u64 = 600;
 
 /// Coordinator 全局超时保护：防止 ASR await_final_result() 永远挂起。
-/// 设置为 30 秒，为云端 batch ASR（OpenRouter Whisper 等）提供足够的
-/// 网络超时预算；只在 ASR 自身超时机制失效时作为最后的防线触发。
-const COORDINATOR_GLOBAL_TIMEOUT_SECS: u64 = 30;
+/// 下限读 prefs（issue #998），默认 30 秒。
+fn coordinator_global_timeout_secs() -> u64 {
+    crate::net::request_timeout_floor_secs()
+}
 
 /// Windows 本地 batch ASR 的动态转写超时。Foundry 与 sherpa-onnx 当前使用
 /// 同一预算：短音频至少 30s，长音频按整段时长向上取整后增加 20s 余量。
 fn windows_local_asr_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
     let secs = (audio_secs.ceil() as u64)
         .saturating_add(20)
-        .max(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+        .max(coordinator_global_timeout_secs());
     std::time::Duration::from_secs(secs)
 }
 
@@ -6192,7 +6219,7 @@ fn windows_local_asr_transcribe_timeout(audio_secs: f64) -> std::time::Duration 
 fn local_qwen_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
     let secs = ((audio_secs * 0.6).ceil() as u64)
         .saturating_add(10)
-        .max(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+        .max(coordinator_global_timeout_secs());
     std::time::Duration::from_secs(secs)
 }
 
@@ -6210,7 +6237,7 @@ fn local_whisper_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
 fn whisper_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
     let secs = ((audio_secs * 0.5).ceil() as u64)
         .saturating_add(20)
-        .max(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+        .max(coordinator_global_timeout_secs());
     std::time::Duration::from_secs(secs)
 }
 
@@ -6264,9 +6291,7 @@ fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, event_epoch: u64, 
 #[cfg(not(mobile))]
 fn clear_remote_mic_path(inner: &Inner, session_id: SessionId) {
     if inner.state.lock().session_id != session_id {
-        log::info!(
-            "[coord] skip stale remote mic cleanup for session {session_id}"
-        );
+        log::info!("[coord] skip stale remote mic cleanup for session {session_id}");
         return;
     }
     *inner.remote_audio_sink.lock() = None;

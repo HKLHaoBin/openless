@@ -736,6 +736,12 @@ export const ko: typeof zhCN = {
       title: '네트워크',
       useSystemProxyLabel: '시스템 프록시 사용',
       useSystemProxyDesc: '켜면 요청이 시스템 프록시를 따릅니다. 끄면 모든 요청이 직결됩니다(국내 서비스는 보통 더 빠름). GitHub 로그인·업데이트 등 해외 서비스는 연결되지 않을 수 있습니다. 실시간 음성 스트림과 Less Computer는 영향을 받지 않습니다.',
+      connectTimeoutLabel: '핸드셰이크 제한 시간(초)',
+      connectTimeoutDesc: 'TCP/TLS 핸드셰이크 최대 시간입니다. 느린 네트워크에서는 15–30으로 올리면 첫 받아쓰기가 잘못 시간 초과되지 않습니다. 범위 5–60, 기본 8.',
+      poolIdleTimeoutLabel: '연결 유지(초)',
+      poolIdleTimeoutDesc: '유휴 연결을 풀에 얼마나 둘지입니다. 다음 받아쓰기에서 핸드셰이크를 건너뛸 수 있습니다. 범위 60–1800, 기본 300.',
+      requestTimeoutLabel: '요청 제한 시간 하한(초)',
+      requestTimeoutDesc: '전사와 Q&A의 최소 대기 시간입니다. 긴 녹음은 길이에 따라 더 늘어납니다. 범위 15–300, 기본 30.',
     },
     dataStorage: {
       title: '데이터 저장',

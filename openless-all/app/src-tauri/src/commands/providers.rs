@@ -1,6 +1,7 @@
 use super::*;
 use base64::Engine;
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// 一次连通测试 / 模型列表请求所针对的渠道。
 ///
@@ -957,9 +958,7 @@ async fn validate_asr_transcription(
     const MAX_ATTEMPTS: u32 = 6;
     let url = asr_transcriptions_url(&config.base_url)?;
     let wav = encode_wav_16k_mono_silence(250);
-    let client = http_client_builder(&url, 20)
-        .build()
-        .map_err(|_| "providerClientInitFailed".to_string())?;
+    let client = crate::net::credential_http();
     // 连接 / 请求未送出类失败做指数退避重试 —— 这类失败请求尚未送达服务端，重试
     // 安全。超时不重试（服务端可能已在处理）。multipart 是流式 body，每次重建。
     let mut attempt: u32 = 0;
@@ -1014,6 +1013,7 @@ async fn validate_asr_transcription(
                 request.json(&body)
             }
         };
+        let request = request.timeout(Duration::from_secs(20));
         match request.send().await {
             Ok(resp) => break resp,
             Err(e) if e.is_timeout() => return Err("providerRequestTimeout".to_string()),
@@ -1154,14 +1154,9 @@ pub(crate) async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec
     let is_gemini = is_gemini_base_url(&config.base_url);
     let log_context = provider_log_context(&url, is_gemini);
     log::info!("[provider-check] {log_context}");
-    let client = http_client_builder(&config.base_url, 15)
-        .build()
-        .map_err(|_| {
-            log::warn!("[provider-check] {log_context} failed: client-init");
-            "HTTP client 初始化失败".to_string()
-        })?;
+    let client = crate::net::credential_http();
     // Observability uses only the sanitized copy above; requests retain the original URL.
-    let mut request = client.get(&url);
+    let mut request = client.get(&url).timeout(Duration::from_secs(15));
     if !config.api_key.trim().is_empty() {
         // 谷歌原生 generativelanguage.googleapis.com 不识别 Bearer Authorization,
         // 必须用 x-goog-api-key 头。其它 OpenAI 兼容 provider 仍走 Bearer。
@@ -1299,6 +1294,15 @@ mod tests {
         ProviderScope,
     };
     use crate::endpoint_security::validate_http_endpoint;
+
+    #[test]
+    fn validate_and_list_models_use_shared_credential_client() {
+        let src = include_str!("providers.rs");
+        assert!(src.contains("crate::net::credential_http()"));
+        // 生产路径不再裸建 Client；测试里仍可用 builder 构造错误对象。
+        assert_eq!(src.matches("reqwest::Client::builder()").count(), 1);
+        assert!(!src.contains("reqwest::Client::new()"));
+    }
 
     #[test]
     fn provider_scope_accepts_omni_without_channel() {

@@ -734,6 +734,12 @@ export const zhTW: typeof zhCN = {
       title: '網路',
       useSystemProxyLabel: '使用系統代理',
       useSystemProxyDesc: '開啟時請求跟隨系統代理；關閉後所有網路請求直連（國內服務延遲通常更低），GitHub 登入、更新等境外服務可能連不上。即時語音串流與 Less Computer 不受此開關影響。',
+      connectTimeoutLabel: '交握逾時（秒）',
+      connectTimeoutDesc: 'TCP/TLS 交握最長時間。慢網路或流量檢查下可調到 15–30，避免第一次聽寫誤報逾時。範圍 5–60，預設 8。',
+      poolIdleTimeoutLabel: '連線保活（秒）',
+      poolIdleTimeoutDesc: '閒置連線在池裡保留多久，下次聽寫可跳過交握。範圍 60–1800，預設 300。',
+      requestTimeoutLabel: '請求逾時下限（秒）',
+      requestTimeoutDesc: '轉寫與問答的最短等待時間。長錄音會再依音訊長度往上加。範圍 15–300，預設 30。',
     },
     dataStorage: {
       title: '資料儲存',

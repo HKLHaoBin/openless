@@ -259,9 +259,7 @@ pub(super) async fn submit_qa_text_question(
         {
             let session_id = inner.qa_state.lock().session_id;
             return match super::selection_voice_session::apply_qa_panel_edit_instruction(
-                inner,
-                question,
-                session_id,
+                inner, question, session_id,
             )
             .await
             {
@@ -499,7 +497,8 @@ pub(super) async fn transcribe_overlay_dictation_asr(
             if let Err(error) = asr.send_last_frame().await {
                 log::error!("[coord] overlay QA: send last frame failed: {error}");
             }
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                 Ok(Ok(raw)) => Ok(raw),
                 Ok(Err(error)) => Err(error.to_string()),
@@ -514,7 +513,8 @@ pub(super) async fn transcribe_overlay_dictation_asr(
             if let Err(error) = asr.send_last_frame().await {
                 log::error!("[coord] overlay QA: Bailian send last frame failed: {error}");
             }
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                 Ok(Ok(raw)) => Ok(raw),
                 Ok(Err(error)) => Err(error.to_string()),
@@ -529,7 +529,8 @@ pub(super) async fn transcribe_overlay_dictation_asr(
             if let Err(error) = asr.send_last_frame().await {
                 log::error!("[coord] overlay QA: Qwen3 realtime send last frame failed: {error}");
             }
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                 Ok(Ok(raw)) => Ok(raw),
                 Ok(Err(error)) => Err(error.to_string()),
@@ -544,7 +545,8 @@ pub(super) async fn transcribe_overlay_dictation_asr(
             if let Err(error) = asr.send_last_frame().await {
                 log::error!("[coord] overlay QA: StepFun realtime send last frame failed: {error}");
             }
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                 Ok(Ok(raw)) => Ok(raw),
                 Ok(Err(error)) => Err(error.to_string()),
@@ -559,7 +561,8 @@ pub(super) async fn transcribe_overlay_dictation_asr(
             if let Err(error) = asr.send_last_frame().await {
                 log::error!("[coord] overlay QA: iFlytek ASR send last frame failed: {error}");
             }
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                 Ok(Ok(raw)) => Ok(raw),
                 Ok(Err(error)) => Err(error.to_string()),
@@ -571,7 +574,8 @@ pub(super) async fn transcribe_overlay_dictation_asr(
         }
         ActiveAsr::Whisper(whisper) => {
             debug_assert!(uses_global_timeout);
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, whisper.transcribe()).await {
                 Ok(Ok(raw)) => Ok(raw),
                 Ok(Err(error)) => Err(error.to_string()),
@@ -580,7 +584,8 @@ pub(super) async fn transcribe_overlay_dictation_asr(
         }
         ActiveAsr::Mimo(mimo) => {
             debug_assert!(uses_global_timeout);
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let audio_secs = (mimo.buffer_duration_ms() as f64) / 1000.0;
+            let timeout_duration = whisper_transcribe_timeout(audio_secs);
             match tokio::time::timeout(timeout_duration, mimo.transcribe()).await {
                 Ok(Ok(raw)) => Ok(raw),
                 Ok(Err(error)) => Err(error.to_string()),
@@ -758,7 +763,7 @@ pub(super) async fn transcribe_overlay_dictation_asr(
         ActiveAsr::AppleSpeech(local) => {
             debug_assert!(uses_global_timeout);
             match tokio::time::timeout(
-                std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS),
+                std::time::Duration::from_secs(coordinator_global_timeout_secs()),
                 local.transcribe(),
             )
             .await
@@ -1270,7 +1275,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             if let Err(e) = asr.send_last_frame().await {
                 log::error!("[coord] QA: send last frame failed: {e}");
             }
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
@@ -1281,7 +1287,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Err(_) => {
                     log::error!(
                         "[coord] QA: 全局超时 {} 秒 - 强制恢复",
-                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                        coordinator_global_timeout_secs()
                     );
                     asr.cancel();
                     finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
@@ -1294,7 +1300,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             if let Err(e) = asr.send_last_frame().await {
                 log::error!("[coord] QA: Bailian send last frame failed: {e}");
             }
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
@@ -1305,7 +1312,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Err(_) => {
                     log::error!(
                         "[coord] QA: Bailian 全局超时 {} 秒",
-                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                        coordinator_global_timeout_secs()
                     );
                     asr.cancel();
                     finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
@@ -1318,7 +1325,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             if let Err(e) = asr.send_last_frame().await {
                 log::error!("[coord] QA: StepFun realtime send last frame failed: {e}");
             }
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
@@ -1329,7 +1337,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Err(_) => {
                     log::error!(
                         "[coord] QA: StepFun realtime 全局超时 {} 秒",
-                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                        coordinator_global_timeout_secs()
                     );
                     asr.cancel();
                     finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
@@ -1342,7 +1350,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             if let Err(e) = asr.send_last_frame().await {
                 log::error!("[coord] QA: iFlytek ASR send last frame failed: {e}");
             }
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
@@ -1353,7 +1362,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Err(_) => {
                     log::error!(
                         "[coord] QA: iFlytek ASR 全局超时 {} 秒",
-                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                        coordinator_global_timeout_secs()
                     );
                     asr.cancel();
                     finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
@@ -1366,7 +1375,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             if let Err(e) = asr.send_last_frame().await {
                 log::error!("[coord] QA: Qwen3 realtime send last frame failed: {e}");
             }
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
@@ -1377,7 +1387,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Err(_) => {
                     log::error!(
                         "[coord] QA: Qwen3 realtime 全局超时 {} 秒",
-                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                        coordinator_global_timeout_secs()
                     );
                     asr.cancel();
                     finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
@@ -1387,7 +1397,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
         ActiveAsr::Whisper(w) => {
             debug_assert!(uses_global_timeout);
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, w.transcribe()).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
@@ -1398,7 +1409,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Err(_) => {
                     log::error!(
                         "[coord] QA: whisper 全局超时 {} 秒",
-                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                        coordinator_global_timeout_secs()
                     );
                     finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
                     return Err("whisper global timeout".to_string());
@@ -1407,7 +1418,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
         ActiveAsr::Mimo(m) => {
             debug_assert!(uses_global_timeout);
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let audio_secs = (m.buffer_duration_ms() as f64) / 1000.0;
+            let timeout_duration = whisper_transcribe_timeout(audio_secs);
             match tokio::time::timeout(timeout_duration, m.transcribe()).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
@@ -1417,8 +1429,9 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 }
                 Err(_) => {
                     log::error!(
-                        "[coord] QA: MiMo ASR 全局超时 {} 秒",
-                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                        "[coord] QA: MiMo ASR 动态超时 {}s（音频 {:.2}s）",
+                        timeout_duration.as_secs(),
+                        audio_secs
                     );
                     finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
                     return Err("mimo global timeout".to_string());
@@ -1700,7 +1713,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         #[cfg(target_os = "macos")]
         ActiveAsr::AppleSpeech(local) => {
             debug_assert!(uses_global_timeout);
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let timeout_duration =
+                std::time::Duration::from_secs(coordinator_global_timeout_secs());
             match tokio::time::timeout(timeout_duration, local.transcribe()).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {

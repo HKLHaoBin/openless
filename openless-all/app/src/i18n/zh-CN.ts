@@ -732,6 +732,12 @@ export const zhCN = {
       title: '网络',
       useSystemProxyLabel: '使用系统代理',
       useSystemProxyDesc: '开启时请求跟随系统代理；关闭后所有网络请求直连（国内服务延迟通常更低），GitHub 登录、更新等境外服务可能连不上。实时语音流与 Less Computer 不受此开关影响。',
+      connectTimeoutLabel: '握手超时（秒）',
+      connectTimeoutDesc: 'TCP/TLS 握手最长时间。慢网络或流量审查下可调到 15–30，避免第一次听写误报超时。范围 5–60，默认 8。',
+      poolIdleTimeoutLabel: '连接保活（秒）',
+      poolIdleTimeoutDesc: '空闲连接在池里保留多久，下次听写可跳过握手。范围 60–1800，默认 300。',
+      requestTimeoutLabel: '请求超时下限（秒）',
+      requestTimeoutDesc: '转写和问答的最短等待时间。长录音会再按音频长度往上加。范围 15–300，默认 30。',
     },
     dataStorage: {
       title: '数据存储',

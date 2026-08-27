@@ -20,7 +20,6 @@ pub(crate) use output_cleaning::*;
 pub(crate) use prompt_compose::*;
 
 const DEFAULT_TEMPERATURE: f32 = 0.3;
-const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 
 const BODY_PREVIEW_LIMIT: usize = 200;
 pub const CODEX_OAUTH_PROVIDER_ID: &str = "codex_oauth";
@@ -36,7 +35,7 @@ const CODEX_MIN_TOKEN_TTL_SECS: u64 = 60;
 const POLISH_STREAM_IDLE_TIMEOUT_SECS: u64 = 20;
 /// 润色客户端的连接硬顶。不承担业务语义（业务超时在调用点），纯粹兜住「服务端既不
 /// 回数据也不断开」这类连接泄漏。取值远大于任何合理的润色时长。
-const POLISH_CLIENT_HARD_CAP_SECS: u64 = 900;
+pub(crate) const POLISH_CLIENT_HARD_CAP_SECS: u64 = 900;
 
 /// 润色路径「等第一个正文字符」的动态预算。
 ///
@@ -52,7 +51,7 @@ const POLISH_CLIENT_HARD_CAP_SECS: u64 = 900;
 pub(crate) fn polish_first_token_timeout_secs(input_chars: usize) -> Duration {
     let secs = ((input_chars as f64 * 0.05).ceil() as u64)
         .saturating_add(30)
-        .max(DEFAULT_REQUEST_TIMEOUT_SECS);
+        .max(crate::net::request_timeout_floor_secs());
     Duration::from_secs(secs)
 }
 
@@ -88,7 +87,7 @@ impl StreamingTimeouts {
 pub(crate) fn polish_total_timeout_secs(input_chars: usize) -> Duration {
     let generation_secs = ((input_chars as f64 * 0.03).ceil() as u64)
         .saturating_add(20)
-        .max(DEFAULT_REQUEST_TIMEOUT_SECS);
+        .max(crate::net::request_timeout_floor_secs());
     polish_first_token_timeout_secs(input_chars) + Duration::from_secs(generation_secs)
 }
 
@@ -127,7 +126,7 @@ impl OpenAICompatibleConfig {
             model: model.into(),
             extra_headers: HashMap::new(),
             temperature,
-            request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
+            request_timeout_secs: crate::net::request_timeout_floor_secs(),
             thinking_enabled: false,
         }
     }
@@ -419,12 +418,8 @@ impl ActiveLLMProvider {
 pub struct OpenAICompatibleLLMProvider {
     config: OpenAICompatibleConfig,
     client: reqwest::Client,
-    /// 润色专用客户端：**不带**按输入长度变化的整请求超时，只留一个防连接泄漏的
-    /// 硬顶。真正的判据在调用点（流式两把尺子 / 非流式一个总预算）。
-    ///
-    /// 为什么不直接把 `client` 的 timeout 改成动态值：`cached_client` 以 timeout 为
-    /// 缓存键，每句话长度不同就会造出一个新客户端，连接池全部作废——每次润色都要重新
-    /// TLS 握手，正是那层缓存当初要消灭的成本。硬顶取常量，缓存键就只有一个。
+    /// 与 `client` 同一套 `credential_http` 连接池。整请求 timeout 挂在
+    /// `RequestBuilder` 上（润色硬顶 900s），不再为 timeout 拆池。
     polish_client: reqwest::Client,
 }
 
@@ -441,30 +436,13 @@ pub(crate) struct PolishSystemPromptAssembly {
 
 impl OpenAICompatibleLLMProvider {
     pub fn new(config: OpenAICompatibleConfig) -> Self {
-        // Reuse a cached client (keyed by timeout + proxy-bypass) so the connection
-        // pool survives across utterances instead of paying a fresh TLS handshake
-        // every polish. Falls back to a default client if the builder somehow fails
-        // so we still surface a useful error at request time.
-        let timeout = config.request_timeout_secs;
-        let no_proxy =
-            crate::net::should_bypass_proxy(&config.base_url, crate::net::use_system_proxy());
-        let base_url = config.base_url.clone();
-        let client = crate::net::cached_client((timeout, no_proxy), || {
-            http_client_builder(&base_url, timeout)
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new())
-        });
-        let polish_base_url = config.base_url.clone();
-        let polish_client =
-            crate::net::cached_client((POLISH_CLIENT_HARD_CAP_SECS, no_proxy), || {
-                http_client_builder(&polish_base_url, POLISH_CLIENT_HARD_CAP_SECS)
-                    .build()
-                    .unwrap_or_else(|_| reqwest::Client::new())
-            });
+        // 转写 / 润色共用 credential_http 连接池（issue #998）：Client 上不再挂
+        // 整请求 timeout，否则 30s 与 900s 会拆成两套池，同 host 仍握两次 TLS。
+        let client = crate::net::credential_http();
         Self {
             config,
-            client,
-            polish_client,
+            client: client.clone(),
+            polish_client: client,
         }
     }
 
@@ -736,6 +714,7 @@ impl OpenAICompatibleLLMProvider {
         let mut request = self
             .polish_client
             .post(url)
+            .timeout(Duration::from_secs(POLISH_CLIENT_HARD_CAP_SECS))
             .header("Content-Type", "application/json");
         if !self.config.api_key.trim().is_empty() {
             request = request.header("Authorization", format!("Bearer {}", self.config.api_key));
@@ -798,6 +777,7 @@ impl OpenAICompatibleLLMProvider {
         let mut request = self
             .client
             .post(&url)
+            .timeout(Duration::from_secs(self.config.request_timeout_secs))
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream");
         if !self.config.api_key.trim().is_empty() {
@@ -914,6 +894,7 @@ impl OpenAICompatibleLLMProvider {
         let mut request = self
             .polish_client
             .post(&url)
+            .timeout(Duration::from_secs(POLISH_CLIENT_HARD_CAP_SECS))
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream");
         if !self.config.api_key.trim().is_empty() {
@@ -1109,7 +1090,7 @@ impl CodexOAuthConfig {
             auth_path: None,
             reasoning_effort: Some("medium".to_string()),
             text_verbosity: Some("medium".to_string()),
-            request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
+            request_timeout_secs: crate::net::request_timeout_floor_secs(),
         }
     }
 
@@ -1200,18 +1181,10 @@ pub struct CodexOAuthLLMProvider {
 
 impl CodexOAuthLLMProvider {
     pub fn new(config: CodexOAuthConfig) -> Self {
-        // Reuse a cached client so the connection pool survives across utterances
-        // (see OpenAICompatibleLLMProvider::new for the why).
-        let timeout = config.request_timeout_secs;
-        let no_proxy =
-            crate::net::should_bypass_proxy(&config.base_url, crate::net::use_system_proxy());
-        let base_url = config.base_url.clone();
-        let client = crate::net::cached_client((timeout, no_proxy), || {
-            http_client_builder(&base_url, timeout)
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new())
-        });
-        Self { config, client }
+        Self {
+            config,
+            client: crate::net::credential_http(),
+        }
     }
 
     pub async fn polish(
@@ -1353,6 +1326,7 @@ impl CodexOAuthLLMProvider {
         let request = self
             .client
             .post(&url)
+            .timeout(Duration::from_secs(POLISH_CLIENT_HARD_CAP_SECS))
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .header("Authorization", format!("Bearer {}", creds.access_token))
@@ -1528,15 +1502,6 @@ pub(crate) fn chat_completions_url(base_url: &str) -> String {
         url.set_path(&format!("{path}/chat/completions"));
     }
     url.to_string()
-}
-
-pub(crate) fn http_client_builder(base_url: &str, timeout_secs: u64) -> reqwest::ClientBuilder {
-    let builder = reqwest::Client::builder().timeout(Duration::from_secs(timeout_secs));
-    if crate::net::should_bypass_proxy(base_url, crate::net::use_system_proxy()) {
-        builder.no_proxy()
-    } else {
-        builder
-    }
 }
 
 /// 轮询 `should_cancel`，跟网络 I/O 的 future 用 `tokio::select!` 赛跑。75ms 间隔与
@@ -2449,6 +2414,7 @@ mod tests {
     /// 超时必须随输入长度伸缩，写法对齐 ASR 侧 `max(30, ...)` 的三个公式。
     #[test]
     fn first_token_timeout_scales_with_input_length() {
+        let _guard = crate::net::HttpTimeoutTestGuard::lock();
         // 地板：短输入沿用既有 30s 预算，不因本改动变慢。
         assert_eq!(polish_first_token_timeout_secs(0).as_secs(), 30);
         assert_eq!(polish_first_token_timeout_secs(100).as_secs(), 35);
@@ -2461,6 +2427,7 @@ mod tests {
     /// 非流式（重润色）路径的总预算：要覆盖首字延迟 + 把正文吐完。
     #[test]
     fn total_timeout_covers_first_token_budget_plus_generation() {
+        let _guard = crate::net::HttpTimeoutTestGuard::lock();
         for chars in [0usize, 100, 953, 1758, 10_000] {
             assert!(
                 polish_total_timeout_secs(chars) > polish_first_token_timeout_secs(chars),
@@ -4028,10 +3995,7 @@ mod tests {
         // 它之后再出现不可信内容就等于没声明。
         let ctx_at = system_prompt.find("<cursor_context>").unwrap();
         let defense_at = system_prompt.find("# 安全约定").unwrap();
-        assert!(
-            ctx_at < defense_at,
-            "cursor_context 必须出现在安全约定之前"
-        );
+        assert!(ctx_at < defense_at, "cursor_context 必须出现在安全约定之前");
     }
 
     #[test]
@@ -4082,10 +4046,7 @@ mod tests {
                 1,
                 "{forged} 变体未被中和"
             );
-            assert!(
-                system_prompt.contains("&lt;"),
-                "{forged} 变体未被转义"
-            );
+            assert!(system_prompt.contains("&lt;"), "{forged} 变体未被转义");
         }
     }
 

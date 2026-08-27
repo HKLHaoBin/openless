@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
@@ -27,8 +27,23 @@ use parking_lot::Mutex;
 /// 启动时由 coordinator 用持久化设置初始化，`set_settings` 变更时同步。
 static USE_SYSTEM_PROXY: AtomicBool = AtomicBool::new(true);
 
+pub(crate) const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 8;
+pub(crate) const DEFAULT_POOL_IDLE_TIMEOUT_SECS: u64 = 300;
+pub(crate) const DEFAULT_REQUEST_TIMEOUT_FLOOR_SECS: u64 = 30;
+
+const MIN_CONNECT_TIMEOUT_SECS: u64 = 5;
+const MAX_CONNECT_TIMEOUT_SECS: u64 = 60;
+const MIN_POOL_IDLE_TIMEOUT_SECS: u64 = 60;
+const MAX_POOL_IDLE_TIMEOUT_SECS: u64 = 1800;
+const MIN_REQUEST_TIMEOUT_FLOOR_SECS: u64 = 15;
+const MAX_REQUEST_TIMEOUT_FLOOR_SECS: u64 = 300;
+
+static CONNECT_TIMEOUT_SECS: AtomicU64 = AtomicU64::new(DEFAULT_CONNECT_TIMEOUT_SECS);
+static POOL_IDLE_TIMEOUT_SECS: AtomicU64 = AtomicU64::new(DEFAULT_POOL_IDLE_TIMEOUT_SECS);
+static REQUEST_TIMEOUT_FLOOR_SECS: AtomicU64 = AtomicU64::new(DEFAULT_REQUEST_TIMEOUT_FLOOR_SECS);
+
 /// 共享 / provider 客户端的构建缓存。key = `(discriminator, no_proxy 决策)`。
-/// 代理开关变化时整表清空重建，保证「存盘即生效」。
+/// 代理开关或连接池参数变化时整表清空重建，保证「存盘即生效」。
 static CACHE: Lazy<Mutex<HashMap<(u64, bool), reqwest::Client>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -42,6 +57,72 @@ pub(crate) fn use_system_proxy() -> bool {
 pub(crate) fn set_use_system_proxy(enabled: bool) {
     USE_SYSTEM_PROXY.store(enabled, Ordering::Relaxed);
     CACHE.lock().clear();
+}
+
+pub(crate) fn clamp_connect_timeout_secs(secs: u64) -> u64 {
+    secs.clamp(MIN_CONNECT_TIMEOUT_SECS, MAX_CONNECT_TIMEOUT_SECS)
+}
+
+pub(crate) fn clamp_pool_idle_timeout_secs(secs: u64) -> u64 {
+    secs.clamp(MIN_POOL_IDLE_TIMEOUT_SECS, MAX_POOL_IDLE_TIMEOUT_SECS)
+}
+
+pub(crate) fn clamp_request_timeout_floor_secs(secs: u64) -> u64 {
+    secs.clamp(
+        MIN_REQUEST_TIMEOUT_FLOOR_SECS,
+        MAX_REQUEST_TIMEOUT_FLOOR_SECS,
+    )
+}
+
+/// 同步连接层超时。connect / idle 是 Client 构建时定死的，变了必须清池；
+/// 请求下限只影响单次 `RequestBuilder.timeout` 与听写动态公式，不清池。
+pub(crate) fn set_http_timeouts(connect_secs: u64, idle_secs: u64, request_floor_secs: u64) {
+    let connect_secs = clamp_connect_timeout_secs(connect_secs);
+    let idle_secs = clamp_pool_idle_timeout_secs(idle_secs);
+    let request_floor_secs = clamp_request_timeout_floor_secs(request_floor_secs);
+    let connect_changed =
+        CONNECT_TIMEOUT_SECS.swap(connect_secs, Ordering::Relaxed) != connect_secs;
+    let idle_changed = POOL_IDLE_TIMEOUT_SECS.swap(idle_secs, Ordering::Relaxed) != idle_secs;
+    REQUEST_TIMEOUT_FLOOR_SECS.store(request_floor_secs, Ordering::Relaxed);
+    if connect_changed || idle_changed {
+        CACHE.lock().clear();
+    }
+}
+
+pub(crate) fn connect_timeout_secs() -> u64 {
+    CONNECT_TIMEOUT_SECS.load(Ordering::Relaxed)
+}
+
+pub(crate) fn pool_idle_timeout_secs() -> u64 {
+    POOL_IDLE_TIMEOUT_SECS.load(Ordering::Relaxed)
+}
+
+pub(crate) fn request_timeout_floor_secs() -> u64 {
+    REQUEST_TIMEOUT_FLOOR_SECS.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+pub(crate) struct HttpTimeoutTestGuard {
+    _lock: parking_lot::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl HttpTimeoutTestGuard {
+    pub(crate) fn lock() -> Self {
+        static LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+        Self { _lock: LOCK.lock() }
+    }
+}
+
+#[cfg(test)]
+impl Drop for HttpTimeoutTestGuard {
+    fn drop(&mut self) {
+        set_http_timeouts(
+            DEFAULT_CONNECT_TIMEOUT_SECS,
+            DEFAULT_POOL_IDLE_TIMEOUT_SECS,
+            DEFAULT_REQUEST_TIMEOUT_FLOOR_SECS,
+        );
+    }
 }
 
 /// 判定某 base_url 是否应绕过系统代理：回环地址恒绕过（localhost 走代理没有
@@ -66,12 +147,13 @@ fn is_loopback_url(base_url: &str) -> bool {
 }
 
 /// 共享客户端的基础 builder：握手限时 + 连接池 + UA；按需禁用系统代理。
-fn base_client_builder(no_proxy: bool) -> reqwest::ClientBuilder {
+/// AI 出站（转写 / 润色 / 验证）都走这里，避免为 timeout 各建一套池（issue #998）。
+pub(crate) fn base_client_builder(no_proxy: bool) -> reqwest::ClientBuilder {
     let mut builder = reqwest::Client::builder()
         // 握手单独限时：卡在握手上要尽快失败，好让 send_with_retry 立即重试。
-        .connect_timeout(Duration::from_secs(8))
-        // 连接池：一条握手成功的连接保留 90s 供后续命令复用。
-        .pool_idle_timeout(Duration::from_secs(90))
+        .connect_timeout(Duration::from_secs(connect_timeout_secs()))
+        // 连接池：空闲连接默认保留 5 分钟，听写间隔几分钟也不必再付 TLS。
+        .pool_idle_timeout(Duration::from_secs(pool_idle_timeout_secs()))
         .pool_max_idle_per_host(8)
         .tcp_keepalive(Duration::from_secs(30))
         .user_agent(concat!("OpenLess/", env!("CARGO_PKG_VERSION")));
@@ -79,6 +161,26 @@ fn base_client_builder(no_proxy: bool) -> reqwest::ClientBuilder {
         builder = builder.no_proxy();
     }
     builder
+}
+
+/// 从用户配置的 base_url 抽出 `scheme://host[:port]`，供预热与 origin 去重。
+pub(crate) fn origin_from_url(raw_url: &str) -> Option<String> {
+    let Ok(url) = reqwest::Url::parse(raw_url.trim()) else {
+        return None;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = url.host_str()?.trim();
+    if host.is_empty() {
+        return None;
+    }
+    let mut origin = format!("{}://{}", url.scheme(), host);
+    if let Some(port) = url.port() {
+        origin.push(':');
+        origin.push_str(&port.to_string());
+    }
+    Some(origin)
 }
 
 /// 进程级共享 HTTP 客户端。带连接池 —— 一次握手成功后的连接被后续请求复用；
@@ -296,5 +398,73 @@ mod tests {
             sanitized_url_for_logs("not a URL?token=secret#private"),
             "<invalid-url>"
         );
+    }
+
+    #[test]
+    fn origin_from_url_strips_path_and_keeps_explicit_port() {
+        assert_eq!(
+            super::origin_from_url("https://api.openai.com/v1/audio/transcriptions"),
+            Some("https://api.openai.com".to_string())
+        );
+        assert_eq!(
+            super::origin_from_url("http://127.0.0.1:8080/v1"),
+            Some("http://127.0.0.1:8080".to_string())
+        );
+        assert_eq!(super::origin_from_url("wss://example.com/ws"), None);
+        assert_eq!(super::origin_from_url("not a url"), None);
+    }
+
+    #[test]
+    fn http_timeout_prefs_clamp_and_rebuild_pool() {
+        use super::{
+            clamp_connect_timeout_secs, clamp_pool_idle_timeout_secs,
+            clamp_request_timeout_floor_secs, credential_http, http, set_http_timeouts,
+            set_use_system_proxy, HttpTimeoutTestGuard, CACHE,
+        };
+        let _guard = HttpTimeoutTestGuard::lock();
+        set_use_system_proxy(true);
+        CACHE.lock().clear();
+        let _ = http();
+        let _ = credential_http();
+        assert!(CACHE.lock().contains_key(&(0, false)));
+        assert!(CACHE.lock().contains_key(&(1, false)));
+        set_http_timeouts(15, 600, 45);
+        assert!(CACHE.lock().is_empty());
+        assert_eq!(super::connect_timeout_secs(), 15);
+        assert_eq!(super::pool_idle_timeout_secs(), 600);
+        assert_eq!(super::request_timeout_floor_secs(), 45);
+        assert_eq!(clamp_connect_timeout_secs(1), 5);
+        assert_eq!(clamp_connect_timeout_secs(90), 60);
+        assert_eq!(clamp_pool_idle_timeout_secs(10), 60);
+        assert_eq!(clamp_pool_idle_timeout_secs(9999), 1800);
+        assert_eq!(clamp_request_timeout_floor_secs(5), 15);
+        assert_eq!(clamp_request_timeout_floor_secs(900), 300);
+    }
+
+    #[test]
+    fn request_timeout_floor_change_does_not_rebuild_pool() {
+        use super::{
+            credential_http, set_http_timeouts, set_use_system_proxy, HttpTimeoutTestGuard, CACHE,
+        };
+        let _guard = HttpTimeoutTestGuard::lock();
+        set_use_system_proxy(true);
+        CACHE.lock().clear();
+        let _ = credential_http();
+        assert!(CACHE.lock().contains_key(&(1, false)));
+        set_http_timeouts(8, 300, 60);
+        assert!(CACHE.lock().contains_key(&(1, false)));
+        assert_eq!(super::request_timeout_floor_secs(), 60);
+    }
+
+    #[test]
+    fn shared_ai_clients_are_cloned_from_the_same_cache_slot() {
+        use super::{credential_http, set_use_system_proxy, HttpTimeoutTestGuard, CACHE};
+        let _guard = HttpTimeoutTestGuard::lock();
+        set_use_system_proxy(true);
+        CACHE.lock().clear();
+        let first = credential_http();
+        let second = credential_http();
+        drop((first, second));
+        assert_eq!(CACHE.lock().keys().filter(|key| key.0 == 1).count(), 1);
     }
 }

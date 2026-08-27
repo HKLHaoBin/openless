@@ -47,9 +47,9 @@ pub(crate) use crate::persistence::{
     CredentialsVault, PreferencesStore,
 };
 pub(crate) use crate::polish::{
-    http_client_builder, openai_compatible_temperature_for_provider, CodexOAuthConfig,
-    CodexOAuthCredentials, CodexOAuthLLMProvider, LLMError, OpenAICompatibleConfig,
-    OpenAICompatibleLLMProvider, CODEX_DEFAULT_MODEL, CODEX_OAUTH_PROVIDER_ID,
+    openai_compatible_temperature_for_provider, CodexOAuthConfig, CodexOAuthCredentials,
+    CodexOAuthLLMProvider, LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider,
+    CODEX_DEFAULT_MODEL, CODEX_OAUTH_PROVIDER_ID,
 };
 #[cfg(not(mobile))]
 pub(crate) use crate::recorder::{AudioConsumer, Recorder};

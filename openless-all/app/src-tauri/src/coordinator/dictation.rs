@@ -1741,10 +1741,7 @@ fn resolve_less_computer_run_outcome(
             message: "Agent 无结果（确认已登录且额度充足）".to_string(),
         }
     } else {
-        LessComputerOutcome::Done {
-            text,
-            cost_usd,
-        }
+        LessComputerOutcome::Done { text, cost_usd }
     }
 }
 
@@ -2325,8 +2322,14 @@ pub(super) async fn begin_session_as(
             AsrCallLabel::new(foundry::PROVIDER_ID, Some(model_alias)),
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
-        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer, remote)
-            .await?;
+        start_recorder_and_enter_listening(
+            inner,
+            current_session_id,
+            &active_asr,
+            consumer,
+            remote,
+        )
+        .await?;
         return Ok(());
     }
 
@@ -2389,8 +2392,14 @@ pub(super) async fn begin_session_as(
             AsrCallLabel::new(sherpa::PROVIDER_ID, Some(model_alias)),
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
-        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer, remote)
-            .await?;
+        start_recorder_and_enter_listening(
+            inner,
+            current_session_id,
+            &active_asr,
+            consumer,
+            remote,
+        )
+        .await?;
         return Ok(());
     }
 
@@ -2766,8 +2775,14 @@ pub(super) async fn begin_session_as(
             asr_call_label,
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = mimo;
-        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer, remote)
-            .await?;
+        start_recorder_and_enter_listening(
+            inner,
+            current_session_id,
+            &active_asr,
+            consumer,
+            remote,
+        )
+        .await?;
     } else if is_dashscope_multimodal_provider(&effective_asr) {
         let (api_key, base_url, model) = read_dashscope_multimodal_credentials();
         let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
@@ -2779,8 +2794,14 @@ pub(super) async fn begin_session_as(
             asr_call_label,
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
-        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer, remote)
-            .await?;
+        start_recorder_and_enter_listening(
+            inner,
+            current_session_id,
+            &active_asr,
+            consumer,
+            remote,
+        )
+        .await?;
     } else if is_elevenlabs_provider(&effective_asr) {
         let (api_key, base_url, model) = read_elevenlabs_credentials();
         let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
@@ -2792,8 +2813,14 @@ pub(super) async fn begin_session_as(
             asr_call_label,
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
-        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer, remote)
-            .await?;
+        start_recorder_and_enter_listening(
+            inner,
+            current_session_id,
+            &active_asr,
+            consumer,
+            remote,
+        )
+        .await?;
     } else if is_whisper_compatible_provider(&effective_asr) {
         let (api_key, base_url, model) = read_whisper_credentials();
         // 用户辞書の有効フレーズを Whisper の `prompt` に流し込む。固有名詞や
@@ -2827,8 +2854,14 @@ pub(super) async fn begin_session_as(
             asr_call_label,
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = whisper;
-        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer, remote)
-            .await?;
+        start_recorder_and_enter_listening(
+            inner,
+            current_session_id,
+            &active_asr,
+            consumer,
+            remote,
+        )
+        .await?;
     } else if is_xfyun_provider(&effective_asr) {
         // 讯飞 RTASR 实时流式：与 Bailian / 火山同构（open_session → 录音 → end → final）。
         let creds = read_xfyun_credentials();
@@ -3883,7 +3916,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     }
                     // 添加全局超时保护：防止 await_final_result() 永远挂起
                     let timeout_duration =
-                        std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+                        std::time::Duration::from_secs(coordinator_global_timeout_secs());
                     match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                         Ok(Ok(r)) => Ok(r),
                         Ok(Err(e)) => {
@@ -3896,7 +3929,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                             // 全局超时：最后的防线
                             log::error!(
                                 "[coord] 全局超时 {} 秒 - 强制恢复",
-                                COORDINATOR_GLOBAL_TIMEOUT_SECS
+                                coordinator_global_timeout_secs()
                             );
                             // 清理 ASR session，避免资源泄漏
                             asr.cancel();
@@ -3939,8 +3972,13 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                 }
                 ActiveAsr::Mimo(m) => {
                     debug_assert!(uses_global_timeout);
-                    let timeout_duration =
-                        std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+                    let audio_secs = (m.buffer_duration_ms() as f64) / 1000.0;
+                    let timeout_duration = whisper_transcribe_timeout(audio_secs);
+                    log::info!(
+                        "[coord] MiMo transcribe: audio={:.2}s timeout={}s",
+                        audio_secs,
+                        timeout_duration.as_secs()
+                    );
                     match tokio::time::timeout(timeout_duration, m.transcribe()).await {
                         Ok(Ok(r)) => Ok(r),
                         Ok(Err(e)) => {
@@ -3949,8 +3987,9 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         }
                         Err(_) => {
                             log::error!(
-                                "[coord] MiMo ASR 全局超时 {} 秒",
-                                COORDINATOR_GLOBAL_TIMEOUT_SECS
+                                "[coord] MiMo ASR 动态超时 {}s（音频 {:.2}s）",
+                                timeout_duration.as_secs(),
+                                audio_secs
                             );
                             Err(TranscribeFail::new(
                                 "识别超时".to_string(),
@@ -4017,7 +4056,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         log::error!("[coord] Bailian send last frame failed: {e}");
                     }
                     let timeout_duration =
-                        std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+                        std::time::Duration::from_secs(coordinator_global_timeout_secs());
                     match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                         Ok(Ok(r)) => Ok(r),
                         Ok(Err(e)) => {
@@ -4029,7 +4068,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         Err(_) => {
                             log::error!(
                                 "[coord] Bailian 全局超时 {} 秒",
-                                COORDINATOR_GLOBAL_TIMEOUT_SECS
+                                coordinator_global_timeout_secs()
                             );
                             asr.cancel();
                             Err(TranscribeFail::new(
@@ -4045,7 +4084,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         log::error!("[coord] Qwen3 realtime send last frame failed: {e}");
                     }
                     let timeout_duration =
-                        std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+                        std::time::Duration::from_secs(coordinator_global_timeout_secs());
                     match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                         Ok(Ok(r)) => Ok(r),
                         Ok(Err(e)) => {
@@ -4057,7 +4096,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         Err(_) => {
                             log::error!(
                                 "[coord] Qwen3 realtime 全局超时 {} 秒",
-                                COORDINATOR_GLOBAL_TIMEOUT_SECS
+                                coordinator_global_timeout_secs()
                             );
                             asr.cancel();
                             Err(TranscribeFail::new(
@@ -4073,7 +4112,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         log::error!("[coord] StepFun realtime send last frame failed: {e}");
                     }
                     let timeout_duration =
-                        std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+                        std::time::Duration::from_secs(coordinator_global_timeout_secs());
                     match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                         Ok(Ok(r)) => Ok(r),
                         Ok(Err(e)) => {
@@ -4085,7 +4124,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         Err(_) => {
                             log::error!(
                                 "[coord] StepFun realtime 全局超时 {} 秒",
-                                COORDINATOR_GLOBAL_TIMEOUT_SECS
+                                coordinator_global_timeout_secs()
                             );
                             asr.cancel();
                             Err(TranscribeFail::new(
@@ -4101,7 +4140,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         log::error!("[coord] iFlytek ASR send last frame failed: {e}");
                     }
                     let timeout_duration =
-                        std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+                        std::time::Duration::from_secs(coordinator_global_timeout_secs());
                     match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
                         Ok(Ok(r)) => Ok(r),
                         Ok(Err(e)) => {
@@ -4113,7 +4152,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         Err(_) => {
                             log::error!(
                                 "[coord] iFlytek ASR 全局超时 {} 秒",
-                                COORDINATOR_GLOBAL_TIMEOUT_SECS
+                                coordinator_global_timeout_secs()
                             );
                             asr.cancel();
                             Err(TranscribeFail::new(
@@ -4991,10 +5030,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 /// `Inserted` / `PasteSent` 是成功语义。`CopiedFallback` 说明只写了剪贴板、没插进去，
 /// `Failed` 连剪贴板都没写成 —— 这两种情况用户屏幕上都看不到自己刚说的话。
 pub(super) fn insert_delivery_failed(status: InsertStatus) -> bool {
-    matches!(
-        status,
-        InsertStatus::CopiedFallback | InsertStatus::Failed
-    )
+    matches!(status, InsertStatus::CopiedFallback | InsertStatus::Failed)
 }
 
 /// 落字失败时把完整的那段话弹出来。

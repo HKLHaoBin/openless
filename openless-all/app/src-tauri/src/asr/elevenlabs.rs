@@ -78,7 +78,7 @@ impl ElevenLabsBatchASR {
             .collect();
         let wav = encode_wav_16k_mono(&samples);
         let url = speech_to_text_url(&self.base_url)?;
-        let resolved = crate::endpoint_security::resolve_http_endpoint(&url)
+        crate::endpoint_security::resolve_http_endpoint(&url)
             .await
             .context("resolve ElevenLabs endpoint")?;
 
@@ -98,21 +98,10 @@ impl ElevenLabsBatchASR {
         // Never forward the custom credential header or audio to a redirect
         // target. Unlike standard Authorization headers, `xi-api-key` is not
         // guaranteed to be stripped by HTTP clients on cross-origin redirects.
-        let mut client_builder = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(transcribe_timeout(duration_ms as f64 / 1000.0));
-        if !crate::net::use_system_proxy() {
-            client_builder = client_builder.no_proxy();
-        }
-        if let Some(resolved) = &resolved {
-            client_builder = client_builder.resolve_to_addrs(&resolved.host, &resolved.addrs);
-        }
-        let client = client_builder
-            .build()
-            .context("build ElevenLabs ASR HTTP client")?;
+        let client = crate::net::credential_http();
         let resp = client
             .post(&url)
+            .timeout(transcribe_timeout(duration_ms as f64 / 1000.0))
             .header("xi-api-key", self.api_key.trim())
             .multipart(form)
             .send()
@@ -189,7 +178,10 @@ fn append_response_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<()> {
 /// Batch transcription gets a fixed network allowance plus time proportional
 /// to the recording, while retaining a practical minimum for short clips.
 pub fn transcribe_timeout(audio_secs: f64) -> Duration {
-    Duration::from_secs(30.max((audio_secs * 0.5).ceil() as u64 + 20))
+    let secs = ((audio_secs * 0.5).ceil() as u64)
+        .saturating_add(20)
+        .max(crate::net::request_timeout_floor_secs());
+    Duration::from_secs(secs)
 }
 
 /// Pull the transcript out of the Scribe response.
@@ -286,9 +278,18 @@ mod tests {
 
     #[test]
     fn timeout_scales_with_recording_duration() {
+        let _guard = crate::net::HttpTimeoutTestGuard::lock();
         assert_eq!(transcribe_timeout(0.0), Duration::from_secs(30));
         assert_eq!(transcribe_timeout(20.0), Duration::from_secs(30));
         assert_eq!(transcribe_timeout(120.0), Duration::from_secs(80));
+    }
+
+    #[test]
+    fn transcribe_uses_shared_credential_client() {
+        let src = include_str!("elevenlabs.rs");
+        assert!(src.contains("crate::net::credential_http()"));
+        assert!(!src.contains("Client::new()"));
+        assert!(!src.contains("Client::builder()"));
     }
 
     #[test]

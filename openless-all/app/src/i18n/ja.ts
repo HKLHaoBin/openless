@@ -736,6 +736,12 @@ export const ja: typeof zhCN = {
       title: 'ネットワーク',
       useSystemProxyLabel: 'システムプロキシを使用',
       useSystemProxyDesc: 'オンにするとリクエストはシステムプロキシを経由します。オフにするとすべて直接接続します（国内サービスの遅延が低くなる傾向）。GitHub ログインやアップデートなど海外サービスには接続できない場合があります。リアルタイム音声ストリームと Less Computer は影響を受けません。',
+      connectTimeoutLabel: 'ハンドシェイクタイムアウト（秒）',
+      connectTimeoutDesc: 'TCP/TLS ハンドシェイクの上限。遅い回線では 15–30 に上げると初回の聞き取りが誤ってタイムアウトしにくくなります。範囲 5–60、既定 8。',
+      poolIdleTimeoutLabel: '接続キープアライブ（秒）',
+      poolIdleTimeoutDesc: 'アイドル接続をプールに残す時間。次の聞き取りでハンドシェイクを省略できます。範囲 60–1800、既定 300。',
+      requestTimeoutLabel: 'リクエストタイムアウト下限（秒）',
+      requestTimeoutDesc: '書き起こしと質問応答の最短待ち時間。長い録音は音声長に応じてさらに延びます。範囲 15–300、既定 30。',
     },
     dataStorage: {
       title: 'データ保存',

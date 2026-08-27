@@ -25,7 +25,6 @@ use crate::polish::{
 use crate::types::{ChineseScriptPreference, OutputLanguagePreference, PolishMode, QaChatMessage};
 
 const DEFAULT_TEMPERATURE: f32 = 0.3;
-const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const BODY_PREVIEW_LIMIT: usize = 200;
 
 #[derive(Clone, Debug)]
@@ -53,7 +52,7 @@ impl GeminiConfig {
             model: model.into(),
             base_url: base_url.into(),
             temperature: DEFAULT_TEMPERATURE,
-            request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
+            request_timeout_secs: crate::net::request_timeout_floor_secs(),
             thinking_enabled: false,
         }
     }
@@ -71,20 +70,10 @@ pub struct GeminiProvider {
 
 impl GeminiProvider {
     pub fn new(config: GeminiConfig) -> Self {
-        // Reuse a cached client keyed by timeout so the connection pool survives
-        // across utterances instead of re-handshaking every polish. 代理开关
-        // 切换时 net::set_use_system_proxy 会清空缓存，这里按新策略重建。
-        let timeout = config.request_timeout_secs;
-        let no_proxy =
-            crate::net::should_bypass_proxy(&config.base_url, crate::net::use_system_proxy());
-        let client = crate::net::cached_client((timeout, no_proxy), || {
-            let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(timeout));
-            if no_proxy {
-                builder = builder.no_proxy();
-            }
-            builder.build().unwrap_or_else(|_| reqwest::Client::new())
-        });
-        Self { config, client }
+        Self {
+            config,
+            client: crate::net::credential_http(),
+        }
     }
 
     pub async fn polish(
@@ -244,6 +233,9 @@ impl GeminiProvider {
         let mut request = self
             .client
             .post(url)
+            .timeout(Duration::from_secs(
+                crate::polish::POLISH_CLIENT_HARD_CAP_SECS,
+            ))
             .header("Content-Type", "application/json");
         if !self.config.api_key.trim().is_empty() {
             request = request.header("x-goog-api-key", self.config.api_key.as_str());
@@ -286,6 +278,9 @@ impl GeminiProvider {
         let mut request = self
             .client
             .post(url)
+            .timeout(Duration::from_secs(
+                crate::polish::POLISH_CLIENT_HARD_CAP_SECS,
+            ))
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream");
         if !self.config.api_key.trim().is_empty() {

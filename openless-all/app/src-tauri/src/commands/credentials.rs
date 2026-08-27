@@ -285,6 +285,7 @@ pub async fn set_credential(
     // issue #532 / #573：在 Settings 填写凭据但不切换提供商时，Overview 不会重拉状态，
     // 仍显示「未配置」。该修复曾随 #538 合入 main，但被 beta→main 合并覆盖，beta 上缺失。
     let _ = window.emit("credentials:changed", ());
+    crate::net_warmup::schedule_warmup();
     Ok(())
 }
 
@@ -305,7 +306,9 @@ pub async fn set_active_asr_provider(
     if CredentialsVault::get_active_asr() == provider {
         return Ok(());
     }
-    CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())
+    CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
+    crate::net_warmup::schedule_warmup();
+    Ok(())
 }
 
 #[cfg(not(mobile))]
@@ -341,6 +344,7 @@ pub async fn set_active_asr_provider(
         return Ok(());
     }
     CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
+    crate::net_warmup::schedule_warmup();
     let release_plan = local_asr_release_plan_for_provider(&provider);
     coord.release_inactive_local_asr_engines(release_plan.qwen, release_plan.whisper);
     release_foundry_runtime_if_inactive(runtime.inner(), release_plan.foundry).await;
@@ -357,12 +361,16 @@ pub async fn set_active_asr_provider(
 
 #[tauri::command]
 pub fn set_active_llm_provider(provider: String) -> Result<(), String> {
-    CredentialsVault::set_active_llm_provider(&provider).map_err(|e| e.to_string())
+    CredentialsVault::set_active_llm_provider(&provider).map_err(|e| e.to_string())?;
+    crate::net_warmup::schedule_warmup();
+    Ok(())
 }
 
 #[tauri::command]
 pub fn set_active_omni_provider(provider: String) -> Result<(), String> {
-    CredentialsVault::set_active_omni_provider(&provider).map_err(|e| e.to_string())
+    CredentialsVault::set_active_omni_provider(&provider).map_err(|e| e.to_string())?;
+    crate::net_warmup::schedule_warmup();
+    Ok(())
 }
 
 /// 读出某个账号的实际值（用于设置页预填表单）。

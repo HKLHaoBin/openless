@@ -56,6 +56,7 @@ mod llm_gemini;
 #[cfg(mobile)]
 mod mobile_runtime;
 mod net;
+mod net_warmup;
 mod omni;
 mod permissions;
 mod persistence;

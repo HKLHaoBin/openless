@@ -871,6 +871,18 @@ fn default_true() -> bool {
     true
 }
 
+fn default_http_connect_timeout_secs() -> u64 {
+    crate::net::DEFAULT_CONNECT_TIMEOUT_SECS
+}
+
+fn default_http_pool_idle_timeout_secs() -> u64 {
+    crate::net::DEFAULT_POOL_IDLE_TIMEOUT_SECS
+}
+
+fn default_http_request_timeout_secs() -> u64 {
+    crate::net::DEFAULT_REQUEST_TIMEOUT_FLOOR_SECS
+}
+
 fn default_silence_auto_stop_seconds() -> f32 {
     3.0
 }
@@ -956,6 +968,15 @@ pub struct UserPreferences {
     /// 境外服务可能连不上。实时语音流（WebSocket）与 Less Computer 子进程不受此开关影响。
     #[serde(default = "default_true")]
     pub use_system_proxy: bool,
+    /// TLS/TCP 握手超时（秒）。issue #998：慢握手网络上 4s+ 很常见，过短会误报超时。
+    #[serde(default = "default_http_connect_timeout_secs")]
+    pub http_connect_timeout_secs: u64,
+    /// HTTP 连接池空闲保活（秒）。默认 5 分钟，听写间隔几分钟也不必再付握手。
+    #[serde(default = "default_http_pool_idle_timeout_secs")]
+    pub http_pool_idle_timeout_secs: u64,
+    /// 听写 / QA 请求超时下限（秒）。动态公式（按音频/字数）仍会再往上加。
+    #[serde(default = "default_http_request_timeout_secs")]
+    pub http_request_timeout_secs: u64,
     /// Windows/Linux 粘贴成功后是否恢复用户原剪贴板。默认 true 跟历史行为一致；
     /// 关掉就把听写文本留在剪贴板，让 simulate_paste 实际没生效时用户能 Ctrl+V 找回。
     /// macOS 走 AX 直写，不受这个开关影响。详见 issue #111。
@@ -1369,6 +1390,12 @@ struct UserPreferencesWire {
     llm_thinking_enabled: bool,
     #[serde(default = "default_true")]
     use_system_proxy: bool,
+    #[serde(default = "default_http_connect_timeout_secs")]
+    http_connect_timeout_secs: u64,
+    #[serde(default = "default_http_pool_idle_timeout_secs")]
+    http_pool_idle_timeout_secs: u64,
+    #[serde(default = "default_http_request_timeout_secs")]
+    http_request_timeout_secs: u64,
     restore_clipboard_after_paste: bool,
     #[serde(default)]
     paste_shortcut: PasteShortcut,
@@ -1586,6 +1613,9 @@ impl Default for UserPreferencesWire {
             active_omni_provider: prefs.active_omni_provider,
             llm_thinking_enabled: prefs.llm_thinking_enabled,
             use_system_proxy: prefs.use_system_proxy,
+            http_connect_timeout_secs: prefs.http_connect_timeout_secs,
+            http_pool_idle_timeout_secs: prefs.http_pool_idle_timeout_secs,
+            http_request_timeout_secs: prefs.http_request_timeout_secs,
             restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
             paste_shortcut: prefs.paste_shortcut,
             allow_non_tsf_insertion_fallback: prefs.allow_non_tsf_insertion_fallback,
@@ -1736,6 +1766,15 @@ impl<'de> Deserialize<'de> for UserPreferences {
             active_omni_provider: wire.active_omni_provider,
             llm_thinking_enabled: wire.llm_thinking_enabled,
             use_system_proxy: wire.use_system_proxy,
+            http_connect_timeout_secs: crate::net::clamp_connect_timeout_secs(
+                wire.http_connect_timeout_secs,
+            ),
+            http_pool_idle_timeout_secs: crate::net::clamp_pool_idle_timeout_secs(
+                wire.http_pool_idle_timeout_secs,
+            ),
+            http_request_timeout_secs: crate::net::clamp_request_timeout_floor_secs(
+                wire.http_request_timeout_secs,
+            ),
             restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
             paste_shortcut: wire.paste_shortcut,
             allow_non_tsf_insertion_fallback: wire.allow_non_tsf_insertion_fallback,
@@ -2578,6 +2617,9 @@ impl Default for UserPreferences {
             active_omni_provider: "custom".into(),
             llm_thinking_enabled: false,
             use_system_proxy: true,
+            http_connect_timeout_secs: default_http_connect_timeout_secs(),
+            http_pool_idle_timeout_secs: default_http_pool_idle_timeout_secs(),
+            http_request_timeout_secs: default_http_request_timeout_secs(),
             restore_clipboard_after_paste: true,
             paste_shortcut: PasteShortcut::default(),
             allow_non_tsf_insertion_fallback: true,
@@ -3837,6 +3879,21 @@ mod tests {
 
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
         assert!(prefs.windows_show_openless_in_keyboard_list);
+    }
+
+    #[test]
+    fn missing_http_timeout_prefs_use_keep_alive_defaults() {
+        let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(prefs.http_connect_timeout_secs, 8);
+        assert_eq!(prefs.http_pool_idle_timeout_secs, 300);
+        assert_eq!(prefs.http_request_timeout_secs, 30);
+        let prefs: UserPreferences = serde_json::from_str(
+            r#"{"httpConnectTimeoutSecs":1,"httpPoolIdleTimeoutSecs":10,"httpRequestTimeoutSecs":5}"#,
+        )
+        .unwrap();
+        assert_eq!(prefs.http_connect_timeout_secs, 5);
+        assert_eq!(prefs.http_pool_idle_timeout_secs, 60);
+        assert_eq!(prefs.http_request_timeout_secs, 15);
     }
 
     #[test]
