@@ -118,6 +118,14 @@ struct SyncState {
     /// 收到同 sentence_id 的 final 结果时将内容移入 final_segments。
     partial_segments: BTreeMap<i64, String>,
     last_result_text: String,
+    // #region agent log
+    dbg_result_events: u32,
+    dbg_heartbeats: u32,
+    dbg_empty_text: u32,
+    dbg_no_sentence: u32,
+    dbg_audio_chunks_sent: u32,
+    dbg_first_unparsed_logged: bool,
+    // #endregion
 }
 
 pub struct BailianRealtimeASR {
@@ -225,6 +233,14 @@ impl BailianRealtimeASR {
                         }
                     }
                     Ok(Message::Close(_)) => {
+                        // #region agent log
+                        agent_dbg(
+                            "C",
+                            "bailian.rs:recv_loop",
+                            "websocket closed",
+                            serde_json::json!({}),
+                        );
+                        // #endregion
                         this.finish_with_partial_or_error(BailianASRError::NoFinalResult);
                         break;
                     }
@@ -258,6 +274,29 @@ impl BailianRealtimeASR {
         }
         let (send_tx, tail_chunks) = {
             let mut st = self.state.lock();
+            // #region agent log
+            agent_dbg(
+                "B",
+                "bailian.rs:send_last_frame",
+                "send_last_frame snapshot",
+                serde_json::json!({
+                    "bytes_received": st.bytes_received,
+                    "pending_audio": st.pending_audio.len(),
+                    "audio_scratch": st.audio_scratch.len(),
+                    "task_started": st.task_started,
+                    "task_finished": st.task_finished,
+                    "result_events": st.dbg_result_events,
+                    "heartbeats": st.dbg_heartbeats,
+                    "empty_text": st.dbg_empty_text,
+                    "no_sentence": st.dbg_no_sentence,
+                    "audio_chunks_sent": st.dbg_audio_chunks_sent,
+                    "final_segs": st.final_segments.len(),
+                    "partial_segs": st.partial_segments.len(),
+                    "last_result_chars": st.last_result_text.chars().count(),
+                    "has_send_tx": st.send_tx.is_some()
+                }),
+            );
+            // #endregion
             if model_is_8k(&self.credentials.normalized_model()) {
                 clear_downsample_tail(&mut st.downsample_remainder);
             }
@@ -271,6 +310,8 @@ impl BailianRealtimeASR {
             } else {
                 vec![std::mem::take(&mut st.audio_scratch)]
             };
+            st.dbg_audio_chunks_sent =
+                st.dbg_audio_chunks_sent.saturating_add(tail.len() as u32);
             (send_tx, tail)
         };
         let Some(send_tx) = send_tx else {
@@ -339,6 +380,14 @@ impl BailianRealtimeASR {
             .unwrap_or_default();
         match event {
             "task-started" => {
+                // #region agent log
+                agent_dbg(
+                    "C",
+                    "bailian.rs:handle_text_message",
+                    "event task-started",
+                    serde_json::json!({ "event": event }),
+                );
+                // #endregion
                 self.mark_task_started();
                 true
             }
@@ -347,6 +396,26 @@ impl BailianRealtimeASR {
                 true
             }
             "task-finished" => {
+                // #region agent log
+                let payload_preview = value
+                    .get("payload")
+                    .map(|p| p.to_string())
+                    .unwrap_or_default();
+                let preview: String = payload_preview.chars().take(400).collect();
+                agent_dbg(
+                    "A",
+                    "bailian.rs:handle_text_message",
+                    "event task-finished",
+                    serde_json::json!({
+                        "event": event,
+                        "payload_preview": preview,
+                        "payload_has_sentence": value
+                            .pointer("/payload/output/sentence")
+                            .is_some(),
+                        "payload_has_text": value.pointer("/payload/output/text").is_some()
+                    }),
+                );
+                // #endregion
                 self.finish_success();
                 false
             }
@@ -357,10 +426,30 @@ impl BailianRealtimeASR {
                     .and_then(Value::as_str)
                     .unwrap_or("task failed")
                     .to_string();
+                // #region agent log
+                agent_dbg(
+                    "C",
+                    "bailian.rs:handle_text_message",
+                    "event task-failed",
+                    serde_json::json!({ "error_message": message }),
+                );
+                // #endregion
                 self.finish_error(BailianASRError::TaskFailed(message));
                 false
             }
-            _ => true,
+            other => {
+                // #region agent log
+                if !other.is_empty() {
+                    agent_dbg(
+                        "A",
+                        "bailian.rs:handle_text_message",
+                        "unhandled asr event",
+                        serde_json::json!({ "event": other }),
+                    );
+                }
+                // #endregion
+                true
+            }
         }
     }
 
@@ -377,6 +466,8 @@ impl BailianRealtimeASR {
                 &mut st.audio_scratch,
                 &self.credentials.normalized_model(),
             );
+            st.dbg_audio_chunks_sent =
+                st.dbg_audio_chunks_sent.saturating_add(chunks.len() as u32);
             (send_tx, chunks)
         };
         if let Some(tx) = send_tx {
@@ -393,6 +484,21 @@ impl BailianRealtimeASR {
             .and_then(|p| p.get("output"))
             .and_then(|o| o.get("sentence"));
         let Some(sentence) = sentence else {
+            // #region agent log
+            let mut st = self.state.lock();
+            st.dbg_no_sentence = st.dbg_no_sentence.saturating_add(1);
+            if !st.dbg_first_unparsed_logged {
+                st.dbg_first_unparsed_logged = true;
+                drop(st);
+                let preview: String = value.to_string().chars().take(400).collect();
+                agent_dbg(
+                    "A",
+                    "bailian.rs:record_result",
+                    "result missing sentence",
+                    serde_json::json!({ "preview": preview }),
+                );
+            }
+            // #endregion
             return;
         };
 
@@ -402,14 +508,32 @@ impl BailianRealtimeASR {
             .and_then(Value::as_bool)
             .unwrap_or(false)
         {
+            // #region agent log
+            {
+                let mut st = self.state.lock();
+                st.dbg_heartbeats = st.dbg_heartbeats.saturating_add(1);
+            }
+            // #endregion
             return;
         }
 
         let Some(text) = sentence.get("text").and_then(Value::as_str) else {
+            // #region agent log
+            {
+                let mut st = self.state.lock();
+                st.dbg_empty_text = st.dbg_empty_text.saturating_add(1);
+            }
+            // #endregion
             return;
         };
         let trimmed = text.trim();
         if trimmed.is_empty() {
+            // #region agent log
+            {
+                let mut st = self.state.lock();
+                st.dbg_empty_text = st.dbg_empty_text.saturating_add(1);
+            }
+            // #endregion
             return;
         }
 
@@ -435,6 +559,9 @@ impl BailianRealtimeASR {
 
         let mut st = self.state.lock();
         st.last_result_text = trimmed.to_string();
+        // #region agent log
+        st.dbg_result_events = st.dbg_result_events.saturating_add(1);
+        // #endregion
 
         if is_sentence_final {
             // 所有 final 结果（含 sentence_id == 0）都存入 final_segments。
@@ -469,6 +596,27 @@ impl BailianRealtimeASR {
                     .map(|start| start.elapsed().as_millis() as u64)
                     .unwrap_or_default()
             };
+            // #region agent log
+            agent_dbg(
+                "A",
+                "bailian.rs:finish_success",
+                "assembled transcript",
+                serde_json::json!({
+                    "text_chars": text.chars().count(),
+                    "text_empty": text.trim().is_empty(),
+                    "duration_ms": duration_ms,
+                    "bytes_received": st.bytes_received,
+                    "final_segs": st.final_segments.len(),
+                    "partial_segs": st.partial_segments.len(),
+                    "last_result_chars": st.last_result_text.chars().count(),
+                    "result_events": st.dbg_result_events,
+                    "heartbeats": st.dbg_heartbeats,
+                    "empty_text": st.dbg_empty_text,
+                    "no_sentence": st.dbg_no_sentence,
+                    "audio_chunks_sent": st.dbg_audio_chunks_sent
+                }),
+            );
+            // #endregion
             (st.final_tx.take(), text, duration_ms)
         };
         if let Some(tx) = tx {
@@ -543,6 +691,8 @@ impl AudioConsumer for BailianRealtimeASR {
             }
             st.audio_scratch.extend_from_slice(&audio);
             let chunks = drain_audio_chunks_for_model(&mut st.audio_scratch, &model);
+            st.dbg_audio_chunks_sent =
+                st.dbg_audio_chunks_sent.saturating_add(chunks.len() as u32);
             (st.send_tx.clone(), chunks)
         };
         if let Some(tx) = send_tx {
@@ -688,6 +838,33 @@ async fn send_binary(writer: &SharedWriter, data: Vec<u8>) -> Result<(), Bailian
         .await
         .map_err(|e| BailianASRError::SendFailed(e.to_string()))
 }
+
+// #region agent log
+fn agent_dbg(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let payload = serde_json::json!({
+        "sessionId": "0543d0",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": timestamp
+    });
+    log::info!("[DEBUG-0543d0] {message} {data}");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(r"f:\编程\openless\debug-0543d0.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{payload}");
+    }
+}
+// #endregion
 
 async fn close_writer(writer: &SharedWriter) -> Result<(), BailianASRError> {
     let mut guard = writer.lock().await;

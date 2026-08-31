@@ -3726,6 +3726,33 @@ async fn wait_for_processing_cancel(inner: &Arc<Inner>) {
     }
 }
 
+// #region agent log
+fn agent_dbg_coord(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let payload = serde_json::json!({
+        "sessionId": "0543d0",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": timestamp
+    });
+    log::info!("[DEBUG-0543d0] {message} {data}");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(r"f:\编程\openless\debug-0543d0.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{payload}");
+    }
+}
+// #endregion
+
 /// 一次性（非流式）插入最终文本：平台分支与 `end_session` 原内联逻辑一致，
 /// 供传统与多模态（Omni）两条收尾路径复用，避免插入策略漂移。
 async fn insert_final_text(
@@ -4480,6 +4507,20 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     }
 
     if raw.text.trim().is_empty() {
+        // #region agent log
+        agent_dbg_coord(
+            "A",
+            "dictation.rs:empty_transcript",
+            "ASR empty transcript",
+            serde_json::json!({
+                "duration_ms": raw.duration_ms,
+                "asr_ms": asr_ms,
+                "asr_provider": asr_provider.clone(),
+                "asr_model": asr_model.clone(),
+                "front_app": inner.state.lock().front_app.clone()
+            }),
+        );
+        // #endregion
         // 失败条目同样记下当时的前台应用：排查「在某个 app 里总是识别不到」时，这一列
         // 就是线索本身。
         let empty_front =
@@ -4850,6 +4891,21 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         .await
     };
     restore_prepared_windows_ime_session(inner, current_session_id);
+    // #region agent log
+    agent_dbg_coord(
+        "D",
+        "dictation.rs:insert_result",
+        "insert finished",
+        serde_json::json!({
+            "status": format!("{status:?}"),
+            "polished_chars": polished.chars().count(),
+            "already_streamed": already_streamed,
+            "focus_ready_for_paste": focus_ready_for_paste,
+            "windows_insertion_mode": format!("{windows_insertion_mode:?}"),
+            "polish_error": polish_error.is_some()
+        }),
+    );
+    // #endregion
     let inserted_chars = polished.chars().count() as u32;
 
     // `polished` 在流式路径下就是实际打到屏幕上的 typed_text；公共入口据此武装监听并计数。
