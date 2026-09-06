@@ -2,7 +2,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::coordinator_state::{
-    finish_cancelled_processing_state, request_stop_during_starting_state, startup_race_status,
+    finish_cancelled_processing_state, request_stop_during_starting_state,
+    startup_open_error_status,
 };
 use crate::correction::apply_correction_rules;
 use crate::types::HotkeyMode;
@@ -2551,12 +2552,13 @@ pub(super) async fn begin_session_as(
             // #region agent log
             {
                 let st = inner.state.lock();
-                let race = startup_race_status(&st, current_session_id);
+                let race = startup_open_error_status(&st, current_session_id);
                 agent_dbg_5e2050(
                     "C",
                     "dictation.rs:open_session_err",
                     "bailian open failed",
                     serde_json::json!({
+                        "runId": "post-fix",
                         "err": e.to_string(),
                         "pending_stop": st.pending_stop,
                         "cancelled": st.cancelled,
@@ -2568,7 +2570,7 @@ pub(super) async fn begin_session_as(
                 );
             }
             // #endregion
-            match startup_race_status_for_starting(inner, current_session_id) {
+            match startup_open_error_status_for_starting(inner, current_session_id) {
                 StartupRaceStatus::StaleContinuation => {
                     log::info!(
                         "[coord] stale Bailian ASR open_session error from session {current_session_id} — ignoring"
@@ -2645,7 +2647,7 @@ pub(super) async fn begin_session_as(
 
         if let Err(e) = asr.open_session().await {
             log::error!("[coord] open Qwen3 realtime ASR session failed: {e}");
-            match startup_race_status_for_starting(inner, current_session_id) {
+            match startup_open_error_status_for_starting(inner, current_session_id) {
                 StartupRaceStatus::StaleContinuation => {
                     log::info!(
                         "[coord] stale Qwen3 realtime ASR open_session error from session {current_session_id} — ignoring"
@@ -2728,7 +2730,7 @@ pub(super) async fn begin_session_as(
 
         if let Err(e) = asr.open_session().await {
             log::error!("[coord] open StepFun realtime ASR session failed: {e}");
-            match startup_race_status_for_starting(inner, current_session_id) {
+            match startup_open_error_status_for_starting(inner, current_session_id) {
                 StartupRaceStatus::StaleContinuation => {
                     log::info!(
                         "[coord] stale StepFun realtime ASR open_session error from session {current_session_id} — ignoring"
@@ -2883,7 +2885,7 @@ pub(super) async fn begin_session_as(
 
         if let Err(e) = asr.open_session().await {
             log::error!("[coord] open iFlytek ASR session failed: {e}");
-            match startup_race_status_for_starting(inner, current_session_id) {
+            match startup_open_error_status_for_starting(inner, current_session_id) {
                 StartupRaceStatus::StaleContinuation => {
                     log::info!(
                         "[coord] stale iFlytek ASR open_session error from session {current_session_id} — ignoring"
@@ -2965,7 +2967,7 @@ pub(super) async fn begin_session_as(
 
         if let Err(e) = asr.open_session().await {
             log::error!("[coord] open ASR session failed: {e}");
-            match startup_race_status_for_starting(inner, current_session_id) {
+            match startup_open_error_status_for_starting(inner, current_session_id) {
                 StartupRaceStatus::StaleContinuation => {
                     log::info!(
                         "[coord] stale ASR open_session error from session {current_session_id} — ignoring"

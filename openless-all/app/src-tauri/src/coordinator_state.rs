@@ -151,6 +151,18 @@ pub(crate) fn startup_race_status(
     }
 }
 
+/// `open_session` 失败时用：用户已在 Starting 阶段按停（`pending_stop`）则不当成
+/// 进行中失败。成功握手后仍走 `finish_starting_session` 的 PendingStop → 转写路径。
+pub(crate) fn startup_open_error_status(
+    state: &SessionState,
+    captured_session_id: SessionId,
+) -> StartupRaceStatus {
+    match startup_race_status(state, captured_session_id) {
+        StartupRaceStatus::ActiveStarting if state.pending_stop => StartupRaceStatus::CancelRaced,
+        other => other,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CancelDecision {
     pub(crate) phase: SessionPhase,
@@ -529,6 +541,24 @@ mod tests {
                 "phase={phase:?} cancelled={cancelled} actual_session={actual_session_id}"
             );
         }
+    }
+
+    #[test]
+    fn startup_open_error_treats_pending_stop_as_cancel_raced() {
+        let state = SessionState {
+            phase: SessionPhase::Starting,
+            pending_stop: true,
+            session_id: session_id(7),
+            ..Default::default()
+        };
+        assert_eq!(
+            startup_race_status(&state, session_id(7)),
+            StartupRaceStatus::ActiveStarting
+        );
+        assert_eq!(
+            startup_open_error_status(&state, session_id(7)),
+            StartupRaceStatus::CancelRaced
+        );
     }
 
     #[test]

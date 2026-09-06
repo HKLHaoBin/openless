@@ -33,8 +33,8 @@ use crate::combo_hotkey::{ComboHotkeyError, ComboHotkeyEvent, ComboHotkeyMonitor
 use crate::coordinator_state::{
     begin_cancel_session_state, begin_recording_abort_before_restore, begin_session_state,
     finish_cancel_session_state, finish_starting_session_state, new_session_id,
-    publish_abort_idle_after_restore, start_processing_if_listening, startup_race_status,
-    BeginOutcome, SessionId, SessionPhase, SessionState, StartupRaceStatus,
+    publish_abort_idle_after_restore, start_processing_if_listening, startup_open_error_status,
+    startup_race_status, BeginOutcome, SessionId, SessionPhase, SessionState, StartupRaceStatus,
 };
 use crate::correction::apply_correction_rules;
 use crate::hotkey::{HotkeyEvent, HotkeyMonitor};
@@ -6223,6 +6223,14 @@ fn startup_race_status_for_starting(
 ) -> StartupRaceStatus {
     let state = inner.state.lock();
     startup_race_status(&state, captured_session_id)
+}
+
+fn startup_open_error_status_for_starting(
+    inner: &Arc<Inner>,
+    captured_session_id: SessionId,
+) -> StartupRaceStatus {
+    let state = inner.state.lock();
+    startup_open_error_status(&state, captured_session_id)
 }
 
 fn set_phase_idle_if_session_matches(inner: &Arc<Inner>, session_id: SessionId) {
