@@ -163,8 +163,43 @@ impl BailianRealtimeASR {
                 .map_err(|e| BailianASRError::ConnectionFailed(e.to_string()))?,
         );
 
-        let (ws, _resp) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request))
-            .await
+        // #region agent log
+        let connect_started = Instant::now();
+        let endpoint_host = endpoint
+            .split("://")
+            .nth(1)
+            .unwrap_or("")
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
+        agent_dbg_5e2050(
+            "A",
+            "bailian.rs:open_session",
+            "connect begin",
+            serde_json::json!({
+                "host": endpoint_host,
+                "timeout_ms": CONNECT_TIMEOUT.as_millis()
+            }),
+        );
+        // #endregion
+        let connect_result = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request)).await;
+        // #region agent log
+        agent_dbg_5e2050(
+            "A",
+            "bailian.rs:open_session",
+            "connect result",
+            serde_json::json!({
+                "host": endpoint_host,
+                "elapsed_ms": connect_started.elapsed().as_millis(),
+                "timed_out": connect_result.is_err(),
+                "connect_err": connect_result.as_ref().ok().and_then(|r| {
+                    r.as_ref().err().map(|e| e.to_string())
+                })
+            }),
+        );
+        // #endregion
+        let (ws, _resp) = connect_result
             .map_err(|_| {
                 BailianASRError::ConnectionFailed(format!(
                     "连接超时（{} ms）",
@@ -859,6 +894,30 @@ fn agent_dbg(hypothesis_id: &str, location: &str, message: &str, data: serde_jso
         .create(true)
         .append(true)
         .open(r"f:\编程\openless\debug-0543d0.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{payload}");
+    }
+}
+
+fn agent_dbg_5e2050(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let payload = serde_json::json!({
+        "sessionId": "5e2050",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": timestamp
+    });
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(r"f:\编程\openless\debug-5e2050.log")
     {
         use std::io::Write;
         let _ = writeln!(file, "{payload}");

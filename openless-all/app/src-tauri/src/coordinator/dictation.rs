@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::coordinator_state::{
-    finish_cancelled_processing_state, request_stop_during_starting_state,
+    finish_cancelled_processing_state, request_stop_during_starting_state, startup_race_status,
 };
 use crate::correction::apply_correction_rules;
 use crate::types::HotkeyMode;
@@ -2110,6 +2110,22 @@ pub(super) fn request_stop_during_starting(inner: &Arc<Inner>, reason: &str) {
         }
     }
     log::info!("[coord] {reason} during Starting — queued");
+    // #region agent log
+    {
+        let st = inner.state.lock();
+        agent_dbg_5e2050(
+            "C",
+            "dictation.rs:request_stop_during_starting",
+            "pending_stop queued",
+            serde_json::json!({
+                "reason": reason,
+                "pending_stop": st.pending_stop,
+                "cancelled": st.cancelled,
+                "phase": format!("{:?}", st.phase)
+            }),
+        );
+    }
+    // #endregion
     stop_recorder_if_pending_start_stop(inner);
 }
 
@@ -2532,6 +2548,26 @@ pub(super) async fn begin_session_as(
 
         if let Err(e) = asr.open_session().await {
             log::error!("[coord] open Bailian ASR session failed: {e}");
+            // #region agent log
+            {
+                let st = inner.state.lock();
+                let race = startup_race_status(&st, current_session_id);
+                agent_dbg_5e2050(
+                    "C",
+                    "dictation.rs:open_session_err",
+                    "bailian open failed",
+                    serde_json::json!({
+                        "err": e.to_string(),
+                        "pending_stop": st.pending_stop,
+                        "cancelled": st.cancelled,
+                        "phase": format!("{:?}", st.phase),
+                        "session_match": st.session_id == current_session_id,
+                        "race": format!("{race:?}"),
+                        "will_toast": matches!(race, StartupRaceStatus::ActiveStarting)
+                    }),
+                );
+            }
+            // #endregion
             match startup_race_status_for_starting(inner, current_session_id) {
                 StartupRaceStatus::StaleContinuation => {
                     log::info!(
@@ -3746,6 +3782,30 @@ fn agent_dbg_coord(hypothesis_id: &str, location: &str, message: &str, data: ser
         .create(true)
         .append(true)
         .open(r"f:\编程\openless\debug-0543d0.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{payload}");
+    }
+}
+
+fn agent_dbg_5e2050(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let payload = serde_json::json!({
+        "sessionId": "5e2050",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": timestamp
+    });
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(r"f:\编程\openless\debug-5e2050.log")
     {
         use std::io::Write;
         let _ = writeln!(file, "{payload}");
