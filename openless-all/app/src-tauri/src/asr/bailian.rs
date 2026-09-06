@@ -154,15 +154,6 @@ impl BailianRealtimeASR {
 
         let task_id = Uuid::new_v4().simple().to_string();
         let endpoint = self.credentials.normalized_endpoint();
-        let mut request = endpoint
-            .into_client_request()
-            .map_err(|e| BailianASRError::ConnectionFailed(e.to_string()))?;
-        request.headers_mut().insert(
-            "Authorization",
-            HeaderValue::from_str(&format!("bearer {}", self.credentials.api_key.trim()))
-                .map_err(|e| BailianASRError::ConnectionFailed(e.to_string()))?,
-        );
-
         // #region agent log
         let connect_started = Instant::now();
         let endpoint_host = endpoint
@@ -173,6 +164,17 @@ impl BailianRealtimeASR {
             .next()
             .unwrap_or("")
             .to_string();
+        // #endregion
+        let mut request = endpoint
+            .into_client_request()
+            .map_err(|e| BailianASRError::ConnectionFailed(e.to_string()))?;
+        request.headers_mut().insert(
+            "Authorization",
+            HeaderValue::from_str(&format!("bearer {}", self.credentials.api_key.trim()))
+                .map_err(|e| BailianASRError::ConnectionFailed(e.to_string()))?,
+        );
+
+        // #region agent log
         agent_dbg_5e2050(
             "A",
             "bailian.rs:open_session",
