@@ -1,0 +1,18 @@
+{
+  "name": "OpenLess",
+  "user": "ubuntu",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "vite-dev",
+      "command": "cd openless-all/app && npm run dev",
+      "description": "Vite dev server for the OpenLess React frontend on http://localhost:1420 (uses mocked IPC data when run outside the Tauri runtime)."
+    }
+  ],
+  "ports": [
+    {
+      "name": "vite-dev",
+      "port": 1420
+    }
+  ]
+}

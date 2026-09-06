@@ -7,7 +7,10 @@ Package.resolved
 xcuserdata/
 DerivedData/
 ChatGPT Image*.jpg
-.cursor
+.cursor/*
+# Track the Cloud Agent environment config while keeping local .cursor settings ignored.
+!.cursor/environment.json
+!.cursor/install.sh
 # Local config / secrets
 *.env
 config.local.json
