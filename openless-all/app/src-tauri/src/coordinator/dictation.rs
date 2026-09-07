@@ -2130,6 +2130,39 @@ pub(super) fn request_stop_during_starting(inner: &Arc<Inner>, reason: &str) {
     stop_recorder_if_pending_start_stop(inner);
 }
 
+enum OpenSessionWait<E> {
+    Finished(Result<(), E>),
+    Abandoned,
+}
+
+async fn wait_until_startup_abandoned(inner: &Arc<Inner>, session_id: SessionId) {
+    loop {
+        {
+            let st = inner.state.lock();
+            if st.session_id != session_id
+                || st.pending_stop
+                || st.cancelled
+                || st.phase != SessionPhase::Starting
+            {
+                return;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+async fn await_open_session_or_abandon<E>(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    open: impl std::future::Future<Output = Result<(), E>>,
+) -> OpenSessionWait<E> {
+    tokio::select! {
+        biased;
+        result = open => OpenSessionWait::Finished(result),
+        () = wait_until_startup_abandoned(inner, session_id) => OpenSessionWait::Abandoned,
+    }
+}
+
 pub(super) async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     begin_session_as(inner, false, false).await
 }
@@ -2547,7 +2580,38 @@ pub(super) async fn begin_session_as(
         start_recorder_for_starting(inner, current_session_id, &active_asr, consumer, remote)
             .await?;
 
-        if let Err(e) = asr.open_session().await {
+        let open_started = std::time::Instant::now();
+        match await_open_session_or_abandon(inner, current_session_id, asr.open_session()).await {
+            OpenSessionWait::Abandoned => {
+                // #region agent log
+                {
+                    let st = inner.state.lock();
+                    agent_dbg_5e2050(
+                        "F",
+                        "dictation.rs:open_session_abandoned",
+                        "bailian connect aborted after stop",
+                        serde_json::json!({
+                            "runId": "post-fix",
+                            "elapsed_ms": open_started.elapsed().as_millis(),
+                            "pending_stop": st.pending_stop,
+                            "cancelled": st.cancelled,
+                            "phase": format!("{:?}", st.phase)
+                        }),
+                    );
+                }
+                // #endregion
+                log::info!(
+                    "[coord] aborting Bailian open_session after user stop during Starting ({} ms)",
+                    open_started.elapsed().as_millis()
+                );
+                asr.cancel();
+                discard_startup_resources_for_session(inner, current_session_id);
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                set_phase_idle_if_session_matches(inner, current_session_id);
+                return Ok(());
+            }
+            OpenSessionWait::Finished(Ok(())) => {}
+            OpenSessionWait::Finished(Err(e)) => {
             log::error!("[coord] open Bailian ASR session failed: {e}");
             // #region agent log
             {
@@ -2604,6 +2668,7 @@ pub(super) async fn begin_session_as(
             set_phase_idle_if_session_matches(inner, current_session_id);
             schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
             return Err(e.to_string());
+            }
         }
         match startup_race_status_for_starting(inner, current_session_id) {
             StartupRaceStatus::ActiveStarting => {}
