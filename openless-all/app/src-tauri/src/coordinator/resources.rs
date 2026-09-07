@@ -433,8 +433,34 @@ pub(super) fn stop_recorder_if_pending_start_stop(inner: &Arc<Inner>) {
     if let Some(rec) = take_recorder_for_session(inner, session_id) {
         rec.stop();
         release_recording_mute(inner, "dictation");
-        let elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
-        emit_capsule(inner, CapsuleState::Transcribing, 0.0, elapsed, None, None);
+        // Starting 阶段 ASR 还没连上，这里不能切 Transcribing：停录会立刻 abort
+        // open_session，识别中胶囊会被留在屏幕上一直转圈。
+        let phase = format!("{:?}", inner.state.lock().phase);
+        // #region agent log
+        {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let payload = serde_json::json!({
+                "sessionId": "5e2050",
+                "runId": "post-fix",
+                "hypothesisId": "G",
+                "location": "resources.rs:stop_recorder_if_pending_start_stop",
+                "message": "stopped recorder without transcribing capsule",
+                "data": { "phase": phase, "emitted_transcribing": false },
+                "timestamp": timestamp
+            });
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(r"f:\编程\openless\debug-5e2050.log")
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "{payload}");
+            }
+        }
+        // #endregion
         log::info!("[coord] stopped recorder while ASR is still connecting");
     }
 }

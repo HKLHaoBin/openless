@@ -2608,6 +2608,19 @@ pub(super) async fn begin_session_as(
                 discard_startup_resources_for_session(inner, current_session_id);
                 restore_prepared_windows_ime_session(inner, current_session_id);
                 set_phase_idle_if_session_matches(inner, current_session_id);
+                emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
+                schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
+                // #region agent log
+                agent_dbg_5e2050(
+                    "H",
+                    "dictation.rs:open_session_abandoned",
+                    "capsule cancelled after bailian abandon",
+                    serde_json::json!({
+                        "runId": "post-fix",
+                        "capsule": "cancelled"
+                    }),
+                );
+                // #endregion
                 return Ok(());
             }
             OpenSessionWait::Finished(Ok(())) => {}
@@ -2649,6 +2662,8 @@ pub(super) async fn begin_session_as(
                     discard_startup_resources_for_session(inner, current_session_id);
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     set_phase_idle_if_session_matches(inner, current_session_id);
+                    emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
+                    schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
                     return Ok(());
                 }
                 StartupRaceStatus::ActiveStarting => {
@@ -2678,6 +2693,8 @@ pub(super) async fn begin_session_as(
                 discard_startup_resources_for_session(inner, current_session_id);
                 restore_prepared_windows_ime_session(inner, current_session_id);
                 set_phase_idle_if_session_matches(inner, current_session_id);
+                emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
+                schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
                 return Ok(());
             }
             StartupRaceStatus::StaleContinuation => {
