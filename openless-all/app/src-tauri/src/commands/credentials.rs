@@ -38,6 +38,7 @@ impl openless_core::credentials::CredentialMetadataStore for SystemCredentialMet
         Result<openless_core::CredentialMetadata, openless_core::BackendError>,
     > {
         run_credential_task(|| {
+            require_readable_vault()?;
             CredentialsVault::load_metadata().map_err(credential_persistence_error)
         })
     }
@@ -57,6 +58,7 @@ impl openless_core::credentials::CredentialMetadataStore for SystemCredentialMet
         channel_id: String,
     ) -> futures_util::future::BoxFuture<'static, Result<bool, openless_core::BackendError>> {
         run_credential_task(move || {
+            require_readable_vault()?;
             CredentialsVault::channel_has_secrets(kind, &channel_id)
                 .map_err(credential_persistence_error)
         })
@@ -115,7 +117,10 @@ impl openless_core::CredentialStore for SystemCredentialStore {
         Result<CredentialsStatus, openless_core::BackendError>,
     > {
         let model_store = self.model_store.clone();
-        run_credential_task(move || credentials_status(preferences, model_store.as_deref()))
+        run_credential_task(move || {
+            require_readable_vault()?;
+            credentials_status(preferences, model_store.as_deref())
+        })
     }
 
     fn read(
@@ -126,6 +131,7 @@ impl openless_core::CredentialStore for SystemCredentialStore {
         Result<Option<openless_core::SecretValue>, openless_core::BackendError>,
     > {
         run_credential_task(move || {
+            require_readable_vault()?;
             read_vault_credential(&key).map(|value| value.map(openless_core::SecretValue::new))
         })
     }
@@ -421,8 +427,18 @@ fn invalid_credential_key(key: &openless_core::CredentialKey) -> openless_core::
 fn credential_persistence_error(error: anyhow::Error) -> openless_core::BackendError {
     openless_core::BackendError::new(
         openless_core::BackendErrorCode::Persistence,
-        format!("credential vault operation failed: {error}"),
+        format!("credential vault operation failed: {error:#}"),
     )
+}
+
+fn require_readable_vault() -> Result<(), openless_core::BackendError> {
+    match CredentialsVault::last_read_error() {
+        Some(error) => Err(openless_core::BackendError::new(
+            openless_core::BackendErrorCode::Persistence,
+            format!("无法读取已保存的凭据：{error}"),
+        )),
+        None => Ok(()),
+    }
 }
 
 #[tauri::command]
