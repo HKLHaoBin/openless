@@ -433,10 +433,17 @@ fn credential_persistence_error(error: anyhow::Error) -> openless_core::BackendE
 
 fn require_readable_vault() -> Result<(), openless_core::BackendError> {
     match CredentialsVault::last_read_error() {
-        Some(error) => Err(openless_core::BackendError::new(
-            openless_core::BackendErrorCode::Persistence,
-            format!("无法读取已保存的凭据：{error}"),
-        )),
+        Some(error) => {
+            // #region agent log
+            log::warn!(
+                "[agent-dbg] {{\"sessionId\":\"f73b06\",\"hypothesisId\":\"H6\",\"location\":\"credentials.rs:require_readable_vault\",\"message\":\"status/read blocked by last vault error\",\"data\":{{\"blocked\":true}},\"timestamp\":0}}"
+            );
+            // #endregion
+            Err(openless_core::BackendError::new(
+                openless_core::BackendErrorCode::Persistence,
+                format!("无法读取已保存的凭据：{error}"),
+            ))
+        }
         None => Ok(()),
     }
 }
