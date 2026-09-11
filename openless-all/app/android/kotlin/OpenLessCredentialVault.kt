@@ -1,5 +1,7 @@
 package com.openless.app
 
+import android.os.Handler
+import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
@@ -11,6 +13,9 @@ import java.security.InvalidKeyException
 import java.security.KeyStore
 import java.security.KeyStoreException
 import java.security.UnrecoverableKeyException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import javax.crypto.AEADBadTagException
 import javax.crypto.BadPaddingException
 import javax.crypto.KeyGenerator
@@ -28,13 +33,37 @@ private fun credentialResponse(status: Byte, payload: ByteArray = byteArrayOf())
 
 private fun diagnosticResponse(status: Byte, error: Throwable): ByteArray {
     val name = buildString {
-        append(error.javaClass.simpleName.take(48))
+        append(error.javaClass.simpleName.take(40))
         error.cause?.javaClass?.simpleName?.let { cause ->
             append('/')
-            append(cause.take(48))
+            append(cause.take(40))
         }
+        keystoreNumericCode(error)?.let { code ->
+            append(':')
+            append(code)
+        }
+        append(':')
+        append(if (Looper.myLooper() == Looper.getMainLooper()) "main" else "bg")
     }
     return credentialResponse(status, name.toByteArray(Charsets.UTF_8))
+}
+
+private fun keystoreNumericCode(error: Throwable): Int? {
+    var current: Throwable? = error
+    while (current != null) {
+        try {
+            for (methodName in arrayOf("getNumericErrorCode", "getErrorCode")) {
+                val method =
+                    current.javaClass.methods.firstOrNull { it.name == methodName && it.parameterCount == 0 }
+                        ?: continue
+                when (val value = method.invoke(current)) {
+                    is Int -> return value
+                }
+            }
+        } catch (_: Throwable) {}
+        current = current.cause
+    }
+    return null
 }
 
 internal fun credentialStatusForKeyLoadFailure(error: GeneralSecurityException): Byte {
@@ -56,11 +85,20 @@ internal fun credentialStatusForCipherKeyFailure(error: InvalidKeyException): By
 internal class AndroidKeystoreCredentialVault(private val alias: String) {
     @Synchronized
     fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray {
+        val first = sealOnce(plaintext, aad, recreate = false)
+        if (first.first() == CREDENTIAL_STATUS_OK || first.first() == CREDENTIAL_STATUS_MALFORMED) {
+            return first
+        }
+        return sealOnce(plaintext, aad, recreate = true)
+    }
+
+    private fun sealOnce(plaintext: ByteArray, aad: ByteArray, recreate: Boolean): ByteArray {
         return try {
-            credentialResponse(
-                CREDENTIAL_STATUS_OK,
-                OpenLessCredentialCipher.seal(getOrCreateKey(), plaintext, aad),
-            )
+            if (recreate) {
+                deleteEntryQuiet()
+            }
+            val key = if (recreate) createKey() else getOrCreateKey()
+            credentialResponse(CREDENTIAL_STATUS_OK, OpenLessCredentialCipher.seal(key, plaintext, aad))
         } catch (error: KeyPermanentlyInvalidatedException) {
             diagnosticResponse(credentialStatusForKeyLoadFailure(error), error)
         } catch (error: UnrecoverableKeyException) {
@@ -175,6 +213,11 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
         existingKey()?.let {
             return it
         }
+        return createKey()
+    }
+
+    @Throws(GeneralSecurityException::class, IOException::class)
+    private fun createKey(): SecretKey {
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER)
         generator.init(
             KeyGenParameterSpec.Builder(
@@ -190,6 +233,15 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
         return generator.generateKey()
     }
 
+    private fun deleteEntryQuiet() {
+        try {
+            val keyStore = loadKeyStore()
+            if (keyStore.containsAlias(alias)) {
+                keyStore.deleteEntry(alias)
+            }
+        } catch (_: Exception) {}
+    }
+
     @Throws(KeyStoreException::class, IOException::class, GeneralSecurityException::class)
     private fun loadKeyStore(): KeyStore {
         return KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
@@ -202,19 +254,49 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
 
 @Keep
 object OpenLessCredentialVault {
-    private const val KEY_ALIAS = "com.openless.app.credentials.v2"
-    private const val MIGRATION_MARKER_ALIAS = "com.openless.app.credentials.v2.migrated"
+    // v2 alias on this HyperOS device became unusable (InvalidKeyException /
+    // ProviderException). v3 is a fresh Keystore2 slot after envelope wipe.
+    private const val KEY_ALIAS = "com.openless.app.credentials.v3"
+    private const val MIGRATION_MARKER_ALIAS = "com.openless.app.credentials.v3.migrated"
     private val backend = AndroidKeystoreCredentialVault(KEY_ALIAS)
     private val migrationMarker = AndroidKeystoreCredentialVault(MIGRATION_MARKER_ALIAS)
 
     @JvmStatic
-    fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray = backend.seal(plaintext, aad)
+    fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray = runOnMain { backend.seal(plaintext, aad) }
 
-    @JvmStatic fun open(packet: ByteArray, aad: ByteArray): ByteArray = backend.open(packet, aad)
+    @JvmStatic fun open(packet: ByteArray, aad: ByteArray): ByteArray = runOnMain { backend.open(packet, aad) }
 
-    @JvmStatic fun deleteKey(): ByteArray = backend.deleteKey()
+    @JvmStatic fun deleteKey(): ByteArray = runOnMain { backend.deleteKey() }
 
-    @JvmStatic fun migrationComplete(): ByteArray = migrationMarker.keyExists()
+    @JvmStatic fun migrationComplete(): ByteArray = runOnMain { migrationMarker.keyExists() }
 
-    @JvmStatic fun markMigrationComplete(): ByteArray = migrationMarker.ensureKey()
+    @JvmStatic fun markMigrationComplete(): ByteArray = runOnMain { migrationMarker.ensureKey() }
+
+    private fun runOnMain(block: () -> ByteArray): ByteArray {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return block()
+        }
+        val result = arrayOfNulls<ByteArray>(1)
+        val error = arrayOfNulls<Throwable>(1)
+        val latch = CountDownLatch(1)
+        Handler(Looper.getMainLooper()).post {
+            try {
+                result[0] = block()
+            } catch (thrown: Throwable) {
+                error[0] = thrown
+            } finally {
+                latch.countDown()
+            }
+        }
+        if (!latch.await(8, TimeUnit.SECONDS)) {
+            return diagnosticResponse(
+                CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE,
+                TimeoutException("keystore-main-timeout"),
+            )
+        }
+        error[0]?.let { thrown ->
+            return diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, thrown)
+        }
+        return result[0] ?: credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
+    }
 }

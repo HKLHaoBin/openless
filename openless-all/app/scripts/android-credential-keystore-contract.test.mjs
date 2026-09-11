@@ -81,6 +81,8 @@ for (const pattern of [
   /else\s*->\s*CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE/,
   /fun\s+credentialStatusForCipherKeyFailure/,
   /is\s+UserNotAuthenticatedException\s*->\s*CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE/,
+  /com\.openless\.app\.credentials\.v3/,
+  /runOnMain/,
 ]) {
   requirePattern(vault, pattern, `Keystore failure classifier is missing ${pattern}`);
 }
