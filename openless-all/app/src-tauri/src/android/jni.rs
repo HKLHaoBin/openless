@@ -239,7 +239,10 @@ pub mod android {
             return Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string());
         };
         match status {
-            0 => Ok(payload.to_vec()),
+            0 => {
+                log_keystore_debug(method, "status_ok", "");
+                Ok(payload.to_vec())
+            }
             1 => {
                 let detail = String::from_utf8_lossy(payload);
                 log_keystore_debug(method, "status_key_missing", &detail);

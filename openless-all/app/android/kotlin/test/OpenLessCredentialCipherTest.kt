@@ -1,5 +1,6 @@
 package com.openless.app
 
+import java.io.File
 import java.lang.reflect.Modifier
 import java.security.GeneralSecurityException
 import java.security.InvalidKeyException
@@ -118,5 +119,44 @@ class OpenLessCredentialCipherTest {
             CREDENTIAL_STATUS_KEY_MISSING,
             credentialStatusForCipherKeyFailure(InvalidKeyException("Keystore operation failed")),
         )
+    }
+
+    @Test
+    fun softwareAesRoundTripWithoutAndroidKeyStore() {
+        val dir = File.createTempFile("ol-sw-aes", "dir")
+        assertTrue(dir.delete())
+        assertTrue(dir.mkdirs())
+        try {
+            val store = SoftwareAesCredentialStore(dir)
+            val plaintext = "credential-secret".toByteArray()
+            val aad = "format-version-account".toByteArray()
+            val sealed = store.seal(plaintext, aad)
+            assertEquals(CREDENTIAL_STATUS_OK, sealed.first())
+            val packet = sealed.copyOfRange(1, sealed.size)
+            val opened = store.open(packet, aad)
+            assertEquals(CREDENTIAL_STATUS_OK, opened.first())
+            assertArrayEquals(plaintext, opened.copyOfRange(1, opened.size))
+            assertTrue(File(dir, SoftwareAesCredentialStore.SOFTWARE_KEY_NAME).isFile)
+            assertEquals(CREDENTIAL_STATUS_OK, store.markMigrated().first())
+            assertTrue(store.isMigrated())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun softwareAesMissingKeyIsReportedAsMissing() {
+        val dir = File.createTempFile("ol-sw-aes-missing", "dir")
+        assertTrue(dir.delete())
+        assertTrue(dir.mkdirs())
+        try {
+            val store = SoftwareAesCredentialStore(dir)
+            assertEquals(
+                CREDENTIAL_STATUS_KEY_MISSING,
+                store.open(byteArrayOf(12) + ByteArray(12 + 16), "aad".toByteArray()).first(),
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 }

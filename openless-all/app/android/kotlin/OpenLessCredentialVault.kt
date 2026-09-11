@@ -7,11 +7,13 @@ import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.UserNotAuthenticatedException
 import androidx.annotation.Keep
+import java.io.File
 import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.InvalidKeyException
 import java.security.KeyStore
 import java.security.KeyStoreException
+import java.security.SecureRandom
 import java.security.UnrecoverableKeyException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -20,6 +22,7 @@ import javax.crypto.AEADBadTagException
 import javax.crypto.BadPaddingException
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.spec.SecretKeySpec
 
 internal const val CREDENTIAL_STATUS_OK: Byte = 0
 internal const val CREDENTIAL_STATUS_KEY_MISSING: Byte = 1
@@ -252,6 +255,142 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
     }
 }
 
+/**
+ * App-private AES-GCM wrapping key used when AndroidKeyStore/KeyMint rejects
+ * AES-GCM (observed as KeyStoreException numeric 10 on some HyperOS devices).
+ * The raw key is UID-scoped, same as the envelope file; it is not hardware-backed.
+ */
+internal class SoftwareAesCredentialStore(private val directory: File) {
+    fun keyExists(): Boolean {
+        val file = keyFile()
+        return file.isFile && file.length() == KEY_BYTES.toLong()
+    }
+
+    fun isMigrated(): Boolean = migratedFile().isFile || keyExists()
+
+    fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray {
+        return try {
+            val key = loadOrCreateKey()
+            credentialResponse(CREDENTIAL_STATUS_OK, OpenLessCredentialCipher.seal(key, plaintext, aad))
+        } catch (_: IllegalArgumentException) {
+            credentialResponse(CREDENTIAL_STATUS_MALFORMED)
+        } catch (error: GeneralSecurityException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: IOException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: RuntimeException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        }
+    }
+
+    fun open(packet: ByteArray, aad: ByteArray): ByteArray {
+        return try {
+            val key = loadExistingKey() ?: return credentialResponse(CREDENTIAL_STATUS_KEY_MISSING)
+            credentialResponse(
+                CREDENTIAL_STATUS_OK,
+                OpenLessCredentialCipher.open(key, packet, aad),
+            )
+        } catch (_: AEADBadTagException) {
+            credentialResponse(CREDENTIAL_STATUS_AUTHENTICATION_FAILED)
+        } catch (_: BadPaddingException) {
+            credentialResponse(CREDENTIAL_STATUS_AUTHENTICATION_FAILED)
+        } catch (_: IllegalArgumentException) {
+            credentialResponse(CREDENTIAL_STATUS_MALFORMED)
+        } catch (error: GeneralSecurityException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: IOException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: RuntimeException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        }
+    }
+
+    fun deleteKey(): ByteArray {
+        return try {
+            deleteIfPresent(keyFile())
+            deleteIfPresent(migratedFile())
+            credentialResponse(CREDENTIAL_STATUS_OK)
+        } catch (error: IOException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: RuntimeException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        }
+    }
+
+    fun markMigrated(): ByteArray {
+        return try {
+            if (!directory.exists() && !directory.mkdirs() && !directory.isDirectory) {
+                throw IOException("software-migrated-dir")
+            }
+            migratedFile().writeBytes(byteArrayOf(1))
+            restrictPrivate(migratedFile())
+            credentialResponse(CREDENTIAL_STATUS_OK)
+        } catch (error: IOException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: RuntimeException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        }
+    }
+
+    private fun keyFile() = File(directory, SOFTWARE_KEY_NAME)
+
+    private fun migratedFile() = File(directory, SOFTWARE_MIGRATED_NAME)
+
+    @Throws(GeneralSecurityException::class, IOException::class)
+    private fun loadExistingKey(): SecretKey? {
+        val file = keyFile()
+        if (!file.isFile) {
+            return null
+        }
+        val raw = file.readBytes()
+        if (raw.size != KEY_BYTES) {
+            throw GeneralSecurityException("software-key-size")
+        }
+        return SecretKeySpec(raw, "AES")
+    }
+
+    @Throws(GeneralSecurityException::class, IOException::class)
+    private fun loadOrCreateKey(): SecretKey {
+        loadExistingKey()?.let {
+            return it
+        }
+        if (!directory.exists() && !directory.mkdirs() && !directory.isDirectory) {
+            throw IOException("software-key-dir")
+        }
+        val raw = ByteArray(KEY_BYTES)
+        SecureRandom().nextBytes(raw)
+        val file = keyFile()
+        val tmp = File(directory, "$SOFTWARE_KEY_NAME.tmp")
+        tmp.writeBytes(raw)
+        if (!tmp.renameTo(file)) {
+            tmp.delete()
+            return loadExistingKey() ?: throw IOException("software-key-install")
+        }
+        restrictPrivate(file)
+        return SecretKeySpec(raw, "AES")
+    }
+
+    @Throws(IOException::class)
+    private fun deleteIfPresent(file: File) {
+        if (file.exists() && !file.delete()) {
+            throw IOException("software-key-delete")
+        }
+    }
+
+    private fun restrictPrivate(file: File) {
+        file.setReadable(false, false)
+        file.setWritable(false, false)
+        file.setReadable(true, true)
+        file.setWritable(true, true)
+    }
+
+    companion object {
+        const val SOFTWARE_KEY_NAME = "credentials.sw.key"
+        const val SOFTWARE_MIGRATED_NAME = "credentials.sw.migrated"
+        const val KEY_BYTES = 32
+    }
+}
+
 @Keep
 object OpenLessCredentialVault {
     // v2 alias on this HyperOS device became unusable (InvalidKeyException /
@@ -262,15 +401,70 @@ object OpenLessCredentialVault {
     private val migrationMarker = AndroidKeystoreCredentialVault(MIGRATION_MARKER_ALIAS)
 
     @JvmStatic
-    fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray = runOnMain { backend.seal(plaintext, aad) }
+    fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray =
+        runOnMain {
+            val software = softwareStore()
+            if (software?.keyExists() == true) {
+                return@runOnMain software.seal(plaintext, aad)
+            }
+            val keystore = backend.seal(plaintext, aad)
+            if (
+                keystore.first() == CREDENTIAL_STATUS_OK ||
+                    keystore.first() == CREDENTIAL_STATUS_MALFORMED
+            ) {
+                return@runOnMain keystore
+            }
+            val fallback = software?.seal(plaintext, aad) ?: return@runOnMain keystore
+            if (fallback.first() == CREDENTIAL_STATUS_OK) fallback else keystore
+        }
 
-    @JvmStatic fun open(packet: ByteArray, aad: ByteArray): ByteArray = runOnMain { backend.open(packet, aad) }
+    @JvmStatic
+    fun open(packet: ByteArray, aad: ByteArray): ByteArray =
+        runOnMain {
+            val software = softwareStore()
+            if (software?.keyExists() == true) {
+                return@runOnMain software.open(packet, aad)
+            }
+            backend.open(packet, aad)
+        }
 
-    @JvmStatic fun deleteKey(): ByteArray = runOnMain { backend.deleteKey() }
+    @JvmStatic
+    fun deleteKey(): ByteArray =
+        runOnMain {
+            val software = softwareStore()?.deleteKey() ?: credentialResponse(CREDENTIAL_STATUS_OK)
+            val keystore = backend.deleteKey()
+            if (software.first() == CREDENTIAL_STATUS_OK) keystore else software
+        }
 
-    @JvmStatic fun migrationComplete(): ByteArray = runOnMain { migrationMarker.keyExists() }
+    @JvmStatic
+    fun migrationComplete(): ByteArray =
+        runOnMain {
+            val software = softwareStore()
+            if (software?.isMigrated() == true) {
+                credentialResponse(CREDENTIAL_STATUS_OK, byteArrayOf(1))
+            } else {
+                migrationMarker.keyExists()
+            }
+        }
 
-    @JvmStatic fun markMigrationComplete(): ByteArray = runOnMain { migrationMarker.ensureKey() }
+    @JvmStatic
+    fun markMigrationComplete(): ByteArray =
+        runOnMain {
+            val software = softwareStore()
+            if (software?.keyExists() == true) {
+                return@runOnMain software.markMigrated()
+            }
+            val keystore = migrationMarker.ensureKey()
+            if (keystore.first() == CREDENTIAL_STATUS_OK) {
+                return@runOnMain keystore
+            }
+            software?.markMigrated() ?: keystore
+        }
+
+    private fun softwareStore(): SoftwareAesCredentialStore? {
+        val context = OpenLessAppContext.context ?: return null
+        return SoftwareAesCredentialStore(File(context.filesDir, "OpenLess"))
+    }
 
     private fun runOnMain(block: () -> ByteArray): ByteArray {
         if (Looper.myLooper() == Looper.getMainLooper()) {

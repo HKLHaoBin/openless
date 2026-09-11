@@ -83,6 +83,9 @@ for (const pattern of [
   /is\s+UserNotAuthenticatedException\s*->\s*CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE/,
   /com\.openless\.app\.credentials\.v3/,
   /runOnMain/,
+  /class SoftwareAesCredentialStore/,
+  /credentials\.sw\.key/,
+  /SecretKeySpec/,
 ]) {
   requirePattern(vault, pattern, `Keystore failure classifier is missing ${pattern}`);
 }
@@ -98,6 +101,8 @@ for (const pattern of [
   /tamperedAad/,
   /unrecoverableKeyExceptionRemainsRetryable/,
   /invalidKeyExceptionIsTreatedAsUnrecoverable/,
+  /softwareAesRoundTripWithoutAndroidKeyStore/,
+  /softwareAesMissingKeyIsReportedAsMissing/,
 ]) {
   requirePattern(unitTest, pattern, `JVM crypto tests are missing ${pattern}`);
 }
