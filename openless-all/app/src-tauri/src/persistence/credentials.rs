@@ -140,7 +140,9 @@ fn agent_debug_ndjson(hypothesis_id: &str, location: &str, message: &str, data: 
     );
     log::warn!("[agent-dbg] {line}");
     let mut paths = Vec::new();
-    paths.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../debug-f73b06.log"));
+    paths.push(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../debug-f73b06.log"),
+    );
     #[cfg(any(target_os = "android", test))]
     if let Ok(dir) = super::android_storage::android_log_dir() {
         paths.push(dir.join("debug-f73b06.log"));
@@ -158,28 +160,40 @@ fn agent_debug_ndjson(hypothesis_id: &str, location: &str, message: &str, data: 
     // #endregion
 }
 
-/// Android setup calls `Core.start()` → `status()` → `configuration_snapshot`,
-/// which uses this path. Returning `Err` here aborts the Tauri setup hook.
+/// Mutations must not persist an empty default over an unreadable envelope.
+/// Returning `Err` lets Core surface Persistence after a real Keystore retry.
 #[cfg(any(target_os = "android", test))]
 fn android_credentials_root_for_update(
     loader: impl FnOnce() -> Result<Option<CredsRoot>>,
 ) -> Result<CredsRoot> {
-    let root = load_credentials_into_cache_with(loader);
-    // #region agent log
-    agent_debug_ndjson(
-        "H2",
-        "credentials.rs:android_credentials_root_for_update",
-        "android for-update resolved without surfacing envelope Err",
-        &format!(
-            "{{\"cached\":{},\"lastReadError\":{}}}",
-            credentials_cache().lock().is_some(),
-            last_vault_read_error_slot()
-                .lock()
-                .is_some()
-        ),
-    );
-    // #endregion
-    Ok(root)
+    match loader() {
+        Ok(loaded) => {
+            let root = loaded.unwrap_or_default();
+            clear_vault_read_error();
+            store_credentials_cache(&root);
+            // #region agent log
+            agent_debug_ndjson(
+                "H7",
+                "credentials.rs:android_credentials_root_for_update",
+                "android for-update loaded envelope",
+                "{\"ok\":true}",
+            );
+            // #endregion
+            Ok(root)
+        }
+        Err(error) => {
+            record_vault_read_failure(&error);
+            // #region agent log
+            agent_debug_ndjson(
+                "H7",
+                "credentials.rs:android_credentials_root_for_update",
+                "android for-update retried Keystore and still failed",
+                "{\"ok\":false}",
+            );
+            // #endregion
+            Err(error)
+        }
+    }
 }
 
 fn clear_vault_read_error() {
@@ -2688,10 +2702,10 @@ mod tests {
     #[cfg(not(windows))]
     use super::load_android_credentials_from_source_with_crypto;
     use super::{
-        android_persistable_credentials, chunk_json_payload, credentials_cache,
-        get_android_marketplace_token_at, load_android_credentials_from_path,
+        android_credentials_root_for_update, android_persistable_credentials, chunk_json_payload,
+        credentials_cache, get_android_marketplace_token_at, load_android_credentials_from_path,
         load_android_credentials_from_path_with_crypto, load_credentials_into_cache_with,
-        android_credentials_root_for_update, lookup_account, lookup_marketplace_github_token, lookup_omni_account,
+        lookup_account, lookup_marketplace_github_token, lookup_omni_account,
         omni_extra_headers_json, omni_temperature_string, parse_extra_headers_json,
         parse_llm_temperature, reset_credentials_cache_for_tests,
         set_llm_extra_headers_for_provider_in_root, set_llm_temperature_for_provider_in_root,
@@ -3436,21 +3450,25 @@ mod tests {
     }
 
     #[test]
-    fn android_for_update_path_does_not_fail_startup_on_envelope_error() {
+    fn android_for_update_path_retries_and_does_not_cache_on_envelope_error() {
         use anyhow::Context;
         reset_credentials_cache_for_tests();
-        let root = android_credentials_root_for_update(|| {
+        let err = android_credentials_root_for_update(|| {
             Err(anyhow!("temporarily unavailable")
                 .context("Android credential authentication or key operation failed")
                 .context("read Android credential envelope"))
         })
-        .expect("startup must receive a default root, not Err");
-        assert!(lookup_marketplace_github_token(&root).is_none());
+        .expect_err("mutations must not receive a default root to persist");
         assert!(credentials_cache().lock().is_none());
         let error = CredentialsVault::last_read_error().expect("vault error should be recorded");
         assert!(
             error.contains("temporarily unavailable"),
             "error chain should include the Keystore kind, got {error}"
+        );
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("temporarily unavailable"),
+            "returned error should include the Keystore kind, got {chain}"
         );
     }
 

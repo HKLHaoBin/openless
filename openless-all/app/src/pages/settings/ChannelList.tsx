@@ -140,6 +140,12 @@ function modelAccountFor(kind: ChannelKind): string {
   return kind === 'llm' ? 'ark.model_id' : 'asr.model';
 }
 
+function failedOpMessage(error: unknown, fallback: string): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  const trimmed = detail.trim();
+  return trimmed || fallback;
+}
+
 /**
  * 把后端的错误串压成按钮上放得下的短标签，且要**能指导行动**：
  * 401 是 key 不对、429 是被限流等会儿再说、超时是网络——用户看到才知道该改什么。
@@ -264,7 +270,11 @@ export function ChannelList({
       await refresh();
     } catch (error) {
       console.error('[channels] create failed', error);
-      emitSaved('failed', t('common.operationFailed'));
+      const message = failedOpMessage(error, t('common.operationFailed'));
+      // #region agent log
+      fetch('http://127.0.0.1:7807/ingest/0e5d9157-0519-49b4-bb72-cb173586e4dc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f73b06'},body:JSON.stringify({sessionId:'f73b06',hypothesisId:'H8',location:'ChannelList.tsx:startCreate',message:'createChannel failed',data:{hasDetail:message!==t('common.operationFailed'),prefix:message.slice(0,48)},timestamp:Date.now(),runId:'post-fix'})}).catch(()=>{});
+      // #endregion
+      emitSaved('failed', message);
     } finally {
       setCreatingBusy(false);
     }
