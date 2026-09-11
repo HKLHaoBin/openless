@@ -241,7 +241,8 @@ pub mod android {
         match status {
             0 => Ok(payload.to_vec()),
             1 => {
-                log_keystore_debug(method, "status", "key_missing");
+                let detail = String::from_utf8_lossy(payload);
+                log_keystore_debug(method, "status_key_missing", &detail);
                 Err(KEYSTORE_KEY_MISSING.to_string())
             }
             2 => {

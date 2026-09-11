@@ -176,6 +176,11 @@ pub(super) fn read(
             Ok(ReadOutcome::Plaintext(plaintext))
         }
         Err(StoreError::Crypto(CryptoErrorKind::KeyMissingOrInvalidated)) => {
+            // #region agent log
+            log::warn!(
+                "[agent-dbg] {{\"sessionId\":\"f73b06\",\"hypothesisId\":\"H13\",\"location\":\"android_credentials.rs:read\",\"message\":\"wiping envelope after unusable Keystore key\",\"data\":{{\"hadMain\":true}},\"timestamp\":0}}"
+            );
+            // #endregion
             // The ciphertext can no longer be recovered. Reset the alias first;
             // if that is temporarily unavailable, preserve the file for retry.
             crypto.delete_key().map_err(StoreError::Crypto)?;

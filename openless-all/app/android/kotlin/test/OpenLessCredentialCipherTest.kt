@@ -2,6 +2,7 @@ package com.openless.app
 
 import java.lang.reflect.Modifier
 import java.security.GeneralSecurityException
+import java.security.InvalidKeyException
 import java.security.UnrecoverableKeyException
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -108,6 +109,14 @@ class OpenLessCredentialCipherTest {
         assertEquals(
             CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE,
             credentialStatusForKeyLoadFailure(UnrecoverableKeyException("backend busy")),
+        )
+    }
+
+    @Test
+    fun invalidKeyExceptionIsTreatedAsUnrecoverable() {
+        assertEquals(
+            CREDENTIAL_STATUS_KEY_MISSING,
+            credentialStatusForCipherKeyFailure(InvalidKeyException("Keystore operation failed")),
         )
     }
 }

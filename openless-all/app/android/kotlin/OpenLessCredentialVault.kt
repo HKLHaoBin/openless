@@ -3,9 +3,11 @@ package com.openless.app
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
+import android.security.keystore.UserNotAuthenticatedException
 import androidx.annotation.Keep
 import java.io.IOException
 import java.security.GeneralSecurityException
+import java.security.InvalidKeyException
 import java.security.KeyStore
 import java.security.KeyStoreException
 import java.security.UnrecoverableKeyException
@@ -25,10 +27,13 @@ private fun credentialResponse(status: Byte, payload: ByteArray = byteArrayOf())
 }
 
 private fun diagnosticResponse(status: Byte, error: Throwable): ByteArray {
-    if (status != CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE) {
-        return credentialResponse(status)
+    val name = buildString {
+        append(error.javaClass.simpleName.take(48))
+        error.cause?.javaClass?.simpleName?.let { cause ->
+            append('/')
+            append(cause.take(48))
+        }
     }
-    val name = error.javaClass.simpleName.take(96)
     return credentialResponse(status, name.toByteArray(Charsets.UTF_8))
 }
 
@@ -36,6 +41,14 @@ internal fun credentialStatusForKeyLoadFailure(error: GeneralSecurityException):
     return when (error) {
         is KeyPermanentlyInvalidatedException -> CREDENTIAL_STATUS_KEY_MISSING
         else -> CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE
+    }
+}
+
+internal fun credentialStatusForCipherKeyFailure(error: InvalidKeyException): Byte {
+    return when (error) {
+        is UserNotAuthenticatedException -> CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE
+        // Cipher cannot use this key, so the envelope cannot be recovered.
+        else -> CREDENTIAL_STATUS_KEY_MISSING
     }
 }
 
@@ -55,6 +68,8 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
             // broad JCA exception too. Only an absent alias or the explicit
             // permanent-invalidated exception is safe to treat as data loss.
             diagnosticResponse(credentialStatusForKeyLoadFailure(error), error)
+        } catch (error: InvalidKeyException) {
+            diagnosticResponse(credentialStatusForCipherKeyFailure(error), error)
         } catch (_: IllegalArgumentException) {
             credentialResponse(CREDENTIAL_STATUS_MALFORMED)
         } catch (error: GeneralSecurityException) {
@@ -78,6 +93,8 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
             diagnosticResponse(credentialStatusForKeyLoadFailure(error), error)
         } catch (error: UnrecoverableKeyException) {
             diagnosticResponse(credentialStatusForKeyLoadFailure(error), error)
+        } catch (error: InvalidKeyException) {
+            diagnosticResponse(credentialStatusForCipherKeyFailure(error), error)
         } catch (_: AEADBadTagException) {
             credentialResponse(CREDENTIAL_STATUS_AUTHENTICATION_FAILED)
         } catch (_: BadPaddingException) {

@@ -79,6 +79,8 @@ if (
 for (const pattern of [
   /is\s+KeyPermanentlyInvalidatedException\s*->\s*CREDENTIAL_STATUS_KEY_MISSING/,
   /else\s*->\s*CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE/,
+  /fun\s+credentialStatusForCipherKeyFailure/,
+  /is\s+UserNotAuthenticatedException\s*->\s*CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE/,
 ]) {
   requirePattern(vault, pattern, `Keystore failure classifier is missing ${pattern}`);
 }
@@ -93,6 +95,7 @@ for (const pattern of [
   /tamperedCiphertext/,
   /tamperedAad/,
   /unrecoverableKeyExceptionRemainsRetryable/,
+  /invalidKeyExceptionIsTreatedAsUnrecoverable/,
 ]) {
   requirePattern(unitTest, pattern, `JVM crypto tests are missing ${pattern}`);
 }
