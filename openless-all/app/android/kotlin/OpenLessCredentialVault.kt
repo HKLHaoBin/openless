@@ -24,6 +24,14 @@ private fun credentialResponse(status: Byte, payload: ByteArray = byteArrayOf())
     return byteArrayOf(status) + payload
 }
 
+private fun diagnosticResponse(status: Byte, error: Throwable): ByteArray {
+    if (status != CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE) {
+        return credentialResponse(status)
+    }
+    val name = error.javaClass.simpleName.take(96)
+    return credentialResponse(status, name.toByteArray(Charsets.UTF_8))
+}
+
 internal fun credentialStatusForKeyLoadFailure(error: GeneralSecurityException): Byte {
     return when (error) {
         is KeyPermanentlyInvalidatedException -> CREDENTIAL_STATUS_KEY_MISSING
@@ -41,18 +49,20 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
                 OpenLessCredentialCipher.seal(getOrCreateKey(), plaintext, aad),
             )
         } catch (error: KeyPermanentlyInvalidatedException) {
-            credentialResponse(credentialStatusForKeyLoadFailure(error))
+            diagnosticResponse(credentialStatusForKeyLoadFailure(error), error)
         } catch (error: UnrecoverableKeyException) {
             // Keystore2 wraps backend-busy and other provider failures in this
             // broad JCA exception too. Only an absent alias or the explicit
             // permanent-invalidated exception is safe to treat as data loss.
-            credentialResponse(credentialStatusForKeyLoadFailure(error))
+            diagnosticResponse(credentialStatusForKeyLoadFailure(error), error)
         } catch (_: IllegalArgumentException) {
             credentialResponse(CREDENTIAL_STATUS_MALFORMED)
-        } catch (_: GeneralSecurityException) {
-            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
-        } catch (_: IOException) {
-            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
+        } catch (error: GeneralSecurityException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: IOException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: RuntimeException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
         }
     }
 
@@ -65,19 +75,21 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
                 OpenLessCredentialCipher.open(key, packet, aad),
             )
         } catch (error: KeyPermanentlyInvalidatedException) {
-            credentialResponse(credentialStatusForKeyLoadFailure(error))
+            diagnosticResponse(credentialStatusForKeyLoadFailure(error), error)
         } catch (error: UnrecoverableKeyException) {
-            credentialResponse(credentialStatusForKeyLoadFailure(error))
+            diagnosticResponse(credentialStatusForKeyLoadFailure(error), error)
         } catch (_: AEADBadTagException) {
             credentialResponse(CREDENTIAL_STATUS_AUTHENTICATION_FAILED)
         } catch (_: BadPaddingException) {
             credentialResponse(CREDENTIAL_STATUS_AUTHENTICATION_FAILED)
         } catch (_: IllegalArgumentException) {
             credentialResponse(CREDENTIAL_STATUS_MALFORMED)
-        } catch (_: GeneralSecurityException) {
-            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
-        } catch (_: IOException) {
-            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
+        } catch (error: GeneralSecurityException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: IOException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: RuntimeException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
         }
     }
 
@@ -89,10 +101,12 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
                 keyStore.deleteEntry(alias)
             }
             credentialResponse(CREDENTIAL_STATUS_OK)
-        } catch (_: GeneralSecurityException) {
-            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
-        } catch (_: IOException) {
-            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
+        } catch (error: GeneralSecurityException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: IOException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: RuntimeException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
         }
     }
 
@@ -103,10 +117,12 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
                 CREDENTIAL_STATUS_OK,
                 byteArrayOf(if (loadKeyStore().containsAlias(alias)) 1 else 0),
             )
-        } catch (_: GeneralSecurityException) {
-            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
-        } catch (_: IOException) {
-            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
+        } catch (error: GeneralSecurityException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: IOException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: RuntimeException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
         }
     }
 
@@ -116,13 +132,15 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
             getOrCreateKey()
             credentialResponse(CREDENTIAL_STATUS_OK)
         } catch (error: KeyPermanentlyInvalidatedException) {
-            credentialResponse(credentialStatusForKeyLoadFailure(error))
+            diagnosticResponse(credentialStatusForKeyLoadFailure(error), error)
         } catch (error: UnrecoverableKeyException) {
-            credentialResponse(credentialStatusForKeyLoadFailure(error))
-        } catch (_: GeneralSecurityException) {
-            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
-        } catch (_: IOException) {
-            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
+            diagnosticResponse(credentialStatusForKeyLoadFailure(error), error)
+        } catch (error: GeneralSecurityException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: IOException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
+        } catch (error: RuntimeException) {
+            diagnosticResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE, error)
         }
     }
 

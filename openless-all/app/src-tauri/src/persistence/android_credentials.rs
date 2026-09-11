@@ -129,6 +129,14 @@ pub(super) fn read(
     crypto: &mut impl AndroidCredentialsCrypto,
 ) -> Result<ReadOutcome, StoreError> {
     recover_verified_sanitized_legacy(path)?;
+    // #region agent log
+    log::warn!(
+        "[agent-dbg] {{\"sessionId\":\"f73b06\",\"hypothesisId\":\"H12\",\"location\":\"android_credentials.rs:read\",\"message\":\"envelope files\",\"data\":{{\"main\":{},\"pending\":{},\"tmp\":{}}},\"timestamp\":0}}",
+        path.exists(),
+        verified_v2_temporary_path(path).exists(),
+        v2_temporary_path(path).exists()
+    );
+    // #endregion
     recover_verified_v2_temporary(path, crypto)?;
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
