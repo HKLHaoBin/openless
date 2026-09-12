@@ -8,6 +8,7 @@ import android.security.keystore.KeyProperties
 import android.security.keystore.UserNotAuthenticatedException
 import androidx.annotation.Keep
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.InvalidKeyException
@@ -32,6 +33,32 @@ internal const val CREDENTIAL_STATUS_MALFORMED: Byte = 4
 
 private fun credentialResponse(status: Byte, payload: ByteArray = byteArrayOf()): ByteArray {
     return byteArrayOf(status) + payload
+}
+
+internal fun credentialOpenWithFallback(vararg attempts: () -> ByteArray): ByteArray {
+    var temporarilyUnavailable: ByteArray? = null
+    var malformed: ByteArray? = null
+    var authenticationFailed: ByteArray? = null
+    for (attempt in attempts) {
+        val response = attempt()
+        when (response.firstOrNull()) {
+            CREDENTIAL_STATUS_OK -> return response
+            CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE ->
+                temporarilyUnavailable = temporarilyUnavailable ?: response
+            CREDENTIAL_STATUS_MALFORMED -> malformed = malformed ?: response
+            CREDENTIAL_STATUS_AUTHENTICATION_FAILED ->
+                authenticationFailed = authenticationFailed ?: response
+            CREDENTIAL_STATUS_KEY_MISSING -> {}
+            else ->
+                temporarilyUnavailable =
+                    temporarilyUnavailable
+                        ?: credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
+        }
+    }
+    return temporarilyUnavailable
+        ?: malformed
+        ?: authenticationFailed
+        ?: credentialResponse(CREDENTIAL_STATUS_KEY_MISSING)
 }
 
 private fun diagnosticResponse(status: Byte, error: Throwable): ByteArray {
@@ -88,20 +115,11 @@ internal fun credentialStatusForCipherKeyFailure(error: InvalidKeyException): By
 internal class AndroidKeystoreCredentialVault(private val alias: String) {
     @Synchronized
     fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray {
-        val first = sealOnce(plaintext, aad, recreate = false)
-        if (first.first() == CREDENTIAL_STATUS_OK || first.first() == CREDENTIAL_STATUS_MALFORMED) {
-            return first
-        }
-        return sealOnce(plaintext, aad, recreate = true)
-    }
-
-    private fun sealOnce(plaintext: ByteArray, aad: ByteArray, recreate: Boolean): ByteArray {
         return try {
-            if (recreate) {
-                deleteEntryQuiet()
-            }
-            val key = if (recreate) createKey() else getOrCreateKey()
-            credentialResponse(CREDENTIAL_STATUS_OK, OpenLessCredentialCipher.seal(key, plaintext, aad))
+            credentialResponse(
+                CREDENTIAL_STATUS_OK,
+                OpenLessCredentialCipher.seal(getOrCreateKey(), plaintext, aad),
+            )
         } catch (error: KeyPermanentlyInvalidatedException) {
             diagnosticResponse(credentialStatusForKeyLoadFailure(error), error)
         } catch (error: UnrecoverableKeyException) {
@@ -236,15 +254,6 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
         return generator.generateKey()
     }
 
-    private fun deleteEntryQuiet() {
-        try {
-            val keyStore = loadKeyStore()
-            if (keyStore.containsAlias(alias)) {
-                keyStore.deleteEntry(alias)
-            }
-        } catch (_: Exception) {}
-    }
-
     @Throws(KeyStoreException::class, IOException::class, GeneralSecurityException::class)
     private fun loadKeyStore(): KeyStore {
         return KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
@@ -266,7 +275,7 @@ internal class SoftwareAesCredentialStore(private val directory: File) {
         return file.isFile && file.length() == KEY_BYTES.toLong()
     }
 
-    fun isMigrated(): Boolean = migratedFile().isFile || keyExists()
+    fun isMigrated(): Boolean = migratedFile().isFile
 
     fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray {
         return try {
@@ -361,12 +370,20 @@ internal class SoftwareAesCredentialStore(private val directory: File) {
         SecureRandom().nextBytes(raw)
         val file = keyFile()
         val tmp = File(directory, "$SOFTWARE_KEY_NAME.tmp")
-        tmp.writeBytes(raw)
-        if (!tmp.renameTo(file)) {
-            tmp.delete()
-            return loadExistingKey() ?: throw IOException("software-key-install")
+        try {
+            FileOutputStream(tmp).use { output ->
+                output.write(raw)
+                output.fd.sync()
+            }
+            restrictPrivate(tmp)
+            if (!tmp.renameTo(file)) {
+                return loadExistingKey() ?: throw IOException("software-key-install")
+            }
+        } finally {
+            if (tmp.exists()) {
+                tmp.delete()
+            }
         }
-        restrictPrivate(file)
         return SecretKeySpec(raw, "AES")
     }
 
@@ -397,8 +414,13 @@ object OpenLessCredentialVault {
     // ProviderException). v3 is a fresh Keystore2 slot after envelope wipe.
     private const val KEY_ALIAS = "com.openless.app.credentials.v3"
     private const val MIGRATION_MARKER_ALIAS = "com.openless.app.credentials.v3.migrated"
+    private const val LEGACY_KEY_ALIAS = "com.openless.app.credentials.v2"
+    private const val LEGACY_MIGRATION_MARKER_ALIAS = "com.openless.app.credentials.v2.migrated"
     private val backend = AndroidKeystoreCredentialVault(KEY_ALIAS)
     private val migrationMarker = AndroidKeystoreCredentialVault(MIGRATION_MARKER_ALIAS)
+    private val legacyBackend = AndroidKeystoreCredentialVault(LEGACY_KEY_ALIAS)
+    private val legacyMigrationMarker =
+        AndroidKeystoreCredentialVault(LEGACY_MIGRATION_MARKER_ALIAS)
 
     @JvmStatic
     fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray =
@@ -422,10 +444,14 @@ object OpenLessCredentialVault {
     fun open(packet: ByteArray, aad: ByteArray): ByteArray =
         runOnMain {
             val software = softwareStore()
-            if (software?.keyExists() == true) {
-                return@runOnMain software.open(packet, aad)
-            }
-            backend.open(packet, aad)
+            credentialOpenWithFallback(
+                {
+                    software?.open(packet, aad)
+                        ?: credentialResponse(CREDENTIAL_STATUS_KEY_MISSING)
+                },
+                { backend.open(packet, aad) },
+                { legacyBackend.open(packet, aad) },
+            )
         }
 
     @JvmStatic
@@ -433,7 +459,17 @@ object OpenLessCredentialVault {
         runOnMain {
             val software = softwareStore()?.deleteKey() ?: credentialResponse(CREDENTIAL_STATUS_OK)
             val keystore = backend.deleteKey()
-            if (software.first() == CREDENTIAL_STATUS_OK) keystore else software
+            val legacy = legacyBackend.deleteKey()
+            when {
+                software.first() != CREDENTIAL_STATUS_OK -> software
+                keystore.first() != CREDENTIAL_STATUS_OK -> keystore
+                legacy.first() != CREDENTIAL_STATUS_OK ->
+                    credentialResponse(
+                        CREDENTIAL_STATUS_OK,
+                        "legacy-key-cleanup-deferred".toByteArray(Charsets.UTF_8),
+                    )
+                else -> keystore
+            }
         }
 
     @JvmStatic
@@ -443,7 +479,17 @@ object OpenLessCredentialVault {
             if (software?.isMigrated() == true) {
                 credentialResponse(CREDENTIAL_STATUS_OK, byteArrayOf(1))
             } else {
-                migrationMarker.keyExists()
+                val current = migrationMarker.keyExists()
+                if (
+                    current.first() != CREDENTIAL_STATUS_OK ||
+                        current.contentEquals(
+                            credentialResponse(CREDENTIAL_STATUS_OK, byteArrayOf(1))
+                        )
+                ) {
+                    current
+                } else {
+                    legacyMigrationMarker.keyExists()
+                }
             }
         }
 

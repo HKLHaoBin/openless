@@ -3043,12 +3043,6 @@ impl OpenLessBackend {
             Err(error) if error.code == BackendErrorCode::Persistence => {
                 // Vault unreadable (e.g. Android Keystore temporarily unavailable)
                 // must not fail the 2.0 handshake. Dictation still gates on read().
-                // #region agent log
-                log::warn!(
-                    "[agent-dbg] {{\"sessionId\":\"f73b06\",\"hypothesisId\":\"H6\",\"location\":\"api.rs:start\",\"message\":\"start continuing with default credentials after Persistence\",\"data\":{{\"error\":\"{}\"}},\"timestamp\":0}}",
-                    error.to_string().replace('"', "'")
-                );
-                // #endregion
                 log::warn!("[core] startup credential status unavailable: {error}");
                 CredentialsStatus {
                     pipeline_mode: crate::shared_types::effective_pipeline_mode(

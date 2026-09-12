@@ -137,6 +137,7 @@ class OpenLessCredentialCipherTest {
             assertEquals(CREDENTIAL_STATUS_OK, opened.first())
             assertArrayEquals(plaintext, opened.copyOfRange(1, opened.size))
             assertTrue(File(dir, SoftwareAesCredentialStore.SOFTWARE_KEY_NAME).isFile)
+            assertFalse(store.isMigrated())
             assertEquals(CREDENTIAL_STATUS_OK, store.markMigrated().first())
             assertTrue(store.isMigrated())
         } finally {
@@ -158,5 +159,56 @@ class OpenLessCredentialCipherTest {
         } finally {
             dir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun openFallbackPrefersSuccessAndNeverDowngradesARecoverableFailureToMissing() {
+        val success = byteArrayOf(CREDENTIAL_STATUS_OK, 7)
+        var afterSuccessCalled = false
+        assertArrayEquals(
+            success,
+            credentialOpenWithFallback(
+                { byteArrayOf(CREDENTIAL_STATUS_AUTHENTICATION_FAILED) },
+                { success },
+                {
+                    afterSuccessCalled = true
+                    byteArrayOf(CREDENTIAL_STATUS_OK, 8)
+                },
+            ),
+        )
+        assertFalse(afterSuccessCalled)
+        assertEquals(
+            CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE,
+            credentialOpenWithFallback(
+                    { byteArrayOf(CREDENTIAL_STATUS_KEY_MISSING) },
+                    { byteArrayOf(CREDENTIAL_STATUS_AUTHENTICATION_FAILED) },
+                    { byteArrayOf(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE) },
+                )
+                .first(),
+        )
+        assertEquals(
+            CREDENTIAL_STATUS_AUTHENTICATION_FAILED,
+            credentialOpenWithFallback(
+                    { byteArrayOf(CREDENTIAL_STATUS_KEY_MISSING) },
+                    { byteArrayOf(CREDENTIAL_STATUS_AUTHENTICATION_FAILED) },
+                )
+                .first(),
+        )
+        assertEquals(
+            CREDENTIAL_STATUS_MALFORMED,
+            credentialOpenWithFallback(
+                    { byteArrayOf(CREDENTIAL_STATUS_KEY_MISSING) },
+                    { byteArrayOf(CREDENTIAL_STATUS_MALFORMED) },
+                )
+                .first(),
+        )
+        assertEquals(
+            CREDENTIAL_STATUS_KEY_MISSING,
+            credentialOpenWithFallback(
+                    { byteArrayOf(CREDENTIAL_STATUS_KEY_MISSING) },
+                    { byteArrayOf(CREDENTIAL_STATUS_KEY_MISSING) },
+                )
+                .first(),
+        )
     }
 }

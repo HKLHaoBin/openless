@@ -41,20 +41,7 @@ pub fn run() {
             let core_backend = coordinator.backend();
             app.manage(Arc::clone(&core_backend));
             coordinator.tauri_host().bind(app.handle().clone());
-            let startup = tauri::async_runtime::block_on(core_backend.start());
-            // #region agent log
-            match &startup {
-                Ok(snapshot) => log::warn!(
-                    "[agent-dbg] {{\"sessionId\":\"f73b06\",\"hypothesisId\":\"H1\",\"location\":\"mobile_runtime.rs:setup\",\"message\":\"core start ok\",\"data\":{{\"running\":{}}},\"timestamp\":0}}",
-                    snapshot.backend.running
-                ),
-                Err(error) => log::warn!(
-                    "[agent-dbg] {{\"sessionId\":\"f73b06\",\"hypothesisId\":\"H1\",\"location\":\"mobile_runtime.rs:setup\",\"message\":\"core start failed\",\"data\":{{\"error\":\"{}\"}},\"timestamp\":0}}",
-                    error.to_string().replace('"', "'")
-                ),
-            }
-            // #endregion
-            let startup = startup?;
+            let startup = tauri::async_runtime::block_on(core_backend.start())?;
             if !startup.backend.running {
                 return Err("OpenLess Core did not reach the running state".into());
             }

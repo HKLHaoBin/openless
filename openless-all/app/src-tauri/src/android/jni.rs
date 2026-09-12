@@ -209,8 +209,7 @@ pub mod android {
         }
     }
 
-    fn log_keystore_debug(method: &str, kind: &str, detail: &str) {
-        // #region agent log
+    fn log_keystore_failure(method: &str, kind: &str, detail: &str) {
         let safe: String = detail
             .chars()
             .map(|ch| {
@@ -222,10 +221,11 @@ pub mod android {
             })
             .take(120)
             .collect();
-        log::warn!(
-            "[agent-dbg] {{\"sessionId\":\"f73b06\",\"hypothesisId\":\"H9\",\"location\":\"jni.rs:keystore\",\"message\":\"keystore call\",\"data\":{{\"method\":\"{method}\",\"kind\":\"{kind}\",\"detail\":\"{safe}\"}},\"timestamp\":0}}"
-        );
-        // #endregion
+        if safe.is_empty() {
+            log::warn!("[vault] Android Keystore method={method} status={kind}");
+        } else {
+            log::warn!("[vault] Android Keystore method={method} status={kind} detail={safe}");
+        }
     }
 
     fn keystore_temporarily_unavailable<T>(env: &mut JNIEnv) -> Result<T, String> {
@@ -235,34 +235,36 @@ pub mod android {
 
     fn credential_response(method: &str, response: Vec<u8>) -> Result<Vec<u8>, String> {
         let Some((&status, payload)) = response.split_first() else {
-            log_keystore_debug(method, "empty_response", "");
+            log_keystore_failure(method, "empty_response", "");
             return Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string());
         };
         match status {
             0 => {
-                log_keystore_debug(method, "status_ok", "");
+                if method == "deleteKey" && payload == b"legacy-key-cleanup-deferred" {
+                    log_keystore_failure(method, "legacy_cleanup_deferred", "");
+                }
                 Ok(payload.to_vec())
             }
             1 => {
                 let detail = String::from_utf8_lossy(payload);
-                log_keystore_debug(method, "status_key_missing", &detail);
+                log_keystore_failure(method, "status_key_missing", &detail);
                 Err(KEYSTORE_KEY_MISSING.to_string())
             }
             2 => {
-                log_keystore_debug(method, "status", "authentication_failed");
+                log_keystore_failure(method, "authentication_failed", "");
                 Err(KEYSTORE_AUTHENTICATION_FAILED.to_string())
             }
             3 => {
                 let detail = String::from_utf8_lossy(payload);
-                log_keystore_debug(method, "status_temporarily_unavailable", &detail);
+                log_keystore_failure(method, "status_temporarily_unavailable", &detail);
                 Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string())
             }
             4 => {
-                log_keystore_debug(method, "status", "malformed");
+                log_keystore_failure(method, "malformed", "");
                 Err(KEYSTORE_MALFORMED.to_string())
             }
             _ => {
-                log_keystore_debug(method, "status_unknown", &status.to_string());
+                log_keystore_failure(method, "status_unknown", &status.to_string());
                 Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string())
             }
         }
@@ -277,21 +279,21 @@ pub mod android {
             let class = match load_context_class(env, context, CREDENTIAL_VAULT_CLASS) {
                 Ok(class) => class,
                 Err(error) => {
-                    log_keystore_debug(method, "class_load", &error);
+                    log_keystore_failure(method, "class_load", &error);
                     return keystore_temporarily_unavailable(env);
                 }
             };
             let first_array = match env.byte_array_from_slice(first) {
                 Ok(array) => array,
                 Err(error) => {
-                    log_keystore_debug(method, "jni_array", &error.to_string());
+                    log_keystore_failure(method, "jni_array", &error.to_string());
                     return keystore_temporarily_unavailable(env);
                 }
             };
             let second_array = match env.byte_array_from_slice(second) {
                 Ok(array) => array,
                 Err(error) => {
-                    log_keystore_debug(method, "jni_array", &error.to_string());
+                    log_keystore_failure(method, "jni_array", &error.to_string());
                     return keystore_temporarily_unavailable(env);
                 }
             };
@@ -308,26 +310,26 @@ pub mod android {
             ) {
                 Ok(value) => value,
                 Err(error) => {
-                    log_keystore_debug(method, "jni_call", &error.to_string());
+                    log_keystore_failure(method, "jni_call", &error.to_string());
                     return keystore_temporarily_unavailable(env);
                 }
             };
             let object = match value.l() {
                 Ok(object) => object,
                 Err(error) => {
-                    log_keystore_debug(method, "jni_object", &error.to_string());
+                    log_keystore_failure(method, "jni_object", &error.to_string());
                     return keystore_temporarily_unavailable(env);
                 }
             };
             if object.is_null() {
-                log_keystore_debug(method, "null_response", "");
+                log_keystore_failure(method, "null_response", "");
                 return Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string());
             }
             let array = JByteArray::from(object);
             let response = match env.convert_byte_array(&array) {
                 Ok(response) => response,
                 Err(error) => {
-                    log_keystore_debug(method, "jni_bytes", &error.to_string());
+                    log_keystore_failure(method, "jni_bytes", &error.to_string());
                     return keystore_temporarily_unavailable(env);
                 }
             };
@@ -340,33 +342,33 @@ pub mod android {
             let class = match load_context_class(env, context, CREDENTIAL_VAULT_CLASS) {
                 Ok(class) => class,
                 Err(error) => {
-                    log_keystore_debug(method, "class_load", &error);
+                    log_keystore_failure(method, "class_load", &error);
                     return keystore_temporarily_unavailable(env);
                 }
             };
             let value = match env.call_static_method(class, method, "()[B", &[]) {
                 Ok(value) => value,
                 Err(error) => {
-                    log_keystore_debug(method, "jni_call", &error.to_string());
+                    log_keystore_failure(method, "jni_call", &error.to_string());
                     return keystore_temporarily_unavailable(env);
                 }
             };
             let object = match value.l() {
                 Ok(object) => object,
                 Err(error) => {
-                    log_keystore_debug(method, "jni_object", &error.to_string());
+                    log_keystore_failure(method, "jni_object", &error.to_string());
                     return keystore_temporarily_unavailable(env);
                 }
             };
             if object.is_null() {
-                log_keystore_debug(method, "null_response", "");
+                log_keystore_failure(method, "null_response", "");
                 return Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string());
             }
             let array = JByteArray::from(object);
             let response = match env.convert_byte_array(&array) {
                 Ok(response) => response,
                 Err(error) => {
-                    log_keystore_debug(method, "jni_bytes", &error.to_string());
+                    log_keystore_failure(method, "jni_bytes", &error.to_string());
                     return keystore_temporarily_unavailable(env);
                 }
             };
@@ -387,20 +389,16 @@ pub mod android {
         plaintext: &[u8],
         aad: &[u8],
     ) -> Result<Vec<u8>, AndroidKeystoreFailure> {
-        call_credential_vault_two_arrays("seal", plaintext, aad).map_err(|error| {
-            log_keystore_debug("seal", "bridge", &error);
-            classify_keystore_failure(error)
-        })
+        call_credential_vault_two_arrays("seal", plaintext, aad)
+            .map_err(classify_keystore_failure)
     }
 
     pub(crate) fn keystore_open(
         sealed: &[u8],
         aad: &[u8],
     ) -> Result<Vec<u8>, AndroidKeystoreFailure> {
-        call_credential_vault_two_arrays("open", sealed, aad).map_err(|error| {
-            log_keystore_debug("open", "bridge", &error);
-            classify_keystore_failure(error)
-        })
+        call_credential_vault_two_arrays("open", sealed, aad)
+            .map_err(classify_keystore_failure)
     }
 
     pub(crate) fn keystore_delete_key() -> Result<(), AndroidKeystoreFailure> {

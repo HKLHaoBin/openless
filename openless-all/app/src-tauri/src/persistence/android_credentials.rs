@@ -129,17 +129,6 @@ pub(super) fn read(
     crypto: &mut impl AndroidCredentialsCrypto,
 ) -> Result<ReadOutcome, StoreError> {
     recover_verified_sanitized_legacy(path)?;
-    // #region agent log
-    log::warn!(
-        "[agent-dbg] {{\"sessionId\":\"f73b06\",\"hypothesisId\":\"H12\",\"location\":\"android_credentials.rs:read\",\"message\":\"envelope files\",\"data\":{{\"main\":{},\"pending\":{},\"tmp\":{},\"software\":{}}},\"timestamp\":0}}",
-        path.exists(),
-        verified_v2_temporary_path(path).exists(),
-        v2_temporary_path(path).exists(),
-        path.parent()
-            .map(|parent| parent.join("credentials.sw.key").is_file())
-            .unwrap_or(false)
-    );
-    // #endregion
     recover_verified_v2_temporary(path, crypto)?;
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
@@ -179,11 +168,6 @@ pub(super) fn read(
             Ok(ReadOutcome::Plaintext(plaintext))
         }
         Err(StoreError::Crypto(CryptoErrorKind::KeyMissingOrInvalidated)) => {
-            // #region agent log
-            log::warn!(
-                "[agent-dbg] {{\"sessionId\":\"f73b06\",\"hypothesisId\":\"H13\",\"location\":\"android_credentials.rs:read\",\"message\":\"wiping envelope after unusable Keystore key\",\"data\":{{\"hadMain\":true}},\"timestamp\":0}}"
-            );
-            // #endregion
             // The ciphertext can no longer be recovered. Reset the alias first;
             // if that is temporarily unavailable, preserve the file for retry.
             crypto.delete_key().map_err(StoreError::Crypto)?;
@@ -563,12 +547,6 @@ impl AndroidCredentialsCrypto for AndroidKeystoreCrypto {
     ) -> std::result::Result<SealedPayload, CryptoErrorKind> {
         let packet = crate::android::jni::android::keystore_seal(plaintext, aad)
             .map_err(map_keystore_failure)?;
-        // #region agent log
-        log::warn!(
-            "[agent-dbg] {{\"sessionId\":\"f73b06\",\"hypothesisId\":\"H14\",\"location\":\"android_credentials.rs:seal\",\"message\":\"keystore_seal ok\",\"data\":{{\"packetLen\":{}}},\"timestamp\":0}}",
-            packet.len()
-        );
-        // #endregion
         split_packet(&packet)
     }
 

@@ -129,37 +129,6 @@ fn record_vault_read_failure(error: &anyhow::Error) {
     }
 }
 
-fn agent_debug_ndjson(hypothesis_id: &str, location: &str, message: &str, data: &str) {
-    // #region agent log
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let line = format!(
-        "{{\"sessionId\":\"f73b06\",\"hypothesisId\":\"{hypothesis_id}\",\"location\":\"{location}\",\"message\":\"{message}\",\"data\":{data},\"timestamp\":{timestamp}}}"
-    );
-    log::warn!("[agent-dbg] {line}");
-    let mut paths = Vec::new();
-    paths.push(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../debug-f73b06.log"),
-    );
-    #[cfg(any(target_os = "android", test))]
-    if let Ok(dir) = super::android_storage::android_log_dir() {
-        paths.push(dir.join("debug-f73b06.log"));
-    }
-    for path in paths {
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-        {
-            use std::io::Write;
-            let _ = writeln!(file, "{line}");
-        }
-    }
-    // #endregion
-}
-
 /// Mutations must not persist an empty default over an unreadable envelope.
 /// Returning `Err` lets Core surface Persistence after a real Keystore retry.
 #[cfg(any(target_os = "android", test))]
@@ -171,26 +140,10 @@ fn android_credentials_root_for_update(
             let root = loaded.unwrap_or_default();
             clear_vault_read_error();
             store_credentials_cache(&root);
-            // #region agent log
-            agent_debug_ndjson(
-                "H7",
-                "credentials.rs:android_credentials_root_for_update",
-                "android for-update loaded envelope",
-                "{\"ok\":true}",
-            );
-            // #endregion
             Ok(root)
         }
         Err(error) => {
             record_vault_read_failure(&error);
-            // #region agent log
-            agent_debug_ndjson(
-                "H7",
-                "credentials.rs:android_credentials_root_for_update",
-                "android for-update retried Keystore and still failed",
-                "{\"ok\":false}",
-            );
-            // #endregion
             Err(error)
         }
     }
@@ -1568,17 +1521,6 @@ fn load_credentials_into_cache_with(
             // scrub must be retried by the next startup/getter call rather than
             // hidden for the rest of the process.
             record_vault_read_failure(&e);
-            // #region agent log
-            agent_debug_ndjson(
-                "H2",
-                "credentials.rs:load_credentials_into_cache_with",
-                "vault loader returned Err; using uncached default",
-                &format!(
-                    "{{\"hasEnvelopeContext\":{}}}",
-                    format!("{e:#}").contains("read Android credential envelope")
-                ),
-            );
-            // #endregion
             CredsRoot::default()
         }
     }

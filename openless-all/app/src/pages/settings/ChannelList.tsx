@@ -271,9 +271,6 @@ export function ChannelList({
     } catch (error) {
       console.error('[channels] create failed', error);
       const message = failedOpMessage(error, t('common.operationFailed'));
-      // #region agent log
-      fetch('http://127.0.0.1:7807/ingest/0e5d9157-0519-49b4-bb72-cb173586e4dc',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f73b06'},body:JSON.stringify({sessionId:'f73b06',hypothesisId:'H8',location:'ChannelList.tsx:startCreate',message:'createChannel failed',data:{hasDetail:message!==t('common.operationFailed'),prefix:message.slice(0,48)},timestamp:Date.now(),runId:'post-fix'})}).catch(()=>{});
-      // #endregion
       emitSaved('failed', message);
     } finally {
       setCreatingBusy(false);
