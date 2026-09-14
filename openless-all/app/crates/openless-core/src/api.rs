@@ -2046,6 +2046,7 @@ impl OpenLessBackend {
                 Arc::clone(&repositories.correction_rules),
                 Arc::clone(&repositories.activity),
                 Arc::clone(&deps.credential_store),
+                Arc::clone(&repositories.style_packs),
                 deps.selection_polisher.clone(),
                 Arc::clone(&voice_sessions),
             ));

@@ -713,6 +713,10 @@ export const de: typeof zhCN = {
         'Für ASR-Text nach dem Diktat. Lege hier Regeln für gesprochene Sprache, Erkennungsfehler und die Wiederherstellung von Fachbegriffen fest.',
       selectionPromptFallback:
         'Noch kein Prompt für geschriebenen Text eingerichtet. Eine sichere Standardeinstellung wird verwendet.',
+      voiceEditPromptTitle: 'Prompt für Sprachbearbeitung der Auswahl (EditPlan)',
+      voiceEditPromptHint:
+        'Nur für den EditPlan der Auswahl-Sprachbearbeitung. Leer = benutzerdefinierter Prompt aus den Einstellungen oder Standard.',
+      voiceEditPromptPlaceholder: 'Leer = Einstellungen oder Standard',
       selectionActivated: '„{{name}}“ für die Überarbeitung von Textauswahl festgelegt.',
       selectionActivateFailed: 'Stil für Textauswahl konnte nicht gewechselt werden: {{err}}',
       selectionChars: '{{count}} Zeichen',
@@ -913,6 +917,16 @@ export const de: typeof zhCN = {
       editKeywords: 'Weitere Hinweise auf Fragen',
       editKeywordsDesc:
         'Nur bei deaktivierter automatischer Erkennung. Ein Hinweis pro Zeile erzwingt den Fragemodus. Ansonsten wird anhand von „?“ und Fragewörtern entschieden.',
+      editPlanFormat: 'Format des Bearbeitungsplans',
+      editPlanFormatDesc:
+        'Das Modell bevorzugt dieses EditPlan-Format. Bei Parse-Fehlern wird das andere Format versucht.',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: 'Systemprompt für Bearbeitungspläne',
+      editSystemPromptDesc:
+        'Überschreibt den EditPlan-Systemprompt aus Stilpaket / Standard. Leer = Benutzerdefiniert → Paket → Standard.',
+      editSystemPromptPlaceholder: 'Leer = Stilpaket oder Standard',
+      editSystemPromptReset: 'Auf Standard zurücksetzen',
     },
     selectionPolish: {
       title: 'Textauswahl überarbeiten',

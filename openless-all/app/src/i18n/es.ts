@@ -711,6 +711,10 @@ export const es: typeof zhCN = {
         'Para texto reconocido tras el dictado. Define aquí reglas para limpiar el lenguaje oral, corregir errores del ASR y restaurar términos.',
       selectionPromptFallback:
         'Todavía no hay instrucciones para texto escrito; se usará una configuración predeterminada segura.',
+      voiceEditPromptTitle: 'Prompt de edición por voz de la selección (EditPlan)',
+      voiceEditPromptHint:
+        'Solo para generar EditPlan en la edición por voz de la selección. Vacío = prompt personalizado de ajustes o el predeterminado.',
+      voiceEditPromptPlaceholder: 'Vacío = ajustes personalizados o predeterminado',
       selectionActivated: '«{{name}}» se usará para mejorar la selección.',
       selectionActivateFailed: 'No se pudo cambiar el estilo de la selección: {{err}}',
       selectionChars: '{{count}} caracteres',
@@ -908,6 +912,16 @@ export const es: typeof zhCN = {
       editKeywords: 'Indicadores adicionales de pregunta',
       editKeywordsDesc:
         'Solo si la detección automática está desactivada. Escribe un indicador por línea para forzar Preguntar; en otros casos se usan «?» y palabras interrogativas.',
+      editPlanFormat: 'Formato del plan de edición',
+      editPlanFormatDesc:
+        'El modelo prioriza este formato de EditPlan; si falla el análisis, se prueba el otro.',
+      editPlanFormatXml: 'XML',
+      editPlanFormatJson: 'JSON',
+      editSystemPrompt: 'Prompt de sistema del plan de edición',
+      editSystemPromptDesc:
+        'Sustituye el prompt de sistema EditPlan del paquete / predeterminado. Vacío = personalizado → paquete → predeterminado.',
+      editSystemPromptPlaceholder: 'Vacío = paquete de estilo o predeterminado',
+      editSystemPromptReset: 'Restablecer predeterminado',
     },
     selectionPolish: {
       title: 'Mejorar selección',

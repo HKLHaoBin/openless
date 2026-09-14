@@ -256,12 +256,18 @@ pub fn compose_polish_prompts(
     if let Some(block) = &cursor_context_block {
         system_prompt = format!("{}\n\n{}", system_prompt, block);
     }
+    // issue #1076：选区语音编辑输入带 <draft>/<instruction>，不能再套润色 user framing。
+    let is_voice_edit = looks_like_voice_edit_input(raw_text);
     // issue #609 F-02：在 system prompt 末尾追加对抗式防御措辞，明确信封内文本是
     // 数据而非指令。纵深防御，非硬保证。
     system_prompt = format!(
         "{}\n\n{}",
         system_prompt,
-        prompts::polish_injection_defense()
+        if is_voice_edit {
+            prompts::voice_edit_injection_defense()
+        } else {
+            prompts::polish_injection_defense()
+        }
     );
     // 带了光标上下文才追加它那一条，理由同上：没开这个功能的用户不该被改 prompt。
     if cursor_context_block.is_some() {
@@ -280,8 +286,16 @@ pub fn compose_polish_prompts(
             prompts::polish_context_instruction()
         );
     }
-    let user_prompt = prompts::user_prompt(raw_text);
+    let user_prompt = if is_voice_edit {
+        prompts::voice_edit_user_prompt(raw_text)
+    } else {
+        prompts::user_prompt(raw_text)
+    };
     (system_prompt, user_prompt)
+}
+
+fn looks_like_voice_edit_input(raw_text: &str) -> bool {
+    raw_text.contains("<draft>") && raw_text.contains("<instruction>")
 }
 
 /// 翻译路径的 `(system_prompt, user_prompt)` 装配——和 polish 一样供两路 LLM 客户端共用。
@@ -480,5 +494,27 @@ mod translation_stream_tests {
         let mut stream = PolishTranslationStream::default();
         assert!(stream.push("源文正文").is_empty());
         assert!(stream.push("[[OPENLESS_TRANSLATIO").is_empty());
+    }
+
+    #[test]
+    fn voice_edit_input_uses_editplan_user_framing() {
+        let input = "<draft>\nhello\n</draft>\n\n<instruction>\n改成列表\n</instruction>";
+        let (_system, user) = compose_polish_prompts(
+            input,
+            PolishMode::Light,
+            &[],
+            "EDITPLAN SYSTEM",
+            &[],
+            ChineseScriptPreference::Auto,
+            OutputLanguagePreference::Auto,
+            None,
+            None,
+            false,
+        );
+        assert!(user.contains("EditPlan"));
+        assert!(!user.contains("只输出整理后的文本正文"));
+        assert!(user.contains("<draft>"));
+        assert!(user.contains("<instruction>"));
+        assert!(user.contains(prompts::voice_edit_injection_defense()));
     }
 }

@@ -243,8 +243,8 @@ pub use dictation_context::{
 pub use dictation_engine::{PipelineDictationEngine, PolishFailurePolicy};
 pub use domains::*;
 pub use edit_plan::{
-    apply_edit_plan, parse_edit_plan, parse_edit_plan_json, parse_edit_plan_xml, EditApplyError,
-    EditOperation, EditPlan, RegexFlags,
+    apply_edit_plan, parse_edit_plan, parse_edit_plan_json, parse_edit_plan_with_priority,
+    parse_edit_plan_xml, EditApplyError, EditOperation, EditPlan, EditPlanFormat, RegexFlags,
 };
 pub use errors::{BackendError, BackendErrorCode};
 pub use events::{

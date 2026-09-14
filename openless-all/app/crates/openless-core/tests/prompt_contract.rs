@@ -39,6 +39,48 @@ fn polish_prompt_preserves_context_envelopes_and_injection_defenses() {
 }
 
 #[test]
+fn voice_edit_prompt_avoids_polish_user_framing() {
+    let input = "<field_context></field_context>\n<draft>\n原文\n</draft>\n\n<instruction>\n改成列表\n</instruction>";
+    let (system_prompt, user_prompt) = compose_polish_prompts(
+        input,
+        PolishMode::Light,
+        &[],
+        &prompts::voice_edit_system_prompt_xml(),
+        &[],
+        ChineseScriptPreference::Auto,
+        OutputLanguagePreference::Auto,
+        None,
+        None,
+        false,
+    );
+
+    assert!(user_prompt.contains("EditPlan"));
+    assert!(!user_prompt.contains("只输出整理后的文本正文"));
+    assert!(user_prompt.contains("<draft>"));
+    assert!(system_prompt.contains(prompts::voice_edit_injection_defense()));
+}
+
+#[test]
+fn resolve_voice_edit_system_prompt_prefers_custom_then_pack() {
+    use openless_core::EditPlanFormat;
+
+    assert!(prompts::resolve_voice_edit_system_prompt("", "", EditPlanFormat::Xml)
+        .contains("<edit_plan>"));
+    assert!(
+        prompts::resolve_voice_edit_system_prompt("", "", EditPlanFormat::Json)
+            .contains("JSON only")
+    );
+    assert_eq!(
+        prompts::resolve_voice_edit_system_prompt("CUSTOM", "PACK", EditPlanFormat::Json),
+        "CUSTOM"
+    );
+    assert_eq!(
+        prompts::resolve_voice_edit_system_prompt("", "PACK", EditPlanFormat::Xml),
+        "PACK"
+    );
+}
+
+#[test]
 fn translation_prompt_uses_the_target_language_and_the_same_user_envelope() {
     let (system_prompt, user_prompt) = compose_translate_prompts(
         "把这个翻译一下",

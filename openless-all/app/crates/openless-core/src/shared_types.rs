@@ -456,6 +456,12 @@ pub struct UserPreferences {
     pub selection_voice_manual_intent: SelectionVoiceManualIntent,
     #[serde(default = "default_selection_voice_edit_keywords")]
     pub selection_voice_edit_keywords: Vec<String>,
+    /// 选区语音 EditPlan 输出格式优先级（issue #1076）。默认 XML。
+    #[serde(default)]
+    pub selection_voice_edit_plan_format: crate::edit_plan::EditPlanFormat,
+    /// 自定义选区语音 EditPlan system prompt；空串 = 风格包 / 内置默认。
+    #[serde(default)]
+    pub selection_voice_edit_system_prompt: String,
     /// 是否把每次 QA 会话写进 history.json。默认 false：QA 默认临时不留痕。
     /// 详见 issue #118。
     #[serde(default)]
@@ -839,6 +845,10 @@ struct UserPreferencesWire {
     selection_voice_manual_intent: SelectionVoiceManualIntent,
     #[serde(default = "default_selection_voice_edit_keywords")]
     selection_voice_edit_keywords: Vec<String>,
+    #[serde(default)]
+    selection_voice_edit_plan_format: crate::edit_plan::EditPlanFormat,
+    #[serde(default)]
+    selection_voice_edit_system_prompt: String,
     qa_save_history: bool,
     custom_combo_hotkey: Option<ComboBinding>,
     translation_hotkey: Option<ShortcutBinding>,
@@ -1036,6 +1046,8 @@ impl Default for UserPreferencesWire {
             selection_voice_intent_mode: prefs.selection_voice_intent_mode,
             selection_voice_manual_intent: prefs.selection_voice_manual_intent,
             selection_voice_edit_keywords: prefs.selection_voice_edit_keywords,
+            selection_voice_edit_plan_format: prefs.selection_voice_edit_plan_format,
+            selection_voice_edit_system_prompt: prefs.selection_voice_edit_system_prompt,
             qa_save_history: prefs.qa_save_history,
             custom_combo_hotkey: prefs.custom_combo_hotkey,
             translation_hotkey: None,
@@ -1198,6 +1210,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             selection_voice_intent_mode: wire.selection_voice_intent_mode,
             selection_voice_manual_intent: wire.selection_voice_manual_intent,
             selection_voice_edit_keywords: wire.selection_voice_edit_keywords,
+            selection_voice_edit_plan_format: wire.selection_voice_edit_plan_format,
+            selection_voice_edit_system_prompt: wire.selection_voice_edit_system_prompt,
             qa_save_history: wire.qa_save_history,
             coding_agent_enabled: wire.coding_agent_enabled,
             coding_agent_provider: wire.coding_agent_provider,
@@ -1548,6 +1562,8 @@ impl Default for UserPreferences {
             selection_voice_intent_mode: SelectionVoiceIntentMode::default(),
             selection_voice_manual_intent: SelectionVoiceManualIntent::default(),
             selection_voice_edit_keywords: default_selection_voice_edit_keywords(),
+            selection_voice_edit_plan_format: crate::edit_plan::EditPlanFormat::default(),
+            selection_voice_edit_system_prompt: String::new(),
             qa_save_history: false,
             custom_combo_hotkey: None,
             translation_hotkey: default_translation_hotkey(),
