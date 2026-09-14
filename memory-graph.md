@@ -2,7 +2,7 @@
 
 - slug: openless
 - path: f:/编程/openless
-- updated: 2026-09-14
+- updated: 2026-09-15
 
 ## Summary
 
@@ -26,6 +26,7 @@ OpenLess：Tauri 2 + Rust + WebView 听写/选区助手。上游 Open-Less/openl
 
 - 2026-09-14 开分支 fix/selection-voice-editplan-prompt-format（基于 upstream/beta）
 - Issue: https://github.com/Open-Less/openless/issues/1076（完全解决前不提 PR）
+- PR: https://github.com/Open-Less/openless/pull/1077（目标 beta，关联并关闭 #1076）
 - 根因：听写润色 user framing「只输出正文」与 EditPlan system prompt 冲突
 - folia-major 参考：OUTPUT CONTRACT + 剥围栏/平衡括号候选解析
 
