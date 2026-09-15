@@ -32,6 +32,8 @@ OpenLess：Tauri 2 + Rust + WebView 听写/选区助手。上游 Open-Less/openl
 - 根因：听写润色 user framing「只输出正文」与 EditPlan system prompt 冲突
 - folia-major 参考：OUTPUT CONTRACT + 剥围栏/平衡括号候选解析
 - 2026-09-15 基于 upstream/beta 创建 fix/1046-history-retranscription；历史页将重新转录入口从失败状态扩展到所有有归档录音的传统 ASR 条目，继续保留多模态能力边界
+- 2026-09-15 提交 c038676e 并推送至 origin/fix/1046-history-retranscription；review-bugbot 复审结论为无 bug，CI、Android APK 与跨平台桌面发布构建均成功
+- 2026-09-15 已下载 Android 四架构 APK 与 Windows/macOS 桌面产物；APK ZIP、Updater JSON、macOS updater tar.gz 及文件完整性静态校验全部通过，因无连接 ADB 设备未执行真机安装
 
 ## Decisions
 
