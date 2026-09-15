@@ -1,7 +1,7 @@
 # Memory Graph — openless
 
 - slug: openless
-- path: f:/编程/openless
+- path: `F:/编程/openless`
 - updated: 2026-09-15
 
 ## Summary
@@ -26,6 +26,7 @@ OpenLess：Tauri 2 + Rust + WebView 听写/选区助手。上游 Open-Less/openl
 
 ## Facts
 
+- 2026-09-15：扫描确认该项目包含 `.cursor`，已纳入本次全局图谱一致性更新。
 - 2026-09-14 开分支 fix/selection-voice-editplan-prompt-format（基于 upstream/beta）
 - Issue: https://github.com/Open-Less/openless/issues/1076（完全解决前不提 PR）
 - PR: https://github.com/Open-Less/openless/pull/1077（目标 beta，关联并关闭 #1076）
@@ -34,6 +35,8 @@ OpenLess：Tauri 2 + Rust + WebView 听写/选区助手。上游 Open-Less/openl
 - 2026-09-15 基于 upstream/beta 创建 fix/1046-history-retranscription；历史页将重新转录入口从失败状态扩展到所有有归档录音的传统 ASR 条目，继续保留多模态能力边界
 - 2026-09-15 提交 c038676e 并推送至 origin/fix/1046-history-retranscription；review-bugbot 复审结论为无 bug，CI、Android APK 与跨平台桌面发布构建均成功
 - 2026-09-15 已下载 Android 四架构 APK 与 Windows/macOS 桌面产物；APK ZIP、Updater JSON、macOS updater tar.gz 及文件完整性静态校验全部通过，因无连接 ADB 设备未执行真机安装
+- 2026-09-15 全局扫描确认项目根目录已有 `memory-graph.md`，纳入按项目名路由表；当前工作区仍有未提交的 vendor 修改
+- 2026-09-15 向上游 `Open-Less/openless` 的 `beta` 提交 PR #1079；克隆仓库误建的 PR #6 已关闭，源分支仍为 `HKLHaoBin:fix/1046-history-retranscription`
 
 ## Decisions
 
