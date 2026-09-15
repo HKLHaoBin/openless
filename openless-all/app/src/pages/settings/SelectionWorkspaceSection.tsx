@@ -1,6 +1,10 @@
 // 通用 → 选区助手：合并选区润色与选区语音编辑，避免用户混淆两项职责。
 
-import type { EditPlanFormat, PlatformCapabilities, SelectionPolishOutputMode } from '../../lib/types';
+import type {
+  EditPlanFormat,
+  PlatformCapabilities,
+  SelectionPolishOutputMode,
+} from '../../lib/types';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { detectOS } from '../../components/WindowChrome';

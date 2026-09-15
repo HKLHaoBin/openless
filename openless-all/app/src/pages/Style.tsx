@@ -1467,7 +1467,9 @@ export function Style() {
                       </label>
                     </div>
 
-                    {workflowView === 'dictation' ? dictationPromptEditor : selectionWorkflowEditors}
+                    {workflowView === 'dictation'
+                      ? dictationPromptEditor
+                      : selectionWorkflowEditors}
 
                     {workflowView === 'dictation' && (
                       <Card

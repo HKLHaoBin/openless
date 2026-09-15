@@ -17,9 +17,7 @@ use crate::domains::{
     SelectionVoicePhase, SelectionVoicePreview, SelectionVoicePreviewUpdate, SelectionVoiceRoute,
     SelectionVoiceSnapshot,
 };
-use crate::edit_plan::{
-    apply_edit_plan, parse_edit_plan_with_priority, EditOperation, EditPlan,
-};
+use crate::edit_plan::{apply_edit_plan, parse_edit_plan_with_priority, EditOperation, EditPlan};
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::events::{BackendEventKind, BackendEventPublisher};
 use crate::ports::{TextPolisher, TextStreamChunk, TextStreamSink};
@@ -292,6 +290,7 @@ impl SelectionVoiceWorkflow {
         input: String,
         system_prompt: String,
         translation_target: Option<&str>,
+        edit_plan_input: bool,
     ) -> Result<String, BackendError> {
         let polisher = self.polisher.as_ref().ok_or_else(|| {
             BackendError::new(
@@ -335,6 +334,7 @@ impl SelectionVoiceWorkflow {
             system_prompt
         };
         context.polish.translation_active = translation_only;
+        context.polish.edit_plan_input = edit_plan_input;
         context.polish.translation_target_language = translation_target.unwrap_or_default().into();
         context.polish.hotwords.clear();
         context.polish.cursor_context = None;
@@ -370,6 +370,7 @@ impl SelectionVoiceWorkflow {
             instruction,
             crate::prompts::selection_voice_instruction_polish_prompt(),
             None,
+            false,
         )
         .await
     }
@@ -390,6 +391,7 @@ impl SelectionVoiceWorkflow {
                 instruction.to_string(),
                 crate::prompts::selection_voice_intent_classification_prompt(),
                 None,
+                false,
             )
             .await
         {
@@ -438,7 +440,7 @@ impl SelectionVoiceWorkflow {
             format,
         );
         let raw = self
-            .model_text(session_id, &preferences, input, system_prompt, None)
+            .model_text(session_id, &preferences, input, system_prompt, None, true)
             .await?;
         match parse_edit_plan_with_priority(&raw, format) {
             Ok(plan) => Ok(plan),
@@ -480,6 +482,7 @@ impl SelectionVoiceWorkflow {
                 draft.to_string(),
                 crate::prompts::translate_system_prompt(target_language),
                 Some(target_language),
+                false,
             )
             .await?;
         let translated = clean_selection_voice_translation_output(&translated_raw);

@@ -241,6 +241,35 @@ pub fn compose_polish_prompts(
     cursor_context: Option<&str>,
     has_prior_turns: bool,
 ) -> (String, String) {
+    compose_polish_prompts_for_input(
+        raw_text,
+        _mode,
+        hotwords,
+        style_system_prompt,
+        working_languages,
+        chinese_script_preference,
+        output_language_preference,
+        front_app,
+        cursor_context,
+        has_prior_turns,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compose_polish_prompts_for_input(
+    raw_text: &str,
+    _mode: PolishMode,
+    hotwords: &[String],
+    style_system_prompt: &str,
+    working_languages: &[String],
+    chinese_script_preference: ChineseScriptPreference,
+    output_language_preference: OutputLanguagePreference,
+    front_app: Option<&str>,
+    cursor_context: Option<&str>,
+    has_prior_turns: bool,
+    edit_plan_input: bool,
+) -> (String, String) {
     let mut system_prompt = compose_system_prompt(style_system_prompt, hotwords);
     if let Some(premise) = context_premise(
         working_languages,
@@ -256,14 +285,12 @@ pub fn compose_polish_prompts(
     if let Some(block) = &cursor_context_block {
         system_prompt = format!("{}\n\n{}", system_prompt, block);
     }
-    // issue #1076：选区语音编辑输入带 <draft>/<instruction>，不能再套润色 user framing。
-    let is_voice_edit = looks_like_voice_edit_input(raw_text);
     // issue #609 F-02：在 system prompt 末尾追加对抗式防御措辞，明确信封内文本是
     // 数据而非指令。纵深防御，非硬保证。
     system_prompt = format!(
         "{}\n\n{}",
         system_prompt,
-        if is_voice_edit {
+        if edit_plan_input {
             prompts::voice_edit_injection_defense()
         } else {
             prompts::polish_injection_defense()
@@ -286,16 +313,12 @@ pub fn compose_polish_prompts(
             prompts::polish_context_instruction()
         );
     }
-    let user_prompt = if is_voice_edit {
+    let user_prompt = if edit_plan_input {
         prompts::voice_edit_user_prompt(raw_text)
     } else {
         prompts::user_prompt(raw_text)
     };
     (system_prompt, user_prompt)
-}
-
-fn looks_like_voice_edit_input(raw_text: &str) -> bool {
-    raw_text.contains("<draft>") && raw_text.contains("<instruction>")
 }
 
 /// 翻译路径的 `(system_prompt, user_prompt)` 装配——和 polish 一样供两路 LLM 客户端共用。
@@ -499,7 +522,7 @@ mod translation_stream_tests {
     #[test]
     fn voice_edit_input_uses_editplan_user_framing() {
         let input = "<draft>\nhello\n</draft>\n\n<instruction>\n改成列表\n</instruction>";
-        let (_system, user) = compose_polish_prompts(
+        let (_system, user) = compose_polish_prompts_for_input(
             input,
             PolishMode::Light,
             &[],
@@ -510,6 +533,7 @@ mod translation_stream_tests {
             None,
             None,
             false,
+            true,
         );
         assert!(user.contains("EditPlan"));
         assert!(!user.contains("只输出整理后的文本正文"));

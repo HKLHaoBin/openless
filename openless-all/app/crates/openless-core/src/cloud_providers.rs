@@ -1031,6 +1031,7 @@ async fn run_cloud_polish(
                     context.polish.front_app.as_deref(),
                     context.polish.cursor_context.as_deref(),
                     &prior_turns,
+                    context.polish.edit_plan_input,
                 )
                 .await
         }
@@ -1047,6 +1048,7 @@ async fn run_cloud_polish(
                     context.polish.front_app.as_deref(),
                     context.polish.cursor_context.as_deref(),
                     &prior_turns,
+                    context.polish.edit_plan_input,
                     on_delta,
                     should_cancel,
                 )
@@ -1065,6 +1067,7 @@ async fn run_cloud_polish(
                     context.polish.front_app.as_deref(),
                     context.polish.cursor_context.as_deref(),
                     &prior_turns,
+                    context.polish.edit_plan_input,
                 )
                 .await
         }
@@ -1081,6 +1084,7 @@ async fn run_cloud_polish(
                     context.polish.front_app.as_deref(),
                     context.polish.cursor_context.as_deref(),
                     &prior_turns,
+                    context.polish.edit_plan_input,
                     on_delta,
                     should_cancel,
                 )

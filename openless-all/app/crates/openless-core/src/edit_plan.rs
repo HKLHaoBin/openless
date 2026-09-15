@@ -940,9 +940,7 @@ Line two</text>
         let plan = parse_edit_plan_with_priority(raw, EditPlanFormat::Json).unwrap();
         assert_eq!(
             plan.operations[0],
-            EditOperation::FullRewrite {
-                text: "ok".into()
-            }
+            EditOperation::FullRewrite { text: "ok".into() }
         );
     }
 }

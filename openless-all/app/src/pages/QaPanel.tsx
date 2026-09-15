@@ -493,9 +493,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
                               <>
                                 <div>{main || errorMsg}</div>
                                 {raw ? (
-                                  <pre
-                                    className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-black/10 p-2 text-[11px] leading-relaxed"
-                                  >
+                                  <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-black/10 p-2 text-[11px] leading-relaxed">
                                     {raw}
                                   </pre>
                                 ) : null}
