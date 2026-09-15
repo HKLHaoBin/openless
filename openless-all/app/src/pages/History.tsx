@@ -22,6 +22,7 @@ import {
   packDisplayName,
   resolveRepolishRetryPackIdWithFallback,
 } from '../lib/history-repolish';
+import { canRetranscribeHistoryEntry } from '../lib/history-retranscribe';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import type { DictationSession, PolishMode, StylePack } from '../lib/types';
 import { countCodePoints } from '../lib/unicode';
@@ -300,12 +301,12 @@ export function History() {
     }
   };
 
-  // 对一条「转录失败 / 没识别到语音」的历史用当前 ASR provider 重新转录（issue #613）。
+  // 对一条有归档录音的历史用当前 ASR provider 重新转录（issue #613 / #1046）。
   // 后端读 recordings/<id>.wav → 重转 → 原地回写该条 rawTranscript/finalText、清 errorCode，
-  // 返回整条记录；前端据此局部刷新。失败保留 + 自动重试已让这些条目的录音留得住，这里给
-  // 持久失败（重试也没救回来）一个手动重转入口。
+  // 返回整条记录；前端据此局部刷新。无论上次转录成功、润色失败还是转录失败，只要录音仍在，
+  // 用户都可以用同一份音频重新验证当前 provider 的结果。
   const onRetranscribe = async () => {
-    if (!item || !item.hasAudioRecording) return;
+    if (!item || !canRetranscribeHistoryEntry(item)) return;
     setRetranscribing(true);
     setActionError(null);
     try {
@@ -604,11 +605,7 @@ export function History() {
                         {t('history.exportRecording')}
                       </Btn>
                     )}
-                    {item.hasAudioRecording &&
-                      !audioMissingIds.has(item.id) &&
-                      item.pipelineMode !== 'multimodal' &&
-                      (item.errorCode === 'transcribeFailed' ||
-                        item.errorCode === 'emptyTranscript') && (
+                    {canRetranscribeHistoryEntry(item) && !audioMissingIds.has(item.id) && (
                         <Btn
                           icon="refresh"
                           variant="ghost"
@@ -912,8 +909,8 @@ interface RepolishResult {
  * 结果只在本次查看时显示，不写回历史条目：历史的 finalText 是「当时真的插进去的那段
  * 文字」，是一条事实记录，不该被事后试算覆盖。面板顶部的说明也把这点直说了。
  *
- * 注意这里只重跑润色，不重跑识别 —— 成功听写的录音在插入后就删了（隐私设计），
- * 原文是唯一还在的输入。真正的「重新转录」入口仍只对留有录音的失败条目开放。
+ * 注意这里只重跑润色，不重跑识别 —— 没有归档录音的历史只能使用原文。
+ * 「重新转录」入口对所有仍留有录音的传统 ASR 条目开放。
  */
 function RepolishPanel({
   session,

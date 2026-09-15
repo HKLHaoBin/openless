@@ -203,7 +203,7 @@ fn copy_recording_to_mobile_url(
     Ok(())
 }
 
-/// 对一条「转录失败」历史条目的归档录音用**当前** ASR provider 重新转录（issue #613）。
+/// 对一条有归档录音的历史条目用**当前** ASR provider 重新转录（issue #613 / #1046）。
 ///
 /// 流程：读 `recordings/<id>.wav` → 取 PCM（跳过 44 字节 WAV 头）→ 现 provider 重转
 /// → 成功则原地回写该条历史的 rawTranscript / finalText、清除 error_code，返回新文本。
