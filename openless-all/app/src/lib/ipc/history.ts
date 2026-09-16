@@ -26,14 +26,18 @@ export function readAudioRecording(sessionId: string): Promise<string> {
   return invokeOrMock('read_audio_recording', { sessionId }, () => 'data:audio/wav;base64,');
 }
 
+export interface HistoryRetranscriptionResult {
+  text: string;
+  updatedEntry: DictationSession | null;
+}
+
 /** 用当前 ASR provider 对一条有归档录音的历史条目重新转录（issue #613 / #1046）。
- *  成功时后端原地回写该条历史的 rawTranscript / finalText 并清除错误码，返回更新后的整条记录。
+ *  转录失败记录会被修复；已完成 / 润色失败记录只返回临时结果，不覆盖原历史。
  *  失败时抛出错误（如「重新转录仍未识别到语音」/「recording not found」），录音保留不丢。
- *  成功、润色失败和转录失败的条目都可调用，前端负责隐藏没有录音或不支持的条目。 */
-export function retranscribeRecording(sessionId: string): Promise<DictationSession> {
-  return invokeOrMock(
-    'retranscribe_recording',
-    { sessionId },
-    () => mockHistory[0],
-  ) as Promise<DictationSession>;
+ *  成功、润色失败和转录失败的条目都可调用，后端再次校验录音与能力边界。 */
+export function retranscribeRecording(sessionId: string): Promise<HistoryRetranscriptionResult> {
+  return invokeOrMock('retranscribe_recording', { sessionId }, () => ({
+    text: mockHistory[0].rawTranscript,
+    updatedEntry: null,
+  })) as Promise<HistoryRetranscriptionResult>;
 }

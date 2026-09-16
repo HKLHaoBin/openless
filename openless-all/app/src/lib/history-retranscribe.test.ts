@@ -9,26 +9,24 @@ const archivedEntry = {
   pipelineMode: 'traditional',
 } as const;
 
+const entryWithError = (errorCode: string | null) => ({ ...archivedEntry, errorCode });
+
 assert(
-  canRetranscribeHistoryEntry({ ...archivedEntry, errorCode: null }),
+  canRetranscribeHistoryEntry(entryWithError(null)),
   'completed entries with an archived recording should be retranscribable',
 );
 assert(
-  canRetranscribeHistoryEntry({ ...archivedEntry, errorCode: 'polishFailed' }),
+  canRetranscribeHistoryEntry(entryWithError('polishFailed')),
   'entries whose polishing failed should still be retranscribable',
 );
 assert(
-  canRetranscribeHistoryEntry({
-    ...archivedEntry,
-    errorCode: 'transcribeFailed',
-  }),
+  canRetranscribeHistoryEntry(entryWithError('transcribeFailed')),
   'entries whose transcription failed should be retranscribable',
 );
 assert(
   !canRetranscribeHistoryEntry({
     hasAudioRecording: false,
     pipelineMode: 'traditional',
-    errorCode: null,
   }),
   'entries without an archived recording should not show retranscription',
 );
@@ -36,7 +34,6 @@ assert(
   !canRetranscribeHistoryEntry({
     hasAudioRecording: null,
     pipelineMode: undefined,
-    errorCode: null,
   }),
   'legacy entries without recording metadata should not show retranscription',
 );
@@ -44,7 +41,6 @@ assert(
   !canRetranscribeHistoryEntry({
     ...archivedEntry,
     pipelineMode: 'multimodal',
-    errorCode: null,
   }),
   'multimodal entries should not show an unsupported retranscription action',
 );
