@@ -866,6 +866,7 @@ export const zhCN = {
     shortcutDesc: '按一次开始永久录音，再按一次结束并保存。',
     repolishNeedsTranscript: '请先重新转录录音，再进行润色。',
     shareRecording: '分享录音',
+    cancelledTitle: '已取消录音',
   },
   settings: {
     selectionWorkspace: {

@@ -910,6 +910,7 @@ export const es: typeof zhCN = {
     shortcutDesc: 'Pulsa una vez para grabar y otra vez para guardar.',
     repolishNeedsTranscript: 'Primero vuelve a transcribir el audio.',
     shareRecording: 'Compartir audio',
+    cancelledTitle: 'Grabación cancelada',
   },
   settings: {
     selectionWorkspace: {

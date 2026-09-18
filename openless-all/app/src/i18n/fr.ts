@@ -922,6 +922,7 @@ export const fr: typeof zhCN = {
     shortcutDesc: 'Appuyez une fois pour enregistrer, puis à nouveau pour sauvegarder.',
     repolishNeedsTranscript: 'Retranscrivez d’abord l’audio avant la réécriture.',
     shareRecording: 'Partager l’audio',
+    cancelledTitle: 'Enregistrement annulé',
   },
   settings: {
     selectionWorkspace: {

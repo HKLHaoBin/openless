@@ -868,6 +868,7 @@ export const zhTW: typeof zhCN = {
     shortcutDesc: '按一下開始永久錄音，再按一下結束並保存。',
     repolishNeedsTranscript: '請先重新轉錄錄音，再進行潤色。',
     shareRecording: '分享錄音',
+    cancelledTitle: '已取消錄音',
   },
   settings: {
     selectionWorkspace: {

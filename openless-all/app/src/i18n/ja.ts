@@ -883,6 +883,7 @@ export const ja: typeof zhCN = {
     shortcutDesc: '一度押して録音を開始し、もう一度押して保存します。',
     repolishNeedsTranscript: '先に音声を再文字起こししてください。',
     shareRecording: '音声を共有',
+    cancelledTitle: '録音をキャンセルしました',
   },
   settings: {
     selectionWorkspace: {

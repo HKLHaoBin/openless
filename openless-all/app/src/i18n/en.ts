@@ -896,6 +896,7 @@ export const en: typeof zhCN = {
     shortcutDesc: 'Press once to start a permanent capture, then press again to finish.',
     repolishNeedsTranscript: 'Re-transcribe the audio before repolishing.',
     shareRecording: 'Share audio',
+    cancelledTitle: 'Recording cancelled',
   },
   settings: {
     selectionWorkspace: {

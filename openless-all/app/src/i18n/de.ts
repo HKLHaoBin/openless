@@ -915,6 +915,7 @@ export const de: typeof zhCN = {
     shortcutDesc: 'Einmal drücken zum Aufnehmen, erneut drücken zum Speichern.',
     repolishNeedsTranscript: 'Bitte zuerst die Audiodatei neu transkribieren.',
     shareRecording: 'Audio teilen',
+    cancelledTitle: 'Aufnahme abgebrochen',
   },
   settings: {
     selectionWorkspace: {

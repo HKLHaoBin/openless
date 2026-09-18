@@ -965,6 +965,9 @@ function historyTitle(
   const text = (session.finalText || session.rawTranscript).trim();
   if (text) return text.split(/\r?\n/, 1)[0];
   if (session.errorCode === 'recording') return t('quickNote.recording', 'Recording…');
+  if (session.errorCode === 'cancelled') {
+    return t('quickNote.cancelledTitle', 'Recording cancelled');
+  }
   if (session.errorCode) return t('quickNote.failedTitle', 'Recording needs attention');
   return t('quickNote.emptyTitle', 'Untitled recording');
 }

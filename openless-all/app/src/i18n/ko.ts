@@ -881,6 +881,7 @@ export const ko: typeof zhCN = {
     shortcutDesc: '한 번 눌러 녹음하고 다시 눌러 저장합니다.',
     repolishNeedsTranscript: '먼저 오디오를 다시 전사해 주세요.',
     shareRecording: '오디오 공유',
+    cancelledTitle: '녹음이 취소됨',
   },
   settings: {
     selectionWorkspace: {

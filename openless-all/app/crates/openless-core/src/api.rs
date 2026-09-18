@@ -4990,6 +4990,21 @@ impl OpenLessBackend {
         }
         if context.output_target != DictationOutputTarget::ForegroundApp {
             self.persist_recording_started(&context, session_id);
+            let still_recording = {
+                let state = self.state.read().expect("backend state lock poisoned");
+                // A concurrent stop may already have moved the session to
+                // Transcribing/Polishing. The session id is the ownership
+                // guard; requiring Recording here would turn a valid stop
+                // race into a false cancellation.
+                state.dictation.session_id == Some(session_id)
+            };
+            if !still_recording {
+                self.remove_recording_draft(session_id);
+                return Err(BackendError::new(
+                    BackendErrorCode::Cancelled,
+                    "dictation was cancelled while recording history was being persisted",
+                ));
+            }
         }
         Ok(session_id)
     }
@@ -5438,6 +5453,18 @@ impl OpenLessBackend {
         }
     }
 
+    fn remove_recording_draft(&self, session_id: SessionId) {
+        let id = session_id.to_string();
+        if self
+            .list_history()
+            .ok()
+            .and_then(|entries| entries.into_iter().find(|entry| entry.id == id))
+            .is_some_and(|entry| entry.error_code.as_deref() == Some("recording"))
+        {
+            let _ = self.delete_history(&id);
+        }
+    }
+
     fn history_created_at(&self, session_id: &str) -> String {
         self.list_history()
             .ok()
@@ -5799,12 +5826,6 @@ impl OpenLessBackend {
             self.phase_changed.notify_waiters();
             (active, preserve_quick_note)
         };
-        let cancel_result = self.cancel_session_adapters(active).await;
-        // The state can already display cancellation, but native audio/input
-        // cleanup still owns the shared resource. Reject new capture until that
-        // cleanup finishes, including on its error path.
-        self.voice_sessions.release(active);
-        let host_result = self.hide_dictation_feedback(active);
         if preserve_quick_note {
             if let Some(mut entry) = self
                 .list_history()?
@@ -5815,7 +5836,14 @@ impl OpenLessBackend {
                 entry.has_audio_recording = Some(true);
                 let _ = self.update_history_entry(entry);
             }
-        } else {
+        }
+        let cancel_result = self.cancel_session_adapters(active).await;
+        // The state can already display cancellation, but native audio/input
+        // cleanup still owns the shared resource. Reject new capture until that
+        // cleanup finishes, including on its error path.
+        self.voice_sessions.release(active);
+        let host_result = self.hide_dictation_feedback(active);
+        if !preserve_quick_note {
             // Undecided captures that are explicitly cancelled are not notes;
             // remove their provisional row after native archive cleanup.
             let _ = self.delete_history(&active.to_string());
