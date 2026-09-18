@@ -128,6 +128,7 @@ export let mockSettings: UserPreferences = {
   historyMaxEntries: null,
   recordAudioForDebug: false,
   audioRecordingMaxEntries: null,
+  quickNoteExportDirectory: '',
   marketplaceBaseUrl: 'https://apic.openless.top',
   marketplaceDevLogin: '',
   remoteInputEnabled: false,

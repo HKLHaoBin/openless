@@ -953,6 +953,7 @@ impl TauriLocalAsrRuntimeAdapter {
             ))
         })
     }
+
 }
 
 #[derive(Clone)]
@@ -2641,9 +2642,12 @@ impl AudioRecorder for TauriAudioRecorder {
                 .transpose();
             let microphone = context.recording.microphone_device_name.clone();
             let recording_plan = context.recording.clone();
+            let prune_recordings_before_capture = recording_plan.archive_enabled
+                && (!recording_plan.archive_required
+                    || context.output_target == openless_core::DictationOutputTarget::Undecided);
             let fault_progress = Arc::clone(&progress);
             let (recording, runtime_errors) = tauri::async_runtime::spawn_blocking(move || {
-                if recording_plan.archive_enabled && !recording_plan.archive_required {
+                if prune_recordings_before_capture {
                     if let Err(error) = crate::persistence::prune_recordings(
                         recording_plan.retention_days,
                         recording_plan.max_entries,
@@ -3206,7 +3210,6 @@ impl openless_core::HostContextAdapter for TauriHostContextAdapter {
             })
         })
     }
-
 }
 
 pub(crate) struct TauriHostActions {

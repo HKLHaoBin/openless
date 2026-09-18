@@ -1362,6 +1362,10 @@ struct MutableState {
     running: bool,
     dictation: DictationStateSnapshot,
     dictation_context: Option<Arc<DictationContext>>,
+    /// The requested output target is published before async context capture
+    /// completes, so a second quick-note hotkey edge can still resolve the
+    /// Starting session instead of being swallowed.
+    dictation_start_output_target: Option<DictationOutputTarget>,
     /// Session-local intent, including a modifier pressed while AX/credentials
     /// are still being captured. The accepted request is applied before finish
     /// by every stop entry; no Host latch survives into the next session.
@@ -2233,6 +2237,7 @@ impl OpenLessBackend {
                 running: false,
                 dictation: DictationStateSnapshot::default(),
                 dictation_context: None,
+                dictation_start_output_target: None,
                 dictation_translation_requested: None,
                 credentials: CredentialsStatus::default(),
                 transcripts: HashMap::new(),
@@ -3105,6 +3110,7 @@ impl OpenLessBackend {
             state.running = false;
             state.dictation = DictationStateSnapshot::default();
             state.dictation_context = None;
+            state.dictation_start_output_target = None;
             state.silence_monitor = None;
             state.transcripts.clear();
             self.phase_changed.notify_waiters();
@@ -3216,12 +3222,12 @@ impl OpenLessBackend {
     }
 
     pub fn dictation_output_target(&self) -> Option<DictationOutputTarget> {
-        self.state
-            .read()
-            .expect("backend state lock poisoned")
+        let state = self.state.read().expect("backend state lock poisoned");
+        state
             .dictation_context
             .as_ref()
             .map(|context| context.output_target)
+            .or(state.dictation_start_output_target)
     }
 
     /// Dispatch a launcher/single-instance intent through the same state
@@ -3347,8 +3353,12 @@ impl OpenLessBackend {
             // Bind an accepted physical press to its actual Starting session
             // before releasing the interpreter lock. An older CLI/button stop
             // must not clear this press between its Start decision and claim.
-            let reservation = matches!(intent, HotkeyIntent::Start { .. })
-                .then(|| self.reserve_dictation_session(options.start.insert_text));
+            let reservation = matches!(intent, HotkeyIntent::Start { .. }).then(|| {
+                self.reserve_dictation_session(
+                    options.start.insert_text,
+                    options.start.output_target,
+                )
+            });
             (intent, reservation)
         };
         let (intent, reservation) = if let HotkeyIntent::WaitForModifierGrace { press_id } = intent
@@ -3364,8 +3374,12 @@ impl OpenLessBackend {
                 .lock()
                 .expect("hotkey interpreter lock poisoned");
             let intent = hotkey.after_modifier_grace(press_id, self.snapshot().dictation.phase);
-            let reservation = matches!(intent, HotkeyIntent::Start { .. })
-                .then(|| self.reserve_dictation_session(options.start.insert_text));
+            let reservation = matches!(intent, HotkeyIntent::Start { .. }).then(|| {
+                self.reserve_dictation_session(
+                    options.start.insert_text,
+                    options.start.output_target,
+                )
+            });
             (intent, reservation)
         } else {
             (intent, reservation)
@@ -4714,6 +4728,7 @@ impl OpenLessBackend {
     fn reserve_dictation_session(
         &self,
         insert_text: bool,
+        output_target: DictationOutputTarget,
     ) -> Result<DictationReservation, BackendError> {
         {
             let state = self.state.read().expect("backend state lock poisoned");
@@ -4752,6 +4767,7 @@ impl OpenLessBackend {
                 session_id: Some(session_id),
                 ..DictationStateSnapshot::default()
             };
+            state.dictation_start_output_target = Some(output_target);
             state.dictation_translation_requested = None;
             self.events.publish(
                 Some(session_id),
@@ -4770,7 +4786,8 @@ impl OpenLessBackend {
         &self,
         options: DictationStartOptions,
     ) -> Result<SessionId, BackendError> {
-        let reservation = self.reserve_dictation_session(options.insert_text)?;
+        let reservation =
+            self.reserve_dictation_session(options.insert_text, options.output_target)?;
         self.start_reserved_dictation(reservation, options).await
     }
 
@@ -4827,6 +4844,7 @@ impl OpenLessBackend {
             });
             state.dictation.translation_active = context.polish.translation_active;
             state.dictation_context = Some(Arc::clone(&context));
+            state.dictation_start_output_target = None;
             context
         };
 
@@ -4919,6 +4937,9 @@ impl OpenLessBackend {
                 }
             }
         }
+        if context.output_target != DictationOutputTarget::ForegroundApp {
+            self.persist_recording_started_if_starting(&context, session_id)?;
+        }
         let engine = Arc::clone(&self.deps.dictation_engine);
         let engine_context = Arc::clone(&context);
         let progress = self.engine_progress_sink();
@@ -4959,6 +4980,8 @@ impl OpenLessBackend {
                     None,
                     None,
                 );
+            } else {
+                self.reconcile_aborted_recording_draft(session_id, &context);
             }
             let _ = self.cancel_session_adapters(session_id).await;
             let _ = self.hide_dictation_feedback(session_id);
@@ -4983,28 +5006,11 @@ impl OpenLessBackend {
         };
         if !started {
             let _ = self.cancel_session_adapters(session_id).await;
+            self.reconcile_aborted_recording_draft(session_id, &context);
             return Err(BackendError::new(
                 BackendErrorCode::Cancelled,
                 "dictation session was cancelled while the engine was starting",
             ));
-        }
-        if context.output_target != DictationOutputTarget::ForegroundApp {
-            self.persist_recording_started(&context, session_id);
-            let still_recording = {
-                let state = self.state.read().expect("backend state lock poisoned");
-                // A concurrent stop may already have moved the session to
-                // Transcribing/Polishing. The session id is the ownership
-                // guard; requiring Recording here would turn a valid stop
-                // race into a false cancellation.
-                state.dictation.session_id == Some(session_id)
-            };
-            if !still_recording {
-                self.remove_recording_draft(session_id);
-                return Err(BackendError::new(
-                    BackendErrorCode::Cancelled,
-                    "dictation was cancelled while recording history was being persisted",
-                ));
-            }
         }
         Ok(session_id)
     }
@@ -5453,6 +5459,27 @@ impl OpenLessBackend {
         }
     }
 
+    fn persist_recording_started_if_starting(
+        &self,
+        context: &DictationContext,
+        session_id: SessionId,
+    ) -> Result<(), BackendError> {
+        let state = self.state.write().expect("backend state lock poisoned");
+        if state.dictation.session_id != Some(session_id)
+            || state.dictation.phase != DictationPhase::Starting
+        {
+            return Err(BackendError::new(
+                BackendErrorCode::Cancelled,
+                "dictation session was cancelled before recording history was persisted",
+            ));
+        }
+        // Keep the state write lock across the draft write. Cancellation also
+        // needs this lock before it can update the same history row, so it
+        // cannot overwrite a terminal result with a late recording draft.
+        self.persist_recording_started(context, session_id);
+        Ok(())
+    }
+
     fn remove_recording_draft(&self, session_id: SessionId) {
         let id = session_id.to_string();
         if self
@@ -5463,6 +5490,32 @@ impl OpenLessBackend {
         {
             let _ = self.delete_history(&id);
         }
+    }
+
+    fn reconcile_aborted_recording_draft(
+        &self,
+        session_id: SessionId,
+        context: &DictationContext,
+    ) {
+        // Quick Note cancellations must keep the provisional row (rewritten to
+        // cancelled) so playback/export still work. A racing cancel_dictation may
+        // already have done that rewrite; only touch still-provisional rows.
+        if context.output_target == DictationOutputTarget::QuickNote {
+            let id = session_id.to_string();
+            if let Some(mut entry) = self
+                .list_history()
+                .ok()
+                .and_then(|entries| entries.into_iter().find(|entry| entry.id == id))
+            {
+                if entry.error_code.as_deref() == Some("recording") {
+                    entry.error_code = Some("cancelled".to_string());
+                    entry.has_audio_recording = Some(true);
+                    let _ = self.update_history_entry(entry);
+                }
+            }
+            return;
+        }
+        self.remove_recording_draft(session_id);
     }
 
     fn history_created_at(&self, session_id: &str) -> String {
@@ -5598,7 +5651,11 @@ impl OpenLessBackend {
             polish_source,
             app_bundle_id: front_app.bundle_id,
             app_name: front_app.name,
-            insert_status: HistoryInsertStatus::Failed,
+            insert_status: if context.insertion.enabled {
+                HistoryInsertStatus::Failed
+            } else {
+                HistoryInsertStatus::NotRequested
+            },
             error_code: Some(error_code.to_string()),
             duration_ms,
             dictionary_entry_count: None,
@@ -5653,6 +5710,7 @@ impl OpenLessBackend {
         }
         state.dictation = DictationStateSnapshot::default();
         state.dictation_context = None;
+        state.dictation_start_output_target = None;
         state.silence_monitor = None;
         state.transcripts.remove(&session_id);
         hotkey.terminal(std::time::Instant::now());
@@ -5811,9 +5869,7 @@ impl OpenLessBackend {
             let preserve_quick_note = state
                 .dictation_context
                 .as_ref()
-                .is_some_and(|context| {
-                    context.output_target == DictationOutputTarget::QuickNote
-                });
+                .is_some_and(|context| context.output_target == DictationOutputTarget::QuickNote);
             state.dictation.phase = DictationPhase::Cancelled;
             self.events.publish(
                 Some(active),
@@ -5821,36 +5877,46 @@ impl OpenLessBackend {
             );
             state.dictation = DictationStateSnapshot::default();
             state.dictation_context = None;
+            state.dictation_start_output_target = None;
             state.silence_monitor = None;
             state.transcripts.remove(&active);
             self.phase_changed.notify_waiters();
             (active, preserve_quick_note)
         };
-        if preserve_quick_note {
-            if let Some(mut entry) = self
-                .list_history()?
-                .into_iter()
-                .find(|entry| entry.id == active.to_string())
-            {
-                entry.error_code = Some("cancelled".to_string());
-                entry.has_audio_recording = Some(true);
-                let _ = self.update_history_entry(entry);
-            }
-        }
+        // Settle history before tearing down adapters. The abandoned starter can
+        // observe Cancelled as soon as cancel_session_adapters runs; rewriting or
+        // deleting the draft first prevents it from racing remove_recording_draft
+        // against a still-provisional Quick Note row.
+        let history_result = if preserve_quick_note {
+            self.list_history().map(|entries| {
+                if let Some(mut entry) = entries
+                    .into_iter()
+                    .find(|entry| entry.id == active.to_string())
+                {
+                    entry.error_code = Some("cancelled".to_string());
+                    entry.has_audio_recording = Some(true);
+                    let _ = self.update_history_entry(entry);
+                }
+            })
+        } else {
+            // Undecided captures that are explicitly cancelled are not notes.
+            let _ = self.delete_history(&active.to_string());
+            Ok(())
+        };
         let cancel_result = self.cancel_session_adapters(active).await;
         // The state can already display cancellation, but native audio/input
         // cleanup still owns the shared resource. Reject new capture until that
         // cleanup finishes, including on its error path.
         self.voice_sessions.release(active);
         let host_result = self.hide_dictation_feedback(active);
-        if !preserve_quick_note {
-            // Undecided captures that are explicitly cancelled are not notes;
-            // remove their provisional row after native archive cleanup.
-            let _ = self.delete_history(&active.to_string());
+        let first_error = cancel_result
+            .err()
+            .or_else(|| host_result.err())
+            .or_else(|| history_result.err());
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
-        cancel_result?;
-        host_result?;
-        Ok(())
     }
 
     async fn capture_dictation_context(
@@ -11525,6 +11591,228 @@ mod tests {
             backend.stop_dictation().await.unwrap_err().code,
             BackendErrorCode::InvalidState
         );
+    }
+
+    #[tokio::test]
+    async fn aborted_startup_removes_orphan_recording_draft() {
+        struct DelayedStartEngine {
+            entered: Arc<tokio::sync::Notify>,
+            release: Arc<tokio::sync::Semaphore>,
+        }
+
+        impl DictationEngine for DelayedStartEngine {
+            fn start(
+                &self,
+                _session_id: SessionId,
+                _context: Arc<DictationContext>,
+                _progress: Arc<dyn EngineProgressSink>,
+            ) -> BoxFuture<'static, Result<(), BackendError>> {
+                let entered = Arc::clone(&self.entered);
+                let release = Arc::clone(&self.release);
+                boxed(async move {
+                    entered.notify_waiters();
+                    release.acquire().await.unwrap().forget();
+                    Ok(())
+                })
+            }
+
+            fn finish(
+                &self,
+                _session_id: SessionId,
+                _progress: Arc<dyn EngineProgressSink>,
+            ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
+                boxed(async {
+                    Ok(EngineResult {
+                        raw_text: String::new(),
+                        asr_transcript: None,
+                        polished_text: String::new(),
+                        polish_source: None,
+                        duration_ms: 0,
+                        polish_failed: false,
+                        asr_ms: None,
+                        polish_ms: None,
+                        has_audio_recording: None,
+                        asr_call_label: None,
+                        llm_call_label: None,
+                    })
+                })
+            }
+
+            fn cancel(&self, _session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+                boxed(async { Ok(()) })
+            }
+        }
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let data_dir = TestDataDir::new("abort-startup-orphan-draft");
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data_dir.path().to_path_buf(),
+                ..BackendConfig::default()
+            },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(FakeInserter),
+                dictation_engine: Arc::new(DelayedStartEngine {
+                    entered: Arc::clone(&entered),
+                    release: Arc::clone(&release),
+                }),
+                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                task_spawner: Arc::new(TokioTaskSpawner),
+                ..BackendDependencies::unsupported()
+            },
+        )
+        .unwrap();
+        backend.start().await.unwrap();
+
+        let mut starting = Box::pin(backend.start_dictation_with_options(DictationStartOptions {
+            output_target: DictationOutputTarget::Undecided,
+            insert_text: false,
+            ..DictationStartOptions::default()
+        }));
+        // Drive the starter until the provisional recording draft is written and
+        // the delayed engine is waiting inside start().
+        let wait_entered = entered.notified();
+        tokio::pin!(wait_entered);
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut wait_entered => break,
+                _ = &mut starting => panic!("start settled before delayed engine entered"),
+            }
+        }
+        let draft = backend
+            .list_history()
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.error_code.as_deref() == Some("recording"));
+        assert!(
+            draft.is_some(),
+            "undecided startup must persist a provisional recording draft"
+        );
+
+        // Shutdown clears backend state without rewriting history. The abandoned
+        // starter must still drop the orphan recording row.
+        backend.shutdown().await.unwrap();
+        release.add_permits(1);
+        let error = starting.await.unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Cancelled);
+        assert!(
+            backend
+                .list_history()
+                .unwrap()
+                .into_iter()
+                .all(|entry| entry.error_code.as_deref() != Some("recording")),
+            "aborted startup must not leave an orphan recording draft"
+        );
+    }
+
+    #[tokio::test]
+    async fn quick_note_cancel_during_startup_preserves_cancelled_history() {
+        struct DelayedStartEngine {
+            entered: Arc<tokio::sync::Notify>,
+            release: Arc<tokio::sync::Semaphore>,
+        }
+
+        impl DictationEngine for DelayedStartEngine {
+            fn start(
+                &self,
+                _session_id: SessionId,
+                _context: Arc<DictationContext>,
+                _progress: Arc<dyn EngineProgressSink>,
+            ) -> BoxFuture<'static, Result<(), BackendError>> {
+                let entered = Arc::clone(&self.entered);
+                let release = Arc::clone(&self.release);
+                boxed(async move {
+                    entered.notify_waiters();
+                    release.acquire().await.unwrap().forget();
+                    Ok(())
+                })
+            }
+
+            fn finish(
+                &self,
+                _session_id: SessionId,
+                _progress: Arc<dyn EngineProgressSink>,
+            ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
+                boxed(async {
+                    Ok(EngineResult {
+                        raw_text: String::new(),
+                        asr_transcript: None,
+                        polished_text: String::new(),
+                        polish_source: None,
+                        duration_ms: 0,
+                        polish_failed: false,
+                        asr_ms: None,
+                        polish_ms: None,
+                        has_audio_recording: None,
+                        asr_call_label: None,
+                        llm_call_label: None,
+                    })
+                })
+            }
+
+            fn cancel(&self, _session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+                boxed(async { Ok(()) })
+            }
+        }
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let data_dir = TestDataDir::new("quick-note-cancel-startup-preserve");
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data_dir.path().to_path_buf(),
+                ..BackendConfig::default()
+            },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(FakeInserter),
+                dictation_engine: Arc::new(DelayedStartEngine {
+                    entered: Arc::clone(&entered),
+                    release: Arc::clone(&release),
+                }),
+                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                task_spawner: Arc::new(TokioTaskSpawner),
+                ..BackendDependencies::unsupported()
+            },
+        )
+        .unwrap();
+        backend.start().await.unwrap();
+
+        let mut starting = Box::pin(backend.start_dictation_with_options(DictationStartOptions {
+            output_target: DictationOutputTarget::QuickNote,
+            insert_text: false,
+            ..DictationStartOptions::default()
+        }));
+        let wait_entered = entered.notified();
+        tokio::pin!(wait_entered);
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut wait_entered => break,
+                _ = &mut starting => panic!("start settled before delayed engine entered"),
+            }
+        }
+        let session_id = backend.snapshot().dictation.session_id.expect("active session");
+        assert_eq!(
+            backend.list_history().unwrap()[0].error_code.as_deref(),
+            Some("recording")
+        );
+
+        let cancel = backend.cancel_dictation(Some(session_id));
+        release.add_permits(1);
+        let (start_result, cancel_result) = tokio::join!(starting, cancel);
+        assert_eq!(start_result.unwrap_err().code, BackendErrorCode::Cancelled);
+        cancel_result.unwrap();
+
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, session_id.to_string());
+        assert_eq!(history[0].error_code.as_deref(), Some("cancelled"));
+        assert_eq!(history[0].source, HistorySource::QuickNote);
+        assert_eq!(history[0].has_audio_recording, Some(true));
     }
 
     #[tokio::test]

@@ -669,6 +669,9 @@ pub struct UserPreferences {
     /// 这种「文本档案多 + 录音不占盘」组合下精确控制。
     #[serde(default)]
     pub audio_recording_max_entries: Option<u32>,
+    /// 速记导出的录音文件保存目录。空字符串表示每次导出时弹出保存对话框。
+    #[serde(default)]
+    pub quick_note_export_directory: String,
     /// Style Pack Marketplace HTTP 基地址。空 = 本地开发默认 http://127.0.0.1:8090；
     /// 用户在 Settings 里填生产 URL (如 https://api.openless-marketplace.com)。
     #[serde(default)]
@@ -952,6 +955,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     audio_recording_max_entries: Option<u32>,
     #[serde(default)]
+    quick_note_export_directory: String,
+    #[serde(default)]
     marketplace_base_url: String,
     #[serde(default)]
     marketplace_dev_login: String,
@@ -1112,6 +1117,7 @@ impl Default for UserPreferencesWire {
             history_max_entries: prefs.history_max_entries,
             record_audio_for_debug: prefs.record_audio_for_debug,
             audio_recording_max_entries: prefs.audio_recording_max_entries,
+            quick_note_export_directory: prefs.quick_note_export_directory.clone(),
             marketplace_base_url: prefs.marketplace_base_url,
             marketplace_dev_login: prefs.marketplace_dev_login,
             android_insert_strategy: prefs.android_insert_strategy,
@@ -1310,6 +1316,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             history_max_entries: wire.history_max_entries,
             record_audio_for_debug: wire.record_audio_for_debug,
             audio_recording_max_entries: wire.audio_recording_max_entries,
+            quick_note_export_directory: wire.quick_note_export_directory,
             marketplace_base_url: wire.marketplace_base_url,
             marketplace_dev_login: wire.marketplace_dev_login,
             android_insert_strategy: normalize_android_insert_strategy(
@@ -1656,6 +1663,7 @@ impl Default for UserPreferences {
             history_max_entries: None,
             record_audio_for_debug: false,
             audio_recording_max_entries: None,
+            quick_note_export_directory: String::new(),
             marketplace_base_url: String::new(),
             marketplace_dev_login: String::new(),
             android_insert_strategy: default_android_insert_strategy(),

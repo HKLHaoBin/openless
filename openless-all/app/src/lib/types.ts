@@ -530,6 +530,8 @@ export interface UserPreferences {
   /** recordings/ 里保留的最近 wav 文件数。null = 跟随 200 硬上限；1..=200 之间为用户自定义。
    *  跟 historyMaxEntries 解耦——「文本档案多但 wav 只留最近 5 条」是合法组合。 */
   audioRecordingMaxEntries: number | null;
+  /** 速记导出的录音文件保存目录。空字符串 = 每次导出时弹出保存对话框。 */
+  quickNoteExportDirectory: string;
   /** Marketplace HTTP 基地址。空 = 本地开发默认 http://127.0.0.1:8090；生产填 https://api.<domain>。 */
   marketplaceBaseUrl: string;
   /** GitHub login 展示缓存。不用于认证；OAuth token 只存在 Rust CredentialsVault。 */

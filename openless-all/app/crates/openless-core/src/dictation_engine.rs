@@ -10,13 +10,13 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use futures_util::future::BoxFuture;
 
-use crate::dictation_context::DictationContext;
+use crate::dictation_context::{DictationContext, DictationOutputTarget};
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::ports::{
     ActiveRecording, AudioCapture, AudioConsumer, AudioRecorder, CapturedPcm, DictationEngine,
     EngineFailure, EngineFailureStage, EngineProgress, EngineProgressSink, EngineResult,
-    EngineStage, RecordingProgressSink, TextPolisher, TextStreamChunk, TextStreamSink,
-    TranscriptionEngine, TranscriptionSession, VoiceCapture,
+    EngineStage, RecordingArchive, RecordingProgressSink, TextPolisher, TextStreamChunk,
+    TextStreamSink, TranscriptionEngine, TranscriptionSession, VoiceCapture,
 };
 use crate::types::{PolishDelta, SessionId, TranscriptDelta};
 
@@ -350,6 +350,12 @@ impl DictationEngine for PipelineDictationEngine {
             let archive = recording.archive();
             let mut has_audio_recording = archive.as_ref().map(|archive| archive.is_available());
             if let Err(error) = recording.stop().await {
+                demote_failed_archive(
+                    archive.as_ref(),
+                    context.output_target,
+                    &mut has_audio_recording,
+                )
+                .await;
                 let _ = cancel_transcription_once(&session, transcription).await;
                 remove_session(&sessions, session_id, &session);
                 let mut failure = EngineFailure::new(error, EngineFailureStage::Transcribing);
@@ -437,6 +443,12 @@ impl DictationEngine for PipelineDictationEngine {
                             }
                             Err((error, label)) => {
                                 asr_call_label = label.or(asr_call_label);
+                                demote_failed_archive(
+                                    archive.as_ref(),
+                                    context.output_target,
+                                    &mut has_audio_recording,
+                                )
+                                .await;
                                 remove_session(&sessions, session_id, &session);
                                 let mut failure =
                                     EngineFailure::new(error, EngineFailureStage::Transcribing);
@@ -447,6 +459,12 @@ impl DictationEngine for PipelineDictationEngine {
                             }
                         },
                         None => {
+                            demote_failed_archive(
+                                archive.as_ref(),
+                                context.output_target,
+                                &mut has_audio_recording,
+                            )
+                            .await;
                             remove_session(&sessions, session_id, &session);
                             let error = if cancelled {
                                 cancelled_error(
@@ -467,6 +485,9 @@ impl DictationEngine for PipelineDictationEngine {
             };
             let asr_ms = Some(asr_started.elapsed().as_millis() as u64);
             if session.cancelled.load(Ordering::Acquire) {
+                if !context.recording.archive_successful_recording {
+                    discard_ephemeral_archive(archive.as_ref(), &mut has_audio_recording).await;
+                }
                 remove_session(&sessions, session_id, &session);
                 return Err(cancelled_error(
                     "dictation was cancelled after transcription finished",
@@ -480,13 +501,16 @@ impl DictationEngine for PipelineDictationEngine {
             );
             let asr_transcript =
                 (transcript.text != original_asr_text).then_some(original_asr_text);
-            if !context.recording.archive_successful_recording && !transcript.text.trim().is_empty()
-            {
-                if let Some(archive) = archive.as_ref() {
-                    if archive.is_available() {
-                        let _ = archive.discard().await;
-                    }
-                    has_audio_recording = Some(archive.is_available());
+            if !context.recording.archive_successful_recording {
+                if transcript.text.trim().is_empty() {
+                    demote_failed_archive(
+                        archive.as_ref(),
+                        context.output_target,
+                        &mut has_audio_recording,
+                    )
+                    .await;
+                } else {
+                    discard_ephemeral_archive(archive.as_ref(), &mut has_audio_recording).await;
                 }
             }
             publish_progress(
@@ -690,6 +714,40 @@ impl DictationEngine for PipelineDictationEngine {
             }
         })
     }
+}
+
+async fn discard_ephemeral_archive(
+    archive: Option<&Arc<dyn RecordingArchive>>,
+    has_audio_recording: &mut Option<bool>,
+) {
+    let Some(archive) = archive else {
+        return;
+    };
+    if archive.is_available() {
+        if let Err(error) = archive.discard().await {
+            log::warn!("[recording] failed to discard ephemeral archive: {error}");
+        }
+    }
+    *has_audio_recording = Some(archive.is_available());
+}
+
+async fn demote_failed_archive(
+    archive: Option<&Arc<dyn RecordingArchive>>,
+    output_target: DictationOutputTarget,
+    has_audio_recording: &mut Option<bool>,
+) {
+    if output_target == DictationOutputTarget::QuickNote {
+        return;
+    }
+    let Some(archive) = archive else {
+        return;
+    };
+    if archive.is_available() {
+        if let Err(error) = archive.demote_to_ordinary_recording().await {
+            log::warn!("[recording] failed to demote failed archive: {error}");
+        }
+    }
+    *has_audio_recording = Some(archive.is_available());
 }
 
 fn find_session(

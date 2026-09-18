@@ -597,6 +597,7 @@ pub fn reconcile_hotkey_collisions(
         Qa,
         SwitchStyle,
         OpenApp,
+        QuickNote,
         SelectionPolish,
         LessComputer,
     }
@@ -608,6 +609,7 @@ pub fn reconcile_hotkey_collisions(
                 Self::Qa => preferences.qa_hotkey.clone(),
                 Self::SwitchStyle => preferences.switch_style_hotkey.clone(),
                 Self::OpenApp => preferences.open_app_hotkey.clone(),
+                Self::QuickNote => preferences.quick_note_hotkey.clone(),
                 Self::SelectionPolish => preferences.selection_polish_hotkey.clone(),
                 Self::LessComputer => preferences.coding_agent_voice_hotkey.clone(),
             }
@@ -623,6 +625,7 @@ pub fn reconcile_hotkey_collisions(
                 Self::Qa => preferences.qa_hotkey = value,
                 Self::SwitchStyle => preferences.switch_style_hotkey = value,
                 Self::OpenApp => preferences.open_app_hotkey = value,
+                Self::QuickNote => preferences.quick_note_hotkey = value,
                 Self::SelectionPolish => preferences.selection_polish_hotkey = value,
                 Self::LessComputer => preferences.coding_agent_voice_hotkey = value,
             }
@@ -642,11 +645,12 @@ pub fn reconcile_hotkey_collisions(
         }
     }
 
-    const ORDER: [NonCoreHotkey; 6] = [
+    const ORDER: [NonCoreHotkey; 7] = [
         NonCoreHotkey::Translation,
         NonCoreHotkey::Qa,
         NonCoreHotkey::SwitchStyle,
         NonCoreHotkey::OpenApp,
+        NonCoreHotkey::QuickNote,
         NonCoreHotkey::SelectionPolish,
         NonCoreHotkey::LessComputer,
     ];
@@ -921,6 +925,22 @@ mod tests {
         assert_eq!(adjusted, 2);
         assert_eq!(next.qa_hotkey, previous.qa_hotkey);
         assert_eq!(next.translation_hotkey, previous.translation_hotkey);
+        assert!(reject_hotkey_collisions(&next).is_ok());
+    }
+
+    #[test]
+    fn settings_reconciliation_includes_quick_note_conflicts() {
+        let previous = UserPreferences {
+            quick_note_hotkey: Some(combo("N", &["ctrl", "shift"])),
+            ..UserPreferences::default()
+        };
+        let mut next = previous.clone();
+        next.quick_note_hotkey = Some(next.dictation_hotkey.clone());
+
+        let adjusted = reconcile_hotkey_collisions(&mut next, &previous);
+
+        assert_eq!(adjusted, 1);
+        assert_eq!(next.quick_note_hotkey, previous.quick_note_hotkey);
         assert!(reject_hotkey_collisions(&next).is_ok());
     }
 
