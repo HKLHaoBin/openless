@@ -2299,6 +2299,7 @@ pub(crate) mod windows_less_computer_tests {
             translation_hotkey: Mutex::new(None),
             switch_style_hotkey: Mutex::new(None),
             open_app_hotkey: Mutex::new(None),
+            quick_note_hotkey: Mutex::new(None),
             style_pack_hotkeys: Mutex::new(std::collections::HashMap::new()),
             selection_polish_hotkey: Mutex::new(None),
             selection_voice_host: Arc::new(Mutex::new(
