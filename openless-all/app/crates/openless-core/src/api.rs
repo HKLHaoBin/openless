@@ -4276,6 +4276,15 @@ impl OpenLessBackend {
             .ok_or_else(|| {
                 BackendError::new(BackendErrorCode::InvalidArgument, "history entry not found")
             })?;
+        if !matches!(
+            entry.error_code.as_deref(),
+            Some("transcribeFailed" | "emptyTranscript")
+        ) {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidState,
+                "history entry is not a failed transcription",
+            ));
+        }
         entry.raw_transcript = text.clone();
         entry.final_text = text;
         entry.error_code = None;
@@ -7589,21 +7598,35 @@ mod tests {
 
         let mut entry = history_session("one");
         backend.append_history(entry.clone(), 30, Some(20)).unwrap();
+        let asr_call = crate::auxiliary::AsrCallLabel {
+            provider: "channel-b".into(),
+            model: Some("model-b".into()),
+        };
+        let completed_error = backend
+            .apply_history_retranscription(
+                &entry.id,
+                "must not replace history".into(),
+                &asr_call,
+                1,
+            )
+            .unwrap_err();
+        assert_eq!(completed_error.code, BackendErrorCode::InvalidState);
+
         entry.final_text = "updated".to_string();
+        entry.error_code = Some("polishFailed".to_string());
+        assert!(backend.update_history_entry(entry.clone()).unwrap());
+        let polish_error = backend
+            .apply_history_retranscription(&entry.id, "must remain a preview".into(), &asr_call, 1)
+            .unwrap_err();
+        assert_eq!(polish_error.code, BackendErrorCode::InvalidState);
+
+        entry.error_code = Some("transcribeFailed".to_string());
         assert!(backend.update_history_entry(entry.clone()).unwrap());
         assert!(!backend
             .update_history_entry(history_session("missing"))
             .unwrap());
         let retranscribed = backend
-            .apply_history_retranscription(
-                &entry.id,
-                "retranscribed".into(),
-                &crate::auxiliary::AsrCallLabel {
-                    provider: "channel-b".into(),
-                    model: Some("model-b".into()),
-                },
-                480,
-            )
+            .apply_history_retranscription(&entry.id, "retranscribed".into(), &asr_call, 480)
             .unwrap();
         assert_eq!(retranscribed.raw_transcript, "retranscribed");
         assert_eq!(retranscribed.final_text, "retranscribed");
@@ -7620,8 +7643,8 @@ mod tests {
 
         assert!(backend.list_history().unwrap().is_empty());
         assert_eq!(backend.list_activity().unwrap()[0].chars, 42);
-        assert_eq!(backend.snapshot().history_revision, 6);
-        for expected_revision in 1..=6 {
+        assert_eq!(backend.snapshot().history_revision, 7);
+        for expected_revision in 1..=7 {
             assert_eq!(
                 events.try_recv().unwrap().kind,
                 BackendEventKind::HistoryChanged(HistoryChange {
