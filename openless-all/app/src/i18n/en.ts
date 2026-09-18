@@ -171,6 +171,7 @@ export const en: typeof zhCN = {
     marketplace: 'Marketplace',
     translation: 'Translation',
     selectionAsk: 'Ask',
+    quickNote: 'Quick notes',
     corrections: 'Corrections',
     polishMode: 'Polish mode',
     group: {
@@ -298,6 +299,7 @@ export const en: typeof zhCN = {
       style: 'Polish styles: manage output styles and custom prompts',
       translation: 'Translation: hold Shift while speaking to insert in a target language',
       selectionAsk: 'Selection ask: select text, then ask about it by voice',
+      quickNote: 'Quick notes: keep audio and revisit the transcript',
       settings: 'Preferences: shortcuts, providers, privacy and updates',
     },
     footer: {
@@ -520,6 +522,7 @@ export const en: typeof zhCN = {
     inserted: 'Inserted',
     pasteSent: 'Paste sent',
     copiedFallback: 'Copied (use {{shortcut}})',
+    notRequested: 'Not inserted',
     insertFailed: 'Insert failed',
     confirmClear: 'Delete all {{count}} history entries? This cannot be undone.',
     backToList: 'Back to list',
@@ -878,6 +881,21 @@ export const en: typeof zhCN = {
       title: 'How to use',
       step2: 'Select text in any app.',
     },
+  },
+  quickNote: {
+    kicker: 'Quick notes',
+    title: 'Quick notes',
+    desc: 'Permanent audio with playback, export, retranscription, and repolish.',
+    recording: 'Recording…',
+    failedTitle: 'Recording needs attention',
+    emptyTitle: 'Untitled recording',
+    noTranscript: 'No transcript yet.',
+    applyResult: 'Apply to note',
+    applying: 'Applying…',
+    shortcutTitle: 'Quick note shortcut',
+    shortcutDesc: 'Press once to start a permanent capture, then press again to finish.',
+    repolishNeedsTranscript: 'Re-transcribe the audio before repolishing.',
+    shareRecording: 'Share audio',
   },
   settings: {
     selectionWorkspace: {

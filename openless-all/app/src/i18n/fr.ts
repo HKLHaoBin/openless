@@ -171,6 +171,7 @@ export const fr: typeof zhCN = {
     marketplace: 'Catalogue',
     translation: 'Traduction',
     selectionAsk: 'Questions',
+    quickNote: 'Notes vocales',
     corrections: 'Corrections',
     polishMode: 'Mode de rédaction',
     group: {
@@ -304,6 +305,7 @@ export const fr: typeof zhCN = {
         'Traduction : maintenez Maj pendant que vous parlez pour insérer le texte dans une autre langue',
       selectionAsk:
         'Questions sur la sélection : sélectionnez du texte, puis posez une question à voix haute',
+      quickNote: 'Notes vocales : conservez l’audio et relisez la transcription',
       settings: 'Préférences : raccourcis, fournisseurs, confidentialité et mises à jour',
     },
     footer: {
@@ -533,6 +535,7 @@ export const fr: typeof zhCN = {
     inserted: 'Inséré',
     pasteSent: 'Collage envoyé',
     copiedFallback: 'Copié (utilisez {{shortcut}})',
+    notRequested: 'Insertion non demandée',
     insertFailed: 'Échec de l’insertion',
     confirmClear:
       'Supprimer les {{count}} entrées de l’historique ? Cette action est irréversible.',
@@ -904,6 +907,21 @@ export const fr: typeof zhCN = {
       title: 'Mode d’emploi',
       step2: 'Sélectionnez du texte dans une application.',
     },
+  },
+  quickNote: {
+    kicker: 'Notes vocales',
+    title: 'Notes vocales',
+    desc: 'Audio conservé durablement avec lecture, export, retranscription et réécriture.',
+    recording: 'Enregistrement…',
+    failedTitle: 'La note nécessite une intervention',
+    emptyTitle: 'Enregistrement sans titre',
+    noTranscript: 'Aucune transcription pour le moment.',
+    applyResult: 'Appliquer à la note',
+    applying: 'Application…',
+    shortcutTitle: 'Raccourci de note vocale',
+    shortcutDesc: 'Appuyez une fois pour enregistrer, puis à nouveau pour sauvegarder.',
+    repolishNeedsTranscript: 'Retranscrivez d’abord l’audio avant la réécriture.',
+    shareRecording: 'Partager l’audio',
   },
   settings: {
     selectionWorkspace: {

@@ -438,6 +438,7 @@ pub fn reject_non_dictation_side_specific_shortcuts(
         preferences.switch_style_hotkey.as_ref(),
         preferences.open_app_hotkey.as_ref(),
         preferences.coding_agent_voice_hotkey.as_ref(),
+        preferences.quick_note_hotkey.as_ref(),
     ]
     .into_iter()
     .flatten()
@@ -494,6 +495,13 @@ pub fn reject_selection_polish_hotkey_collisions(
             "选区润色快捷键不能和 Less Computer 快捷键相同",
         )?;
     }
+    if let Some(binding) = preferences.quick_note_hotkey.as_ref() {
+        reject_overlap(
+            selection_polish,
+            binding,
+            "选区润色快捷键不能和速记快捷键相同",
+        )?;
+    }
     Ok(())
 }
 
@@ -531,6 +539,10 @@ fn reject_style_pack_hotkey_overlap_with_others(
         (
             preferences.selection_polish_hotkey.as_ref(),
             "风格快捷键不能和选区润色快捷键相同",
+        ),
+        (
+            preferences.quick_note_hotkey.as_ref(),
+            "风格快捷键不能和速记快捷键相同",
         ),
     ];
     for (other, message) in optional_bindings {
@@ -705,6 +717,34 @@ pub fn reject_hotkey_collisions(preferences: &UserPreferences) -> Result<(), Str
     let switch_style = preferences.switch_style_hotkey.as_ref();
     let open_app = preferences.open_app_hotkey.as_ref();
     let less_computer = preferences.coding_agent_voice_hotkey.as_ref();
+    let quick_note = preferences.quick_note_hotkey.as_ref();
+    if let Some(binding) = quick_note {
+        reject_overlap(
+            &preferences.dictation_hotkey,
+            binding,
+            "速记快捷键不能和听写快捷键相同",
+        )?;
+        reject_overlap(
+            &preferences.translation_hotkey,
+            binding,
+            "速记快捷键不能和翻译快捷键相同",
+        )?;
+        if let Some(other) = preferences.qa_hotkey.as_ref() {
+            reject_overlap(other, binding, "速记快捷键不能和 QA 快捷键相同")?;
+        }
+        if let Some(other) = switch_style {
+            reject_overlap(other, binding, "速记快捷键不能和切换风格快捷键相同")?;
+        }
+        if let Some(other) = open_app {
+            reject_overlap(other, binding, "速记快捷键不能和打开应用快捷键相同")?;
+        }
+        if let Some(other) = less_computer {
+            reject_overlap(other, binding, "速记快捷键不能和 Less Computer 快捷键相同")?;
+        }
+        if let Some(other) = preferences.selection_polish_hotkey.as_ref() {
+            reject_overlap(other, binding, "速记快捷键不能和选区润色快捷键相同")?;
+        }
+    }
     if let Some(qa) = preferences.qa_hotkey.as_ref() {
         reject_dictation_qa_hotkey_overlap(&preferences.dictation_hotkey, qa)?;
         reject_qa_translation_hotkey_overlap(qa, &preferences.translation_hotkey)?;

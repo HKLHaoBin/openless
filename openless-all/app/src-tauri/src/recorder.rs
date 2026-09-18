@@ -772,6 +772,7 @@ fn update_peak(slot: &AtomicUsize, current: f32) {
 struct WavArchiver {
     file: std::fs::File,
     bytes_written: u32,
+    last_checkpoint_bytes: u32,
 }
 
 impl WavArchiver {
@@ -785,6 +786,7 @@ impl WavArchiver {
         Ok(Self {
             file,
             bytes_written: 0,
+            last_checkpoint_bytes: 0,
         })
     }
 
@@ -794,18 +796,40 @@ impl WavArchiver {
             self.bytes_written = self
                 .bytes_written
                 .saturating_add(pcm_bytes.len().min(u32::MAX as usize) as u32);
+            // Keep the header usable during a long meeting. Drop still does
+            // the final sync, but a process kill should not leave a WAV with
+            // data_size=0 for the entire recording.
+            const CHECKPOINT_INTERVAL_BYTES: u32 = 160_000;
+            if self
+                .bytes_written
+                .saturating_sub(self.last_checkpoint_bytes)
+                >= CHECKPOINT_INTERVAL_BYTES
+            {
+                self.checkpoint_header();
+            }
+        }
+    }
+
+    fn checkpoint_header(&mut self) {
+        use std::io::{Seek, SeekFrom, Write};
+        if self.file.seek(SeekFrom::Start(0)).is_ok() {
+            if self
+                .file
+                .write_all(&build_wav_header(self.bytes_written))
+                .is_ok()
+            {
+                let _ = self.file.seek(SeekFrom::End(0));
+                let _ = self.file.sync_data();
+                self.last_checkpoint_bytes = self.bytes_written;
+            }
         }
     }
 }
 
 impl Drop for WavArchiver {
     fn drop(&mut self) {
-        use std::io::{Seek, SeekFrom, Write};
-        let header = build_wav_header(self.bytes_written);
-        if self.file.seek(SeekFrom::Start(0)).is_ok() {
-            let _ = self.file.write_all(&header);
-            let _ = self.file.sync_all();
-        }
+        self.checkpoint_header();
+        let _ = self.file.sync_all();
     }
 }
 

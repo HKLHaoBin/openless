@@ -70,6 +70,7 @@ export let mockSettings: UserPreferences = {
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
   qaHotkey: defaultQaShortcut(),
+  quickNoteHotkey: null,
   selectionPolishStylePackId: 'builtin.light',
   selectionPolishOutputMode: 'directReplace',
   selectionPolishHotkey: defaultSelectionPolishShortcut(),
@@ -138,6 +139,12 @@ export let mockSettings: UserPreferences = {
   androidOverlayActivationMode: 'tap',
   androidOverlayLeftSwipeAction: 'translation',
   androidOverlayCancelSwipeDirection: 'up',
+  androidOverlayGestureActions: {
+    up: 'cancel',
+    down: 'none',
+    left: 'translation',
+    right: 'qa',
+  },
   androidOverlaySizeDp: 72,
 };
 

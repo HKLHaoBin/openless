@@ -9,6 +9,7 @@ import { detectOS } from '../components/WindowChrome';
 import { formatComboLabel } from '../lib/hotkey';
 import {
   clearHistory,
+  applyQuickNoteRepolish,
   deleteHistoryEntry,
   listHistory,
   listStylePacks,
@@ -68,7 +69,7 @@ function styleLabelFor(
   return pack ? packDisplayName(pack, modeLabel) : modeLabel[session.mode];
 }
 
-export function History() {
+export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean } = {}) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language;
   const os = detectOS();
@@ -123,10 +124,11 @@ export function History() {
     setLoadError(null);
     try {
       const data = await listHistory();
-      setItems(data);
+      const visible = quickNotesOnly ? data.filter((entry) => entry.source === 'quick_note') : data;
+      setItems(visible);
       setActionError(null);
       setSelectedId((prev) =>
-        prev && data.some((s) => s.id === prev) ? prev : (data[0]?.id ?? null),
+        prev && visible.some((s) => s.id === prev) ? prev : (visible[0]?.id ?? null),
       );
     } catch (error) {
       console.error('[history] failed to load history', error);
@@ -134,7 +136,7 @@ export function History() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [quickNotesOnly]);
 
   useEffect(() => {
     void refresh();
@@ -203,13 +205,19 @@ export function History() {
   );
 
   const onClear = async () => {
-    if (items.length === 0) return;
-    if (!confirm(t('history.confirmClear', { count: items.length }))) return;
+    const clearable = items.filter((entry) => entry.source !== 'quick_note');
+    if (clearable.length === 0) return;
+    if (!confirm(t('history.confirmClear', { count: clearable.length }))) return;
     setActionError(null);
     try {
       await clearHistory();
-      setItems([]);
-      setSelectedId(null);
+      setItems((prev) => prev.filter((entry) => entry.source === 'quick_note'));
+      setSelectedId((current) => {
+        const remaining = items.filter((entry) => entry.source === 'quick_note');
+        return current && remaining.some((entry) => entry.id === current)
+          ? current
+          : (remaining[0]?.id ?? null);
+      });
     } catch (error) {
       console.error('[history] failed to clear history', error);
       setActionError(t('history.clearFailed', { err: errorMessage(error) }));
@@ -305,6 +313,36 @@ export function History() {
     }
   };
 
+  const onShareAudio = async () => {
+    if (!item?.hasAudioRecording) return;
+    try {
+      const dataUrl = await readAudioRecording(item.id);
+      const comma = dataUrl.indexOf(',');
+      const b64 = comma >= 0 ? dataUrl.slice(comma + 1) : '';
+      if (!b64) throw new Error('empty recording');
+      const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const file = new File([bin], `openless-recording-${item.id}.wav`, {
+        type: 'audio/wav',
+      });
+      if (
+        !navigator.share ||
+        (navigator.canShare && !navigator.canShare({ files: [file] }))
+      ) {
+        await onExportAudio();
+        return;
+      }
+      await navigator.share({
+        title: historyTitle(item, t),
+        files: [file],
+      });
+    } catch (error) {
+      const msg = errorMessage(error);
+      if (!isUserCancelled(msg)) {
+        setActionError(t('history.exportFailed', { err: msg }));
+      }
+    }
+  };
+
   // 失败记录沿用 #613 的原地修复；已经插入过文字的完成 / 润色失败记录只显示临时结果，
   // 避免把事后重转文本伪装成当时实际插入的历史事实。
   const onRetranscribe = async () => {
@@ -340,17 +378,19 @@ export function History() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <PageHeader
-        kicker={t('history.kicker')}
-        title={t('history.title')}
-        desc={t('history.desc')}
+        kicker={quickNotesOnly ? t('quickNote.kicker', 'Quick notes') : t('history.kicker')}
+        title={quickNotesOnly ? t('quickNote.title', 'Quick notes') : t('history.title')}
+        desc={quickNotesOnly ? t('quickNote.desc', 'Permanent audio notes.') : t('history.desc')}
         right={
           <div style={{ display: 'flex', gap: 8 }}>
             <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refresh()}>
               {t('common.refresh')}
             </Btn>
-            <Btn icon="trash" variant="ghost" size="sm" onClick={onClear}>
-              {t('common.clear')}
-            </Btn>
+            {!quickNotesOnly && (
+              <Btn icon="trash" variant="ghost" size="sm" onClick={onClear}>
+                {t('common.clear')}
+              </Btn>
+            )}
           </div>
         }
       />
@@ -459,7 +499,14 @@ export function History() {
                     {debouncedQuery.trim()
                       ? t('history.searchNoMatch', { query: debouncedQuery.trim() })
                       : t('history.empty', {
-                          trigger: prefs ? formatComboLabel(prefs.dictationHotkey) : '',
+                          trigger: prefs
+                            ? formatComboLabel(
+                                (quickNotesOnly ? prefs.quickNoteHotkey : prefs.dictationHotkey) ?? {
+                                  primary: '',
+                                  modifiers: [],
+                                },
+                              )
+                            : '',
                         })}
                   </div>
                 )}
@@ -531,7 +578,7 @@ export function History() {
                           overflow: 'hidden',
                         }}
                       >
-                        {s.finalText.split('\n')[0]}
+                        {historyTitle(s, t)}
                       </div>
                       {/* tone 仍按 baseMode 走：颜色保留原来的粗分类信息，文字换成实际风格包名。 */}
                       <div style={{ display: 'flex', minWidth: 0 }} title={styleLabel(s)}>
@@ -616,6 +663,13 @@ export function History() {
                         {t('history.exportRecording')}
                       </Btn>
                     )}
+                    {os === 'android' &&
+                      item.hasAudioRecording &&
+                      !audioMissingIds.has(item.id) && (
+                        <Btn variant="ghost" size="sm" onClick={() => void onShareAudio()}>
+                          {t('quickNote.shareRecording', 'Share audio')}
+                        </Btn>
+                      )}
                     {canRetranscribeHistoryEntry(item) && !audioMissingIds.has(item.id) && (
                       <Btn
                         icon="refresh"
@@ -759,6 +813,8 @@ export function History() {
                           ? t('history.copiedFallback', {
                               shortcut: os === 'mac' ? '⌘V' : 'Ctrl+V',
                             })
+                      : item.insertStatus === 'notRequested'
+                        ? t('history.notRequested', 'Not inserted')
                           : t('history.insertFailed')}
                   </span>
                 </div>
@@ -860,7 +916,7 @@ export function History() {
                         whiteSpace: 'pre-line',
                       }}
                     >
-                      {item.finalText}
+                      {item.finalText || item.rawTranscript || t('quickNote.noTranscript', 'No transcript yet.')}
                     </p>
                   </div>
                 </div>
@@ -868,12 +924,18 @@ export function History() {
                   此时整块不渲染；QA 记录的原文是问题而不是待润色文本，同样不渲染。
                   key 让切换记录时结果与状态一起重置，避免把上一条的结果留在新条目下面；
                   前缀是为了跟上面播放器的 key 区分开（同层重复 key 会残留旧节点）。 */}
-                {item.rawTranscript.trim() && item.errorCode !== 'qaSession' && (
+                {(item.rawTranscript.trim() || quickNotesOnly) && item.errorCode !== 'qaSession' && (
                   <RepolishPanel
                     session={item}
                     mobile={mobile}
                     allPacks={allPacks}
                     packsError={packsError}
+                    persistOnApply={quickNotesOnly}
+                    onApplied={(updated) =>
+                      setItems((prev) =>
+                        prev.map((entry) => (entry.id === updated.id ? updated : entry)),
+                      )
+                    }
                     key={`repolish-${item.id}`}
                   />
                 )}
@@ -894,6 +956,17 @@ export function History() {
       </div>
     </div>
   );
+}
+
+function historyTitle(
+  session: DictationSession,
+  t: ReturnType<typeof useTranslation>['t'],
+): string {
+  const text = (session.finalText || session.rawTranscript).trim();
+  if (text) return text.split(/\r?\n/, 1)[0];
+  if (session.errorCode === 'recording') return t('quickNote.recording', 'Recording…');
+  if (session.errorCode) return t('quickNote.failedTitle', 'Recording needs attention');
+  return t('quickNote.emptyTitle', 'Untitled recording');
 }
 
 /** 后端超时错误在 IPC 边界退化成裸字符串（LLMError::Timeout → "timeout"）。
@@ -936,19 +1009,25 @@ function RepolishPanel({
   mobile,
   allPacks,
   packsError,
+  persistOnApply,
+  onApplied,
 }: {
   session: DictationSession;
   mobile: boolean;
   /** History 顶层加载的**全部**风格包（含已禁用）；null 表示还在加载。 */
   allPacks: StylePack[] | null;
   packsError: string | null;
+  persistOnApply: boolean;
+  onApplied: (updated: DictationSession) => void;
 }) {
   const { t } = useTranslation();
   const MODE_LABEL = useModeLabel();
   const [selectedPackId, setSelectedPackId] = useState<string>('');
   const [running, setRunning] = useState<'retry' | 'apply' | null>(null);
+  const [applyingKey, setApplyingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<RepolishResult[]>([]);
+  const canRun = session.rawTranscript.trim().length > 0;
 
   // 只列启用的包：禁用的包在别处也不参与润色，这里列出来会让「应用」得到
   // 一个用户以为已经关掉的风格。
@@ -966,7 +1045,7 @@ function RepolishPanel({
       kind === 'apply'
         ? selectedPackId
         : resolveRepolishRetryPackIdWithFallback(session, allPacks, packs ?? []);
-    if (kind === 'apply' && !packId) return;
+    if (!canRun || (kind === 'apply' && !packId)) return;
     setRunning(kind);
     setError(null);
     try {
@@ -993,6 +1072,24 @@ function RepolishPanel({
       );
     } finally {
       setRunning(null);
+    }
+  };
+
+  const applyResult = async (result: RepolishResult) => {
+    if (!persistOnApply) return;
+    setApplyingKey(result.key);
+    setError(null);
+    try {
+      const updated = await applyQuickNoteRepolish(
+        session.id,
+        result.text,
+        result.key === '__retry__' ? session.stylePackId ?? undefined : result.key,
+      );
+      onApplied(updated);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setApplyingKey(null);
     }
   };
 
@@ -1054,11 +1151,16 @@ function RepolishPanel({
           marginBottom: results.length > 0 ? 14 : 0,
         }}
       >
+        {!canRun && (
+          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginBottom: 10 }}>
+            {t('quickNote.repolishNeedsTranscript', 'Re-transcribe the audio before repolishing.')}
+          </div>
+        )}
         <Btn
           icon="refresh"
           variant="ghost"
           size="sm"
-          disabled={running !== null}
+          disabled={running !== null || !canRun}
           onClick={() => void run('retry')}
         >
           {running === 'retry' ? t('history.repolish.retrying') : t('history.repolish.retry')}
@@ -1089,7 +1191,7 @@ function RepolishPanel({
             <Btn
               variant="ghost"
               size="sm"
-              disabled={!selectedPackId || running !== null}
+              disabled={!selectedPackId || running !== null || !canRun}
               onClick={() => void run('apply')}
             >
               {running === 'apply' ? t('history.repolish.applying') : t('history.repolish.apply')}
@@ -1117,7 +1219,14 @@ function RepolishPanel({
       {results.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 12 }}>
           {results.map((result) => (
-            <HistoryResultCard key={result.key} title={result.title} text={result.text} />
+            <HistoryResultCard
+              key={result.key}
+              title={result.title}
+              text={result.text}
+              applyLabel={persistOnApply ? t('quickNote.applyResult', 'Apply to note') : undefined}
+              applying={applyingKey === result.key}
+              onApply={persistOnApply ? () => void applyResult(result) : undefined}
+            />
           ))}
         </div>
       )}
@@ -1125,7 +1234,19 @@ function RepolishPanel({
   );
 }
 
-function HistoryResultCard({ title, text }: { title: string; text: string }) {
+function HistoryResultCard({
+  title,
+  text,
+  applyLabel,
+  applying = false,
+  onApply,
+}: {
+  title: string;
+  text: string;
+  applyLabel?: string;
+  applying?: boolean;
+  onApply?: () => void;
+}) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
@@ -1174,6 +1295,16 @@ function HistoryResultCard({ title, text }: { title: string; text: string }) {
             onClick={() => void onCopy()}
           >
             {copied ? t('common.copied') : t('common.copy')}
+          </Btn>
+        )}
+        {onApply && text.trim() && (
+          <Btn
+            variant="ghost"
+            size="sm"
+            disabled={applying}
+            onClick={onApply}
+          >
+            {applying ? t('quickNote.applying', 'Applying…') : applyLabel}
           </Btn>
         )}
       </div>

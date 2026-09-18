@@ -160,6 +160,7 @@ export const ko: typeof zhCN = {
     marketplace: '마켓',
     translation: '번역',
     selectionAsk: '선택 질문',
+    quickNote: '속기',
     corrections: '교정 규칙',
     polishMode: '다듬기 모드',
     group: {
@@ -287,6 +288,7 @@ export const ko: typeof zhCN = {
       style: '스타일: 출력 스타일과 사용자 지정 프롬프트 관리',
       translation: '번역: Shift를 누른 채 말하면 대상 언어로 삽입',
       selectionAsk: '선택 질문: 텍스트를 선택한 뒤 음성으로 질문',
+      quickNote: '속기: 오디오를 저장하고 나중에 다시 확인',
       settings: '환경설정: 단축키, 제공자, 개인정보 및 업데이트',
     },
     footer: {
@@ -506,6 +508,7 @@ export const ko: typeof zhCN = {
     inserted: '입력됨',
     pasteSent: '붙여넣기 시도됨',
     copiedFallback: '복사됨({{shortcut}} 필요)',
+    notRequested: '입력하지 않음',
     insertFailed: '입력 실패',
     confirmClear: '전체 {{count}}건의 기록을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.',
     backToList: '목록으로',
@@ -863,6 +866,21 @@ export const ko: typeof zhCN = {
       title: '사용 방법',
       step2: '아무 앱에서 텍스트 선택.',
     },
+  },
+  quickNote: {
+    kicker: '속기',
+    title: '속기',
+    desc: '오디오를 영구 보관하고 재생·내보내기·재전사·다시 다듬기를 지원합니다.',
+    recording: '녹음 중…',
+    failedTitle: '녹음을 확인해야 합니다',
+    emptyTitle: '제목 없는 녹음',
+    noTranscript: '아직 전사 내용이 없습니다.',
+    applyResult: '속기에 적용',
+    applying: '적용 중…',
+    shortcutTitle: '속기 단축키',
+    shortcutDesc: '한 번 눌러 녹음하고 다시 눌러 저장합니다.',
+    repolishNeedsTranscript: '먼저 오디오를 다시 전사해 주세요.',
+    shareRecording: '오디오 공유',
   },
   settings: {
     selectionWorkspace: {

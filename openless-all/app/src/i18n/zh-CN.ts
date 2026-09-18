@@ -162,6 +162,7 @@ export const zhCN = {
     marketplace: '风格市场',
     translation: '翻译',
     selectionAsk: '划词追问',
+    quickNote: '速记',
     corrections: '纠正规则',
     polishMode: '润色模式',
     group: {
@@ -287,6 +288,7 @@ export const zhCN = {
       style: '润色风格：管理输出风格与自定义提示词',
       translation: '翻译：按住 Shift 说话，译成目标语言插入',
       selectionAsk: '划词追问：选中文字后语音提问',
+      quickNote: '速记：保存录音并整理为可回看的记录',
       settings: '偏好设置：快捷键、提供商、隐私与更新',
     },
     footer: {
@@ -499,6 +501,7 @@ export const zhCN = {
     inserted: '已插入',
     pasteSent: '已尝试粘贴',
     copiedFallback: '已复制(需 {{shortcut}})',
+    notRequested: '未请求插入',
     insertFailed: '插入失败',
     confirmClear: '确定清空全部 {{count}} 条记录？此操作不可恢复。',
     backToList: '返回列表',
@@ -848,6 +851,21 @@ export const zhCN = {
       title: '使用方法',
       step2: '在任意 app 选中文字。',
     },
+  },
+  quickNote: {
+    kicker: '速记',
+    title: '速记',
+    desc: '永久保留录音，支持回放、导出、重新转录和重新润色。',
+    recording: '录音中…',
+    failedTitle: '录音需要处理',
+    emptyTitle: '未命名录音',
+    noTranscript: '还没有转写内容。',
+    applyResult: '应用到速记',
+    applying: '应用中…',
+    shortcutTitle: '速记快捷键',
+    shortcutDesc: '按一次开始永久录音，再按一次结束并保存。',
+    repolishNeedsTranscript: '请先重新转录录音，再进行润色。',
+    shareRecording: '分享录音',
   },
   settings: {
     selectionWorkspace: {

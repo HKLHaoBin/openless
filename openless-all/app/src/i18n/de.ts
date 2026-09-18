@@ -171,6 +171,7 @@ export const de: typeof zhCN = {
     marketplace: 'Marktplatz',
     translation: 'Übersetzung',
     selectionAsk: 'Nachfragen',
+    quickNote: 'Schnellnotizen',
     corrections: 'Korrekturen',
     polishMode: 'Überarbeitungsmodus',
     group: {
@@ -302,6 +303,7 @@ export const de: typeof zhCN = {
       translation:
         'Übersetzung: Beim Sprechen Shift gedrückt halten, um Text in der Zielsprache einzufügen',
       selectionAsk: 'Zum ausgewählten Text fragen: Text auswählen und eine Frage dazu sprechen',
+      quickNote: 'Schnellnotizen: Audio speichern und später wiedergeben',
       settings: 'Einstellungen: Kurzbefehle, Dienste, Datenschutz und Updates',
     },
     footer: {
@@ -528,6 +530,7 @@ export const de: typeof zhCN = {
     inserted: 'Eingefügt',
     pasteSent: 'Einfügebefehl gesendet',
     copiedFallback: 'Kopiert (mit {{shortcut}} einfügen)',
+    notRequested: 'Nicht eingefügt',
     insertFailed: 'Einfügen fehlgeschlagen',
     confirmClear:
       'Alle {{count}} Verlaufseinträge löschen? Dies kann nicht rückgängig gemacht werden.',
@@ -897,6 +900,21 @@ export const de: typeof zhCN = {
       title: 'So funktioniert es',
       step2: 'Wähle Text in einer beliebigen App aus.',
     },
+  },
+  quickNote: {
+    kicker: 'Schnellnotizen',
+    title: 'Schnellnotizen',
+    desc: 'Audio dauerhaft behalten, mit Wiedergabe, Export, Neu-Transkription und Überarbeitung.',
+    recording: 'Aufnahme läuft …',
+    failedTitle: 'Aufnahme benötigt Aufmerksamkeit',
+    emptyTitle: 'Unbenannte Aufnahme',
+    noTranscript: 'Noch keine Transkription.',
+    applyResult: 'Auf Notiz anwenden',
+    applying: 'Wird angewendet …',
+    shortcutTitle: 'Schnellnotizen-Kurzbefehl',
+    shortcutDesc: 'Einmal drücken zum Aufnehmen, erneut drücken zum Speichern.',
+    repolishNeedsTranscript: 'Bitte zuerst die Audiodatei neu transkribieren.',
+    shareRecording: 'Audio teilen',
   },
   settings: {
     selectionWorkspace: {

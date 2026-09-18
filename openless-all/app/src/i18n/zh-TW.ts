@@ -164,6 +164,7 @@ export const zhTW: typeof zhCN = {
     marketplace: '風格市場',
     translation: '翻譯',
     selectionAsk: '劃詞追問',
+    quickNote: '速記',
     corrections: '糾正規則',
     polishMode: '潤色模式',
     group: {
@@ -289,6 +290,7 @@ export const zhTW: typeof zhCN = {
       style: '潤色風格：管理輸出風格與自訂提示詞',
       translation: '翻譯：按住 Shift 說話，譯成目標語言插入',
       selectionAsk: '劃詞追問：選取文字後語音提問',
+      quickNote: '速記：保存錄音並整理成可回看的記錄',
       settings: '偏好設定：快捷鍵、提供商、隱私與更新',
     },
     footer: {
@@ -501,6 +503,7 @@ export const zhTW: typeof zhCN = {
     inserted: '已插入',
     pasteSent: '已嘗試粘貼',
     copiedFallback: '已複製(需 {{shortcut}})',
+    notRequested: '未要求插入',
     insertFailed: '插入失敗',
     confirmClear: '確定清空全部 {{count}} 條記錄？此操作不可恢復。',
     backToList: '返回列表',
@@ -850,6 +853,21 @@ export const zhTW: typeof zhCN = {
       title: '使用方法',
       step2: '在任意 app 選中文字。',
     },
+  },
+  quickNote: {
+    kicker: '速記',
+    title: '速記',
+    desc: '永久保留錄音，支援回放、匯出、重新轉錄與重新潤色。',
+    recording: '錄音中…',
+    failedTitle: '錄音需要處理',
+    emptyTitle: '未命名錄音',
+    noTranscript: '尚未有轉錄內容。',
+    applyResult: '套用到速記',
+    applying: '套用中…',
+    shortcutTitle: '速記快捷鍵',
+    shortcutDesc: '按一下開始永久錄音，再按一下結束並保存。',
+    repolishNeedsTranscript: '請先重新轉錄錄音，再進行潤色。',
+    shareRecording: '分享錄音',
   },
   settings: {
     selectionWorkspace: {

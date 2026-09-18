@@ -14,8 +14,8 @@ use crate::credentials::{
     ProviderSlot, SecretValue,
 };
 use crate::dictation_context::{
-    DictationAudioSource, DictationContext, DictationProviderInvocations, DictationStartOptions,
-    DictationStopOptions,
+    DictationAudioSource, DictationContext, DictationOutputTarget, DictationProviderInvocations,
+    DictationStartOptions, DictationStopOptions,
 };
 use crate::domains::{LessComputerRunRequest, LessComputerRunResult};
 use crate::errors::{BackendError, BackendErrorCode};
@@ -3215,6 +3215,15 @@ impl OpenLessBackend {
         }
     }
 
+    pub fn dictation_output_target(&self) -> Option<DictationOutputTarget> {
+        self.state
+            .read()
+            .expect("backend state lock poisoned")
+            .dictation_context
+            .as_ref()
+            .map(|context| context.output_target)
+    }
+
     /// Dispatch a launcher/single-instance intent through the same state
     /// machine and domain Interfaces used by normal host calls.
     pub async fn dispatch_cli_intent(
@@ -4239,6 +4248,18 @@ impl OpenLessBackend {
         Ok(())
     }
 
+    pub fn upsert_history(
+        &self,
+        session: DictationSession,
+        retention_days: u32,
+        max_entries: Option<u32>,
+    ) -> Result<(), BackendError> {
+        self.history
+            .upsert_with_retention(session, retention_days, max_entries)?;
+        self.publish_history_changed();
+        Ok(())
+    }
+
     pub fn delete_history(&self, id: &str) -> Result<(), BackendError> {
         self.history.delete(id)?;
         self.publish_history_changed();
@@ -4251,6 +4272,45 @@ impl OpenLessBackend {
             self.publish_history_changed();
         }
         Ok(updated)
+    }
+
+    pub fn apply_history_repolish(
+        &self,
+        session_id: &str,
+        text: String,
+        style_pack_id: Option<String>,
+    ) -> Result<DictationSession, BackendError> {
+        if text.trim().is_empty() {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "repolish text is empty",
+            ));
+        }
+        let mut entry = self
+            .list_history()?
+            .into_iter()
+            .find(|entry| entry.id == session_id)
+            .ok_or_else(|| {
+                BackendError::new(BackendErrorCode::InvalidArgument, "history entry not found")
+            })?;
+        if entry.source != HistorySource::QuickNote {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "only quick-note history can apply repolish results",
+            ));
+        }
+        entry.final_text = text;
+        entry.error_code = None;
+        if style_pack_id.is_some() {
+            entry.style_pack_id = style_pack_id;
+        }
+        if !self.update_history_entry(entry.clone())? {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "history entry not found",
+            ));
+        }
+        Ok(entry)
     }
 
     pub fn apply_history_retranscription(
@@ -4276,10 +4336,13 @@ impl OpenLessBackend {
             .ok_or_else(|| {
                 BackendError::new(BackendErrorCode::InvalidArgument, "history entry not found")
             })?;
-        if !matches!(
-            entry.error_code.as_deref(),
-            Some("transcribeFailed" | "emptyTranscript")
-        ) {
+        if entry.source != HistorySource::QuickNote
+            && entry.error_code.as_deref() != Some("recording")
+            && !matches!(
+                entry.error_code.as_deref(),
+                Some("transcribeFailed" | "emptyTranscript")
+            )
+        {
             return Err(BackendError::new(
                 BackendErrorCode::InvalidState,
                 "history entry is not a failed transcription",
@@ -4925,6 +4988,9 @@ impl OpenLessBackend {
                 "dictation session was cancelled while the engine was starting",
             ));
         }
+        if context.output_target != DictationOutputTarget::ForegroundApp {
+            self.persist_recording_started(&context, session_id);
+        }
         Ok(session_id)
     }
 
@@ -4986,17 +5052,27 @@ impl OpenLessBackend {
                                 "active dictation session has no captured context",
                             )
                         })?;
+                        let target = match options.quick_note {
+                            Some(true) => DictationOutputTarget::QuickNote,
+                            Some(false) => DictationOutputTarget::ForegroundApp,
+                            None if captured.output_target == DictationOutputTarget::Undecided => {
+                                DictationOutputTarget::ForegroundApp
+                            }
+                            None => captured.output_target,
+                        };
+                        let targeted = captured.with_output_target(target);
                         let context = match options.translation_requested {
                             Some(requested) => {
-                                Arc::new(captured.with_translation_requested(requested))
+                                Arc::new(targeted.with_translation_requested(requested))
                             }
-                            None => captured,
+                            None => Arc::new(targeted),
                         };
                         let context_changed =
                             state.dictation_translation_requested.take().is_some()
                                 || state.dictation_context.as_ref().is_some_and(|previous| {
                                     previous.polish.translation_active
                                         != context.polish.translation_active
+                                        || previous.output_target != context.output_target
                                 });
                         state.dictation_context = Some(Arc::clone(&context));
                         state.dictation.translation_active = context.polish.translation_active;
@@ -5021,6 +5097,14 @@ impl OpenLessBackend {
             }
             changed.await;
         };
+
+        // Android's undecided capture prepared a non-streaming insertion
+        // resource so an ordinary tap can still finish normally. A quick-note
+        // gesture changes the target at the stop boundary, so cancel that
+        // unused foreground insertion before the engine finalizes.
+        if context.output_target == DictationOutputTarget::QuickNote {
+            let _ = self.cancel_text_insertion(session_id).await;
+        }
 
         if context_changed {
             if let Err(error) = self
@@ -5303,6 +5387,65 @@ impl OpenLessBackend {
         Ok(result)
     }
 
+    fn history_source_for_context(context: &DictationContext) -> HistorySource {
+        if context.output_target == DictationOutputTarget::QuickNote {
+            HistorySource::QuickNote
+        } else {
+            HistorySource::Voice
+        }
+    }
+
+    fn persist_recording_started(&self, context: &DictationContext, session_id: SessionId) {
+        let preferences = self.get_preferences();
+        let front_app =
+            crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
+        let pipeline_mode = match context.pipeline_mode {
+            crate::shared_types::PipelineMode::Traditional => "traditional",
+            crate::shared_types::PipelineMode::Multimodal => "multimodal",
+        };
+        let session = DictationSession {
+            id: session_id.to_string(),
+            created_at: self.clock.now_utc().to_rfc3339(),
+            source: Self::history_source_for_context(context),
+            raw_transcript: String::new(),
+            asr_transcript: None,
+            final_text: String::new(),
+            mode: context.polish.mode,
+            style_pack_id: Some(context.polish.style_pack_id.clone()),
+            translation_active: context.polish.translation_active,
+            polish_source: None,
+            app_bundle_id: front_app.bundle_id,
+            app_name: front_app.name,
+            insert_status: HistoryInsertStatus::NotRequested,
+            error_code: Some("recording".to_string()),
+            duration_ms: None,
+            dictionary_entry_count: None,
+            has_audio_recording: Some(context.recording.archive_enabled),
+            asr_provider: Some(context.asr.provider_id.clone()),
+            asr_model: context.asr.model.clone(),
+            llm_provider: None,
+            llm_model: None,
+            pipeline_mode: Some(pipeline_mode.to_string()),
+            asr_ms: None,
+            polish_ms: None,
+        };
+        if let Err(error) = self.upsert_history(
+            session,
+            preferences.history_retention_days,
+            preferences.history_max_entries,
+        ) {
+            log::warn!("failed to persist recording-start history: {error}");
+        }
+    }
+
+    fn history_created_at(&self, session_id: &str) -> String {
+        self.list_history()
+            .ok()
+            .and_then(|entries| entries.into_iter().find(|entry| entry.id == session_id))
+            .map(|entry| entry.created_at)
+            .unwrap_or_else(|| self.clock.now_utc().to_rfc3339())
+    }
+
     fn persist_completed_dictation(
         &self,
         context: &DictationContext,
@@ -5341,8 +5484,8 @@ impl OpenLessBackend {
         );
         let session = DictationSession {
             id: result.session_id.to_string(),
-            created_at: self.clock.now_utc().to_rfc3339(),
-            source: HistorySource::Voice,
+            created_at: self.history_created_at(&result.session_id.to_string()),
+            source: Self::history_source_for_context(context),
             raw_transcript: result.raw_text.clone(),
             asr_transcript: engine_result.asr_transcript.clone(),
             final_text: result.polished_text.clone(),
@@ -5367,7 +5510,7 @@ impl OpenLessBackend {
             asr_ms: attribution.asr_ms,
             polish_ms: attribution.polish_ms,
         };
-        if let Err(error) = self.append_history(
+        if let Err(error) = self.upsert_history(
             session,
             preferences.history_retention_days,
             preferences.history_max_entries,
@@ -5417,8 +5560,8 @@ impl OpenLessBackend {
         );
         let session = DictationSession {
             id: session_id.to_string(),
-            created_at: self.clock.now_utc().to_rfc3339(),
-            source: HistorySource::Voice,
+            created_at: self.history_created_at(&session_id.to_string()),
+            source: Self::history_source_for_context(context),
             raw_transcript: raw_text.clone(),
             asr_transcript: Some(raw_text),
             final_text,
@@ -5441,7 +5584,7 @@ impl OpenLessBackend {
             asr_ms: attribution.asr_ms,
             polish_ms: attribution.polish_ms,
         };
-        if let Err(error) = self.append_history(
+        if let Err(error) = self.upsert_history(
             session,
             preferences.history_retention_days,
             preferences.history_max_entries,
@@ -5623,7 +5766,7 @@ impl OpenLessBackend {
         &self,
         session_id: Option<SessionId>,
     ) -> Result<(), BackendError> {
-        let active = {
+        let (active, preserve_quick_note) = {
             let mut state = self.state.write().expect("backend state lock poisoned");
             ensure_running(&state)?;
             let active = state.dictation.session_id.ok_or_else(|| {
@@ -5638,6 +5781,12 @@ impl OpenLessBackend {
                     "session id does not match the active session",
                 ));
             }
+            let preserve_quick_note = state
+                .dictation_context
+                .as_ref()
+                .is_some_and(|context| {
+                    context.output_target == DictationOutputTarget::QuickNote
+                });
             state.dictation.phase = DictationPhase::Cancelled;
             self.events.publish(
                 Some(active),
@@ -5648,7 +5797,7 @@ impl OpenLessBackend {
             state.silence_monitor = None;
             state.transcripts.remove(&active);
             self.phase_changed.notify_waiters();
-            active
+            (active, preserve_quick_note)
         };
         let cancel_result = self.cancel_session_adapters(active).await;
         // The state can already display cancellation, but native audio/input
@@ -5656,6 +5805,21 @@ impl OpenLessBackend {
         // cleanup finishes, including on its error path.
         self.voice_sessions.release(active);
         let host_result = self.hide_dictation_feedback(active);
+        if preserve_quick_note {
+            if let Some(mut entry) = self
+                .list_history()?
+                .into_iter()
+                .find(|entry| entry.id == active.to_string())
+            {
+                entry.error_code = Some("cancelled".to_string());
+                entry.has_audio_recording = Some(true);
+                let _ = self.update_history_entry(entry);
+            }
+        } else {
+            // Undecided captures that are explicitly cancelled are not notes;
+            // remove their provisional row after native archive cleanup.
+            let _ = self.delete_history(&active.to_string());
+        }
         cancel_result?;
         host_result?;
         Ok(())
@@ -8687,7 +8851,10 @@ mod tests {
         )
         .unwrap();
         let first = backend.start().await.expect("first start must not fail");
-        let second = backend.start().await.expect("handshake start must not fail");
+        let second = backend
+            .start()
+            .await
+            .expect("handshake start must not fail");
         assert!(first.backend.running);
         assert!(second.backend.running);
         let _ = data_dir;
@@ -9193,6 +9360,7 @@ mod tests {
         backend
             .stop_dictation_with_options(DictationStopOptions {
                 translation_requested: Some(true),
+                ..DictationStopOptions::default()
             })
             .await
             .unwrap();
@@ -9268,6 +9436,7 @@ mod tests {
         backend
             .stop_dictation_with_options(DictationStopOptions {
                 translation_requested: Some(false),
+                ..DictationStopOptions::default()
             })
             .await
             .unwrap();
@@ -9463,6 +9632,7 @@ mod tests {
         let error = backend
             .stop_dictation_with_options(DictationStopOptions {
                 translation_requested: Some(true),
+                ..DictationStopOptions::default()
             })
             .await
             .expect_err("context update failure must abort finalization");
@@ -10314,6 +10484,7 @@ mod tests {
         let error = backend
             .stop_dictation_with_options(DictationStopOptions {
                 translation_requested: Some(true),
+                ..DictationStopOptions::default()
             })
             .await
             .expect_err("translation must retain the unavailable LLM snapshot");
@@ -12108,6 +12279,7 @@ mod tests {
                     start: DictationStartOptions::default(),
                     stop: DictationStopOptions {
                         translation_requested: Some(true),
+                        ..DictationStopOptions::default()
                     },
                 },
             )

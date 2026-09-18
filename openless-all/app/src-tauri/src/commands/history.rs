@@ -8,12 +8,32 @@ pub fn list_history(core: CoreState<'_>) -> Result<Vec<DictationSession>, String
 
 #[tauri::command]
 pub fn delete_history_entry(core: CoreState<'_>, id: String) -> Result<(), String> {
-    core.delete_history(&id).map_err(|e| e.to_string())
+    if core
+        .snapshot()
+        .dictation
+        .session_id
+        .is_some_and(|active| active.to_string() == id)
+    {
+        return Err("cannot delete the active recording; stop or cancel it first".into());
+    }
+    core.delete_history(&id).map_err(|e| e.to_string())?;
+    remove_recording_files(&id);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn clear_history(core: CoreState<'_>) -> Result<(), String> {
-    core.clear_history().map_err(|e| e.to_string())
+    if core.snapshot().dictation.session_id.is_some() {
+        return Err("cannot clear history while a recording is active".into());
+    }
+    let entries = core.list_history().map_err(|e| e.to_string())?;
+    core.clear_history().map_err(|e| e.to_string())?;
+    for entry in entries {
+        if entry.source != openless_core::HistorySource::QuickNote {
+            remove_recording_files(&entry.id);
+        }
+    }
+    Ok(())
 }
 
 /// 每日活动汇总（日期升序），概览页年度热力图与「近 7 天 / 近 30 天」指标的数据源。
@@ -23,6 +43,30 @@ pub fn clear_history(core: CoreState<'_>) -> Result<(), String> {
 pub fn get_activity_stats(core: CoreState<'_>) -> Vec<ActivityDay> {
     core.list_activity()
         .expect("activity snapshot should only fail after a poisoned lock")
+}
+
+fn recording_path_candidates(session_id: &str) -> Result<[std::path::PathBuf; 2], String> {
+    Ok([
+        crate::persistence::recording_path_for_session(session_id).map_err(|e| e.to_string())?,
+        crate::persistence::quick_note_recording_path_for_session(session_id)
+            .map_err(|e| e.to_string())?,
+    ])
+}
+
+fn existing_recording_path(session_id: &str) -> Result<std::path::PathBuf, String> {
+    let candidates = recording_path_candidates(session_id)?;
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| "recording not found".to_string())
+}
+
+fn remove_recording_files(session_id: &str) {
+    if let Ok(candidates) = recording_path_candidates(session_id) {
+        for path in candidates {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// 读取某次会话的原始麦克风 wav 字节流。文件存在的条件：debug 用户的任意会话，或任意
@@ -48,8 +92,7 @@ pub async fn read_audio_recording(session_id: String) -> Result<String, String> 
     if !is_valid_session_id(&session_id) {
         return Err("invalid session id".into());
     }
-    let path =
-        crate::persistence::recording_path_for_session(&session_id).map_err(|e| e.to_string())?;
+    let path = existing_recording_path(&session_id)?;
     let data = tokio::fs::read(&path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             "recording not found".into()
@@ -96,8 +139,7 @@ pub async fn export_audio_recording(
             return Err("user cancelled".into());
         };
 
-        let src = crate::persistence::recording_path_for_session(&session_id)
-            .map_err(|e| e.to_string())?;
+        let src = existing_recording_path(&session_id)?;
 
         export_recording_to_destination(&app, file_path, &src)
     })
@@ -235,14 +277,23 @@ pub async fn retranscribe_recording(
         .into_iter()
         .find(|entry| entry.id == session_id)
         .ok_or_else(|| "history entry not found".to_string())?;
+    if core
+        .snapshot()
+        .dictation
+        .session_id
+        .is_some_and(|active| active.to_string() == session_id)
+    {
+        return Err("recording is still active; stop it before retranscribing".into());
+    }
     if entry.has_audio_recording != Some(true) {
         return Err("history entry has no archived recording".into());
     }
-    if entry.pipeline_mode.as_deref() == Some("multimodal") {
+    if entry.pipeline_mode.as_deref() == Some("multimodal")
+        && entry.source != openless_core::HistorySource::QuickNote
+    {
         return Err("multimodal history does not support retranscription".into());
     }
-    let path =
-        crate::persistence::recording_path_for_session(&session_id).map_err(|e| e.to_string())?;
+    let path = existing_recording_path(&session_id)?;
     let wav = tokio::fs::read(&path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             "recording not found".into()
@@ -270,7 +321,10 @@ pub async fn retranscribe_recording(
     }
     let retranscribe_ms = retranscribe_started.elapsed().as_millis() as u64;
 
-    let updated_entry = if should_replace_failed_history(entry.error_code.as_deref()) {
+    let updated_entry = if should_replace_failed_history(entry.error_code.as_deref())
+        || entry.error_code.as_deref() == Some("recording")
+        || entry.source == openless_core::HistorySource::QuickNote
+    {
         Some(
             core.apply_history_retranscription(
                 &session_id,
@@ -287,6 +341,20 @@ pub async fn retranscribe_recording(
         text,
         updated_entry,
     })
+}
+
+#[tauri::command]
+pub fn apply_quick_note_repolish(
+    core: CoreState<'_>,
+    session_id: String,
+    text: String,
+    style_pack_id: Option<String>,
+) -> Result<DictationSession, String> {
+    if !is_valid_session_id(&session_id) {
+        return Err("invalid session id".into());
+    }
+    core.apply_history_repolish(&session_id, text, style_pack_id)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

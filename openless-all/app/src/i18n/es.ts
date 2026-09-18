@@ -171,6 +171,7 @@ export const es: typeof zhCN = {
     marketplace: 'Catálogo',
     translation: 'Traducción',
     selectionAsk: 'Preguntar',
+    quickNote: 'Notas rápidas',
     corrections: 'Correcciones',
     polishMode: 'Modo de redacción',
     group: {
@@ -301,6 +302,7 @@ export const es: typeof zhCN = {
       translation:
         'Traducción: mantén pulsada Mayús mientras hablas para insertar el texto en otro idioma',
       selectionAsk: 'Preguntar sobre una selección: selecciona texto y pregunta por voz',
+      quickNote: 'Notas rápidas: conserva el audio y vuelve al texto cuando quieras',
       settings: 'Preferencias: atajos, proveedores, privacidad y actualizaciones',
     },
     footer: {
@@ -527,6 +529,7 @@ export const es: typeof zhCN = {
     inserted: 'Insertado',
     pasteSent: 'Pegado enviado',
     copiedFallback: 'Copiado (usa {{shortcut}})',
+    notRequested: 'No se solicitó insertar',
     insertFailed: 'No se pudo insertar',
     confirmClear:
       '¿Eliminar los {{count}} registros del historial? Esta acción no se puede deshacer.',
@@ -892,6 +895,21 @@ export const es: typeof zhCN = {
       title: 'Cómo usarlo',
       step2: 'Selecciona texto en cualquier aplicación.',
     },
+  },
+  quickNote: {
+    kicker: 'Notas rápidas',
+    title: 'Notas rápidas',
+    desc: 'Audio permanente con reproducción, exportación, retranscripción y redacción.',
+    recording: 'Grabando…',
+    failedTitle: 'La grabación necesita atención',
+    emptyTitle: 'Grabación sin título',
+    noTranscript: 'Aún no hay transcripción.',
+    applyResult: 'Aplicar a la nota',
+    applying: 'Aplicando…',
+    shortcutTitle: 'Atajo de nota rápida',
+    shortcutDesc: 'Pulsa una vez para grabar y otra vez para guardar.',
+    repolishNeedsTranscript: 'Primero vuelve a transcribir el audio.',
+    shareRecording: 'Compartir audio',
   },
   settings: {
     selectionWorkspace: {

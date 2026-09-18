@@ -356,6 +356,24 @@ impl DictationEngine for PipelineDictationEngine {
                 failure.has_audio_recording = has_audio_recording;
                 return Err(failure);
             }
+            if context.output_target == crate::dictation_context::DictationOutputTarget::QuickNote
+            {
+                if let Some(archive) = archive.as_ref() {
+                    if let Err(error) = archive.promote_to_quick_note().await {
+                        log::error!(
+                            "[quick-note] failed to move the archive into permanent storage: {error}"
+                        );
+                    }
+                }
+            } else if context.recording.archive_successful_recording {
+                if let Some(archive) = archive.as_ref() {
+                    if let Err(error) = archive.demote_to_ordinary_recording().await {
+                        log::warn!(
+                            "[recording] failed to move retained debug archive to ordinary storage: {error}"
+                        );
+                    }
+                }
+            }
             if session.cancelled.load(Ordering::Acquire) {
                 let _ = cancel_transcription_once(&session, transcription).await;
                 remove_session(&sessions, session_id, &session);
@@ -632,6 +650,9 @@ impl DictationEngine for PipelineDictationEngine {
             if session.cancelled.swap(true, Ordering::AcqRel) {
                 return Ok(());
             }
+            let preserve_quick_note_archive =
+                session.context().output_target
+                    == crate::dictation_context::DictationOutputTarget::QuickNote;
 
             let (recording, transcription) = {
                 let mut resources = session
@@ -642,7 +663,13 @@ impl DictationEngine for PipelineDictationEngine {
             };
             let mut first_error = None;
             if let Some(recording) = recording {
+                let archive = recording.archive();
                 retain_first_error(&mut first_error, recording.stop().await);
+                if !preserve_quick_note_archive {
+                    if let Some(archive) = archive {
+                    retain_first_error(&mut first_error, archive.discard().await);
+                    }
+                }
             }
             if let Some(transcription) = transcription {
                 retain_first_error(

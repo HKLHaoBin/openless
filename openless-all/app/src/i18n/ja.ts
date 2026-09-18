@@ -162,6 +162,7 @@ export const ja: typeof zhCN = {
     marketplace: 'マーケット',
     translation: '翻訳',
     selectionAsk: '選択追問',
+    quickNote: '速記',
     corrections: '修正ルール',
     polishMode: '推敲モード',
     group: {
@@ -289,6 +290,7 @@ export const ja: typeof zhCN = {
       style: 'スタイル：出力スタイルとカスタムプロンプトを管理',
       translation: '翻訳：Shift を押しながら話すと目標言語で挿入',
       selectionAsk: '選択質問：テキストを選択して音声で質問',
+      quickNote: '速記：音声を保存して後から確認',
       settings: '環境設定：ショートカット・プロバイダー・プライバシー・更新',
     },
     footer: {
@@ -508,6 +510,7 @@ export const ja: typeof zhCN = {
     inserted: '入力済み',
     pasteSent: '貼り付けを試行',
     copiedFallback: 'コピー済み（要 {{shortcut}}）',
+    notRequested: '入力なし',
     insertFailed: '入力失敗',
     confirmClear: '全 {{count}} 件の記録を削除しますか？この操作は取り消せません。',
     backToList: '一覧に戻る',
@@ -865,6 +868,21 @@ export const ja: typeof zhCN = {
       title: '使い方',
       step2: '任意のアプリでテキストを選択。',
     },
+  },
+  quickNote: {
+    kicker: '速記',
+    title: '速記',
+    desc: '音声を保持し、再生・書き出し・再文字起こし・再推敲に対応します。',
+    recording: '録音中…',
+    failedTitle: '録音の確認が必要です',
+    emptyTitle: '無題の録音',
+    noTranscript: 'まだ文字起こしがありません。',
+    applyResult: '速記に適用',
+    applying: '適用中…',
+    shortcutTitle: '速記ショートカット',
+    shortcutDesc: '一度押して録音を開始し、もう一度押して保存します。',
+    repolishNeedsTranscript: '先に音声を再文字起こししてください。',
+    shareRecording: '音声を共有',
   },
   settings: {
     selectionWorkspace: {
