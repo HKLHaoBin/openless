@@ -1408,6 +1408,16 @@ export const ko: typeof zhCN = {
       bailianVocabularyIdLabel: '핫워드 Vocabulary ID(선택)',
       bailianVocabularyIdNote:
         'DashScope에서 핫워드 사전을 만들었다면 vocab-... ID를 입력하세요. 비워 두면 핫워드를 전송하지 않습니다.',
+      bailianProtocolLabel: "API 유형",
+      bailianProtocolNote: "수동 선택은 모델 이름 감지보다 우선하며 검증과 녹음에 사용할 채널별 설정으로 저장됩니다. 모델 문서에 따라 선택하세요.",
+      bailianProtocolOptions: {
+        "auto": "자동 감지",
+        "dashscope-realtime": "실시간 (DashScope)",
+        "qwen-realtime": "실시간 (Qwen Realtime)",
+        "multimodal": "비실시간 동기 (Fun-ASR / Qwen-Audio)",
+        "qwen-multimodal": "비실시간 동기 (Qwen3-ASR)",
+        "async-transcription": "비실시간 비동기 (파일 전사)",
+      },
       bailianModelRealtimeHint: '실시간 모델 · 말하는 동안 바로 전사.',
       bailianModelSyncFileHint: '동기 녹음 모델 · 말을 마친 뒤 전체 전사(한 클립 ≤ 5분).',
       bailianModelAsyncFileHint:

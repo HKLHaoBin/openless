@@ -1471,6 +1471,16 @@ export const fr: typeof zhCN = {
       bailianVocabularyIdLabel: 'ID du vocabulaire de mots-clés (facultatif)',
       bailianVocabularyIdNote:
         'Si vous avez créé un vocabulaire dans DashScope, saisissez son ID vocab-... Laissez vide pour ne pas utiliser de mots-clés.',
+      bailianProtocolLabel: "Type d’API",
+      bailianProtocolNote: "Le choix manuel remplace la détection par nom et est enregistré par canal pour la validation et l’enregistrement. Consultez la documentation du modèle.",
+      bailianProtocolOptions: {
+        "auto": "Automatique",
+        "dashscope-realtime": "Temps réel (DashScope)",
+        "qwen-realtime": "Temps réel (Qwen Realtime)",
+        "multimodal": "Synchrone hors temps réel (Fun-ASR / Qwen-Audio)",
+        "qwen-multimodal": "Synchrone hors temps réel (Qwen3-ASR)",
+        "async-transcription": "Asynchrone (transcription de fichier)",
+      },
       bailianModelRealtimeHint: 'Modèle en temps réel : transcrit pendant que vous parlez.',
       bailianModelSyncFileHint:
         'Modèle d’enregistrement synchrone : transcrit une fois l’enregistrement terminé (5 min maximum).',
