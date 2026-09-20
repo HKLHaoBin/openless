@@ -765,7 +765,10 @@ pub fn is_stepfun_realtime_provider(id: &str) -> bool {
 }
 
 pub fn is_mimo_provider(id: &str) -> bool {
-    matches!(id, MIMO_PROVIDER_ID | crate::asr::mimo::ORCAROUTER_PROVIDER_ID)
+    matches!(
+        id,
+        MIMO_PROVIDER_ID | crate::asr::mimo::ORCAROUTER_PROVIDER_ID
+    )
 }
 
 pub fn is_dashscope_multimodal_provider(id: &str) -> bool {
@@ -789,6 +792,67 @@ pub fn is_whisper_compatible_provider(id: &str) -> bool {
         id,
         "whisper" | "siliconflow" | "zhipu" | "groq" | "openrouter" | "stepfun" | "zenmux"
     ) || id == OPENAI_COMPATIBLE_ASR_PROVIDER_ID
+}
+
+/// Explicit channel selection takes precedence over model-name inference.
+/// Stored inside asr.advanced_config so all hosts use the existing credential lifecycle.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BailianProtocol {
+    #[default]
+    Auto,
+    DashscopeRealtime,
+    QwenRealtime,
+    Multimodal,
+    QwenMultimodal,
+    AsyncTranscription,
+}
+
+impl BailianProtocol {
+    pub fn from_config(provider: &str, raw: Option<&str>) -> Result<Self, String> {
+        if !is_bailian_provider(provider) {
+            return Ok(Self::Auto);
+        }
+        let Some(raw) = raw.filter(|s| !s.trim().is_empty()) else {
+            return Ok(Self::Auto);
+        };
+        let value: serde_json::Value =
+            serde_json::from_str(raw).map_err(|_| "百炼接口配置不是有效 JSON".to_string())?;
+        match value.get("bailianProtocol") {
+            None => Ok(Self::Auto),
+            Some(value) => serde_json::from_value(value.clone())
+                .map_err(|_| "不支持的百炼接口类型，请重新选择接口".to_string()),
+        }
+    }
+
+    pub fn resolve_provider(self, provider: &str, model: &str) -> Result<String, String> {
+        if !is_bailian_provider(provider) || self == Self::Auto {
+            return resolve_effective_asr_provider(provider, model);
+        }
+        if model.trim().is_empty() {
+            return Err("手动选择百炼接口时必须填写模型 ID".to_string());
+        }
+        Ok(match self {
+            Self::DashscopeRealtime => BAILIAN_PROVIDER_ID,
+            Self::QwenRealtime => QWEN3_REALTIME_PROVIDER_ID,
+            _ => DASHSCOPE_MULTIMODAL_PROVIDER_ID,
+        }
+        .to_string())
+    }
+
+    pub fn batch_protocol(self, model: &str) -> Option<DashScopeBatchProtocol> {
+        match self {
+            Self::Auto => dashscope_batch_protocol_for_model(model),
+            Self::Multimodal | Self::QwenMultimodal => Some(DashScopeBatchProtocol::Multimodal),
+            Self::AsyncTranscription => Some(DashScopeBatchProtocol::AsyncTranscription),
+            _ => None,
+        }
+    }
+
+    pub fn uses_qwen_envelope(self, model: &str) -> bool {
+        self == Self::QwenMultimodal
+            || (self == Self::Auto && dashscope_uses_qwen_sync_envelope(model))
+    }
 }
 
 pub fn resolve_effective_asr_provider(active_asr: &str, model: &str) -> Result<String, String> {
@@ -817,7 +881,8 @@ pub fn resolve_effective_asr_provider(active_asr: &str, model: &str) -> Result<S
 }
 
 fn is_classic_bailian_realtime_model(model: &str) -> bool {
-    model.starts_with("fun-asr-realtime")
+    model == "qwen-audio-3.0-asr-flash-streaming"
+        || model.starts_with("fun-asr-realtime")
         || model.starts_with("fun-asr-flash-8k-realtime")
         || model.starts_with("paraformer-realtime")
         || model.starts_with("paraformer-8k-realtime")
@@ -1067,7 +1132,63 @@ mod tests {
     }
 
     #[test]
+    fn manual_bailian_protocol_overrides_names_and_preserves_auto() {
+        for (name, expected) in [
+            ("dashscope-realtime", BAILIAN_PROVIDER_ID),
+            ("qwen-realtime", QWEN3_REALTIME_PROVIDER_ID),
+            ("multimodal", DASHSCOPE_MULTIMODAL_PROVIDER_ID),
+            ("qwen-multimodal", DASHSCOPE_MULTIMODAL_PROVIDER_ID),
+            ("async-transcription", DASHSCOPE_MULTIMODAL_PROVIDER_ID),
+        ] {
+            let raw = format!(r#"{{"bailianProtocol":"{name}"}}"#);
+            let protocol = BailianProtocol::from_config("bailian", Some(&raw)).unwrap();
+            for model in ["unknown-model", "fun-asr", "qwen3-asr-flash-realtime"] {
+                assert_eq!(
+                    protocol.resolve_provider("bailian", model).unwrap(),
+                    expected
+                );
+            }
+            assert!(protocol.resolve_provider("bailian", " ").is_err());
+            assert_eq!(
+                BailianProtocol::from_config("whisper", Some(&raw)).unwrap(),
+                BailianProtocol::Auto
+            );
+        }
+        assert_eq!(
+            BailianProtocol::from_config("bailian", None).unwrap(),
+            BailianProtocol::Auto
+        );
+        assert_eq!(
+            BailianProtocol::from_config("bailian", Some("{}")).unwrap(),
+            BailianProtocol::Auto
+        );
+        assert!(
+            BailianProtocol::from_config("bailian", Some(r#"{"bailianProtocol":"typo"}"#)).is_err()
+        );
+        assert!(BailianProtocol::Auto
+            .resolve_provider("bailian", "unknown-model")
+            .is_err());
+        assert_eq!(
+            BailianProtocol::Auto
+                .resolve_provider("bailian", "fun-asr")
+                .unwrap(),
+            DASHSCOPE_MULTIMODAL_PROVIDER_ID
+        );
+    }
+
+    #[test]
     fn routes_bailian_and_stepfun_models() {
+        let streaming = "qwen-audio-3.0-asr-flash-streaming";
+        assert_eq!(
+            resolve_effective_asr_provider(BAILIAN_PROVIDER_ID, streaming).unwrap(),
+            BAILIAN_PROVIDER_ID
+        );
+        assert_eq!(dashscope_batch_protocol_for_model(streaming), None);
+        assert_eq!(
+            resolve_effective_asr_provider(BAILIAN_PROVIDER_ID, "qwen-audio-3.0-asr-flash")
+                .unwrap(),
+            DASHSCOPE_MULTIMODAL_PROVIDER_ID
+        );
         assert_eq!(
             resolve_effective_asr_provider(BAILIAN_PROVIDER_ID, "fun-asr-realtime").unwrap(),
             BAILIAN_PROVIDER_ID

@@ -1412,6 +1412,16 @@ export const ja: typeof zhCN = {
       bailianVocabularyIdLabel: 'ホットワード Vocabulary ID（任意）',
       bailianVocabularyIdNote:
         'DashScope でホットワード辞書を作成済みの場合は vocab-... ID を入力します。空欄なら送信しません。',
+      bailianProtocolLabel: "API の種類",
+      bailianProtocolNote: "手動選択はモデル名による判定より優先され、検証と録音用にチャネルごとに保存されます。モデルのドキュメントに従って選択してください。",
+      bailianProtocolOptions: {
+        "auto": "自動判定",
+        "dashscope-realtime": "リアルタイム（DashScope）",
+        "qwen-realtime": "リアルタイム（Qwen Realtime）",
+        "multimodal": "非リアルタイム同期（Fun-ASR / Qwen-Audio）",
+        "qwen-multimodal": "非リアルタイム同期（Qwen3-ASR）",
+        "async-transcription": "非リアルタイム非同期（ファイル文字起こし）",
+      },
       bailianModelRealtimeHint: 'リアルタイムモデル · 話しながら文字起こし。',
       bailianModelSyncFileHint: '同期録音モデル · 話し終えてから一括で文字起こし（1 本 ≤ 5 分）。',
       bailianModelAsyncFileHint:

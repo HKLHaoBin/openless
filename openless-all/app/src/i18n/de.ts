@@ -1456,6 +1456,16 @@ export const de: typeof zhCN = {
       bailianVocabularyIdLabel: 'Wörterbuch-ID für Begriffe (optional)',
       bailianVocabularyIdNote:
         'Wenn du bei DashScope ein Begriffswörterbuch erstellt hast, gib seine vocab-... ID ein. Leer lassen, um keine Begriffe zu übergeben.',
+      bailianProtocolLabel: "API-Typ",
+      bailianProtocolNote: "Die manuelle Auswahl ersetzt die Erkennung anhand des Modellnamens und gilt pro Kanal für Prüfung und Aufnahme. Beachten Sie die Modelldokumentation.",
+      bailianProtocolOptions: {
+        "auto": "Automatisch",
+        "dashscope-realtime": "Echtzeit (DashScope)",
+        "qwen-realtime": "Echtzeit (Qwen Realtime)",
+        "multimodal": "Synchron, nicht in Echtzeit (Fun-ASR / Qwen-Audio)",
+        "qwen-multimodal": "Synchron, nicht in Echtzeit (Qwen3-ASR)",
+        "async-transcription": "Asynchron (Dateitranskription)",
+      },
       bailianModelRealtimeHint: 'Echtzeitmodell · transkribiert während des Sprechens.',
       bailianModelSyncFileHint:
         'Synchrones Aufnahmemodell · transkribiert nach dem Beenden (einzelne Aufnahme ≤ 5 Min.).',

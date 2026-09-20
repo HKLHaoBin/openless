@@ -174,7 +174,21 @@ impl ProviderService {
             None => None,
         };
 
+        let bailian_protocol = if request.kind == ProviderKind::Asr {
+            let raw = self
+                .read(
+                    namespace,
+                    &provider_id,
+                    crate::credentials::ASR_ADVANCED_CONFIG_ACCOUNT,
+                )
+                .await?;
+            crate::provider_rules::BailianProtocol::from_config(&provider_type, raw.as_deref())
+                .map_err(invalid_request)?
+        } else {
+            crate::provider_rules::BailianProtocol::Auto
+        };
         Ok(ResolvedProvider {
+            bailian_protocol,
             thinking_enabled: request.thinking_enabled,
             protocol: if request.kind == ProviderKind::Llm {
                 LlmProtocolConfig::load(self.credentials.as_ref(), &provider_id, &provider_type)
@@ -228,11 +242,7 @@ impl ProviderService {
         }
         ensure_supported_kind(&resolved)?;
         validate_configuration(&resolved, true)?;
-        let probe = validation_probe_for(
-            resolved.kind,
-            &resolved.provider_type,
-            resolved.model.as_deref(),
-        );
+        let probe = resolved.validation_probe()?;
         if probe == ValidationProbe::AsrNonSilent {
             return tokio::select! {
                 _ = wait_for_cancellation(cancellation) => Err(cancelled_request()),
@@ -389,6 +399,7 @@ impl ProviderApi for ProviderService {
 #[derive(Debug, Clone)]
 struct ResolvedProvider {
     thinking_enabled: bool,
+    bailian_protocol: crate::provider_rules::BailianProtocol,
     protocol: LlmProtocolConfig,
     kind: ProviderKind,
     provider_id: String,
@@ -400,6 +411,30 @@ struct ResolvedProvider {
 }
 
 impl ResolvedProvider {
+    fn validation_probe(&self) -> Result<ValidationProbe, BackendError> {
+        let effective_provider = if self.kind == ProviderKind::Asr {
+            self.bailian_protocol
+                .resolve_provider(
+                    &self.provider_type,
+                    self.model.as_deref().unwrap_or_default(),
+                )
+                .map_err(invalid_request)?
+        } else {
+            self.provider_type.clone()
+        };
+        Ok(
+            if self.bailian_protocol != crate::provider_rules::BailianProtocol::Auto {
+                if self.bailian_protocol.batch_protocol("").is_some() {
+                    ValidationProbe::AsrNonSilent
+                } else {
+                    validation_probe_for(self.kind, &effective_provider, None)
+                }
+            } else {
+                validation_probe_for(self.kind, &effective_provider, self.model.as_deref())
+            },
+        )
+    }
+
     fn context(&self) -> DictationContext {
         let mut context = DictationContext::default();
         context.polish.llm_thinking_enabled = self.thinking_enabled;
@@ -540,8 +575,13 @@ async fn validate_dashscope_probe(resolved: &ResolvedProvider) -> Result<(), Bac
         .filter(|value| !value.trim().is_empty())
         .or_else(|| default_asr_model(&resolved.provider_type))
         .ok_or_else(|| invalid_request("ASR model is not configured"))?;
-    crate::provider_rules::validate_dashscope_multimodal_model(model).map_err(invalid_request)?;
-    let protocol = crate::provider_rules::dashscope_batch_protocol_for_model(model)
+    if resolved.bailian_protocol == crate::provider_rules::BailianProtocol::Auto {
+        crate::provider_rules::validate_dashscope_multimodal_model(model)
+            .map_err(invalid_request)?;
+    }
+    let protocol = resolved
+        .bailian_protocol
+        .batch_protocol(model)
         .unwrap_or(crate::provider_rules::DashScopeBatchProtocol::Multimodal);
     let stored_endpoint = resolved
         .endpoint
@@ -587,9 +627,10 @@ async fn validate_dashscope_probe(resolved: &ResolvedProvider) -> Result<(), Bac
 
     let url = crate::asr::dashscope_multimodal::generation_url(&endpoint)
         .map_err(|_| invalid_request("ASR endpoint is invalid"))?;
-    let body = crate::asr::dashscope_multimodal::dashscope_multimodal_body_from_uri(
+    let body = crate::asr::dashscope_multimodal::dashscope_multimodal_body_with_protocol(
         model,
         DASHSCOPE_ASR_VALIDATE_SAMPLE_URL,
+        resolved.bailian_protocol,
     );
     let response = crate::net::credential_http()
         .post(url)
@@ -1413,6 +1454,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_bailian_protocol_is_loaded_per_channel_for_validation() {
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        for (selected, model, expected) in [
+            ("dashscope-realtime", "fun-asr", ValidationProbe::AsrSilence),
+            (
+                "qwen-realtime",
+                "unknown-model",
+                ValidationProbe::AsrSilence,
+            ),
+            (
+                "multimodal",
+                "qwen3-asr-flash-realtime",
+                ValidationProbe::AsrNonSilent,
+            ),
+            (
+                "qwen-multimodal",
+                "unknown-model",
+                ValidationProbe::AsrNonSilent,
+            ),
+            (
+                "async-transcription",
+                "unknown-model",
+                ValidationProbe::AsrNonSilent,
+            ),
+        ] {
+            let raw = format!(r#"{{"bailianProtocol":"{selected}"}}"#);
+            let channel = create_channel_with_values(
+                &credentials,
+                ChannelKind::Asr,
+                "bailian",
+                &[
+                    (ASR_API_KEY_ACCOUNT, "fixture-key"),
+                    (ASR_MODEL_ACCOUNT, model),
+                    (crate::credentials::ASR_ADVANCED_CONFIG_ACCOUNT, &raw),
+                ],
+            )
+            .await;
+            let service =
+                ProviderService::new(credentials.clone(), Arc::new(crate::TokioTaskSpawner));
+            let resolved = service
+                .resolve(ProviderRequest {
+                    thinking_enabled: false,
+                    kind: ProviderKind::Asr,
+                    channel_id: Some(channel),
+                })
+                .await
+                .unwrap();
+            assert_eq!(resolved.validation_probe().unwrap(), expected, "{selected}");
+        }
+    }
+
+    #[tokio::test]
     async fn static_model_list_runs_the_real_provider_probe_first() {
         let (endpoint, request) =
             spawn_http_response("200 OK", "application/json", r#"{"output":{}}"#);
@@ -2184,6 +2277,7 @@ mod tests {
         for (provider_type, expected_models) in expected {
             let resolved = ResolvedProvider {
                 thinking_enabled: false,
+                bailian_protocol: crate::provider_rules::BailianProtocol::Auto,
                 protocol: LlmProtocolConfig::default(),
                 kind: ProviderKind::Asr,
                 provider_id: provider_type.to_string(),
