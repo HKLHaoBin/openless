@@ -46,14 +46,15 @@ const PER_ADDR_TCP_TIMEOUT: Duration = Duration::from_millis(1500);
 
 fn default_port_for_request(
     request: &tokio_tungstenite::tungstenite::handshake::client::Request,
-) -> Result<u16, WsError> {
+) -> Result<u16, Box<WsError>> {
     let default_port = match request.uri().scheme_str() {
         Some("ws") => 80,
         Some("wss") => 443,
         _ => {
             return Err(WsError::Url(
                 tokio_tungstenite::tungstenite::error::UrlError::UnsupportedUrlScheme,
-            ))
+            )
+            .into())
         }
     };
     Ok(request.uri().port_u16().unwrap_or(default_port))
@@ -72,13 +73,14 @@ async fn connect_ws_to_addrs(
         WsStream,
         tokio_tungstenite::tungstenite::handshake::client::Response,
     ),
-    WsError,
+    Box<WsError>,
 > {
     if addrs.is_empty() {
         return Err(WsError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "no addresses for websocket endpoint",
-        )));
+        ))
+        .into());
     }
 
     let mut last_err = None;
@@ -101,12 +103,14 @@ async fn connect_ws_to_addrs(
         }
     }
 
-    Err(last_err.unwrap_or_else(|| {
-        WsError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotConnected,
-            "no tcp candidate",
-        ))
-    }))
+    Err(last_err
+        .unwrap_or_else(|| {
+            WsError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "no tcp candidate",
+            ))
+        })
+        .into())
 }
 
 async fn connect_ws_prefer_ipv4(
@@ -116,7 +120,7 @@ async fn connect_ws_prefer_ipv4(
         WsStream,
         tokio_tungstenite::tungstenite::handshake::client::Response,
     ),
-    WsError,
+    Box<WsError>,
 > {
     let port = default_port_for_request(&request)?;
     let host = request.uri().host().unwrap_or("").to_string();
@@ -869,13 +873,17 @@ mod tests {
         let request = "https://localhost/path".into_client_request().unwrap();
         let explicit_port = "https://localhost:443/path".into_client_request().unwrap();
         assert!(matches!(
-            default_port_for_request(&request),
+            default_port_for_request(&request)
+                .as_ref()
+                .map_err(|error| error.as_ref()),
             Err(WsError::Url(
                 tokio_tungstenite::tungstenite::error::UrlError::UnsupportedUrlScheme
             ))
         ));
         assert!(matches!(
-            default_port_for_request(&explicit_port),
+            default_port_for_request(&explicit_port)
+                .as_ref()
+                .map_err(|error| error.as_ref()),
             Err(WsError::Url(
                 tokio_tungstenite::tungstenite::error::UrlError::UnsupportedUrlScheme
             ))
@@ -943,7 +951,7 @@ mod tests {
         let request = "ws://localhost/path".into_client_request().unwrap();
         let result = connect_ws_to_addrs(request, Vec::new()).await;
         assert!(
-            matches!(result, Err(WsError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
+            matches!(result.as_ref().map_err(|error| error.as_ref()), Err(WsError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
         );
     }
 
