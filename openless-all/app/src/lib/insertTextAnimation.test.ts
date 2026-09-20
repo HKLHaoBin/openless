@@ -1,5 +1,6 @@
 import {
   INSERT_TEXT_MOTION,
+  appendedBirthAdvance,
   clampInsertContentWidth,
   diffInsertUnits,
   firstBornIndex,
@@ -8,6 +9,7 @@ import {
   prefixWidths,
   propagationDelayMs,
   resetInsertUnitKeys,
+  rightAnchoredPositions,
   segmentInsertUnits,
   type InsertUnit,
 } from './insertTextAnimation';
@@ -137,3 +139,44 @@ assertEqual(tiny.width, 72, 'empty-ish text still has a readable pill');
 assertClose(tiny.left + tiny.width / 2, 230, 'tiny pill stays centered');
 
 console.log('insertTextAnimation.test.ts passed');
+
+const oldPositions = rightAnchoredPositions([16, 16]);
+const newPositions = rightAnchoredPositions([16, 16, 16]);
+assertClose(newPositions[0] - oldPositions[0], -16, 'append pushes existing glyph left');
+assertClose(newPositions[1] - oldPositions[1], -16, 'retained glyph destination delta');
+assertClose(newPositions[2], -16, 'new glyph ends at right anchor');
+assert(
+  Math.max(...planCharDelays(Array(200).fill(16), 0)) <= INSERT_TEXT_MOTION.maxDelayMs,
+  'batch stagger bounded',
+);
+const emojiUnits = diffInsertUnits([], 'a👨‍👩‍👧‍👦é');
+assertEqual(emojiUnits.length, 3, 'combined emoji and accent intact');
+const corrected = diffInsertUnits(emojiUnits, 'b👨‍👩‍👧‍👦é');
+assertEqual(corrected[1].key, emojiUnits[1].key, 'correction preserves emoji');
+assertEqual(corrected[2].key, emojiUnits[2].key, 'correction preserves suffix');
+
+const paired = planCharDelays(Array(10).fill(17.4), 8, 2);
+assert(paired[7] < paired[5] && paired[5] < paired[3], 'pairs propagate from right to left');
+assert(paired[6] - paired[7] < 5, 'two-glyph group moves together');
+assert(paired[5] - paired[6] > 20, 'next group follows with a perceptible delay');
+const triples = planCharDelays(Array(12).fill(17.4), 9, 3);
+assert(triples[6] - triples[8] < 5, 'three-glyph batch pushes a three-glyph group');
+assert(triples[5] - triples[6] > 20, 'next triple follows');
+assert(
+  plan.recenterDelayMs - plan.widthDelayMs >= 140,
+  'shell is allowed to lean left before recentering',
+);
+
+const originalNumber = diffInsertUnits([], '10六号');
+const correctedNumber = diffInsertUnits(originalNumber, '十六号');
+assertEqual(
+  appendedBirthAdvance(correctedNumber, [16, 16, 16]),
+  0,
+  'correction cannot enter over retained suffix',
+);
+const appendedNumber = diffInsertUnits(originalNumber, '10六号天气');
+assertEqual(
+  appendedBirthAdvance(appendedNumber, [16, 16, 16, 16, 16, 16]),
+  32,
+  'append enters beyond old tail',
+);

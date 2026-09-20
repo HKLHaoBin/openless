@@ -11,17 +11,20 @@
 
 export const INSERT_TEXT_MOTION = {
   waveSpeedPxPerMs: 2.35,
-  bornFadeMs: 220,
-  bornY: -10,
-  bornBlurPx: 5,
-  bornStaggerMs: 12,
+  glyphGapPx: 1.4,
+  groupDelayMs: 26,
+  groupRippleMs: 2,
+  bornFadeMs: 180,
+  bornY: 9,
+  bornBlurPx: 1.8,
+  bornStaggerMs: 8,
   widthDelayMinMs: 12,
-  recenterExtraMs: 32,
-  maxDelayMs: 180,
-  charSpring: { stiffness: 520, damping: 24, mass: 0.62 },
-  shiftSpring: { stiffness: 390, damping: 34, mass: 0.8 },
-  widthSpring: { stiffness: 340, damping: 32, mass: 0.88 },
-  recenterSpring: { stiffness: 280, damping: 30, mass: 0.95 },
+  recenterExtraMs: 140,
+  maxDelayMs: 96,
+  charSpring: { stiffness: 460, damping: 23, mass: 0.8 },
+  shiftSpring: { stiffness: 260, damping: 30, mass: 1 },
+  widthSpring: { stiffness: 330, damping: 32, mass: 0.9 },
+  recenterSpring: { stiffness: 180, damping: 27, mass: 1 },
   padX: 18,
   minWidth: 72,
 } as const;
@@ -125,16 +128,31 @@ export function propagationDelayMs(
   return Math.min(INSERT_TEXT_MOTION.maxDelayMs, distancePx / waveSpeedPxPerMs);
 }
 
-export function planCharDelays(widths: number[], originIndex: number): number[] {
+export function planCharDelays(widths: number[], originIndex: number, insertedCount = 1): number[] {
   if (widths.length === 0) return [];
   const starts = prefixWidths(widths);
   const safeOrigin = Math.min(Math.max(0, originIndex), widths.length - 1);
   const originX = starts[safeOrigin] + widths[safeOrigin] / 2;
+  // Recognition batches carry the impulse: 2/3/4 inserted glyphs move in
+  // corresponding groups. A single-glyph update still pushes a 3-glyph cluster.
+  const groupSize = insertedCount <= 1 ? 3 : Math.min(4, insertedCount);
   return widths.map((width, index) => {
+    if (index < safeOrigin) {
+      const distance = safeOrigin - 1 - index;
+      return Math.min(
+        INSERT_TEXT_MOTION.maxDelayMs,
+        4 +
+          Math.floor(distance / groupSize) * INSERT_TEXT_MOTION.groupDelayMs +
+          (distance % groupSize) * INSERT_TEXT_MOTION.groupRippleMs,
+      );
+    }
     const center = starts[index] + width / 2;
     const bornBoost =
       index >= safeOrigin ? (index - safeOrigin) * INSERT_TEXT_MOTION.bornStaggerMs : 0;
-    return propagationDelayMs(Math.abs(center - originX)) + bornBoost;
+    return Math.min(
+      INSERT_TEXT_MOTION.maxDelayMs,
+      propagationDelayMs(Math.abs(center - originX)) + bornBoost,
+    );
   });
 }
 
@@ -175,4 +193,18 @@ export function clampInsertContentWidth(
   const pad = padX ?? INSERT_TEXT_MOTION.padX;
   const inner = Math.max(0, maxWidth - pad * 2);
   return Math.min(contentWidth, inner);
+}
+
+/** Right-anchored positions remain independent of the animated shell width. */
+export function rightAnchoredPositions(widths: number[]): number[] {
+  const total = widths.reduce((sum, width) => sum + width, 0);
+  return prefixWidths(widths).map((start) => start - total);
+}
+
+/** Only an appended suffix enters beyond the old tail. A correction already has
+ * a destination gap and must not sweep across its retained suffix. */
+export function appendedBirthAdvance(units: InsertUnit[], widths: number[]): number {
+  const origin = units.findIndex((unit) => unit.born);
+  if (origin <= 0 || units.slice(origin).some((unit) => !unit.born)) return 0;
+  return widths.slice(origin).reduce((sum, width) => sum + width, 0);
 }

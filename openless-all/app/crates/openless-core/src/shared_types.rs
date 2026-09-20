@@ -336,6 +336,10 @@ pub struct UserPreferences {
     /// 录音胶囊外观。偏好事件同步到各窗口，录音状态同时携带当前样式。
     #[serde(default)]
     pub capsule_style: CapsuleStyle,
+    #[serde(default = "default_true")]
+    pub capsule_transcript_enabled: bool,
+    #[serde(default = "default_capsule_transcript_font_size")]
+    pub capsule_transcript_font_size: u8,
     /// 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。
     #[serde(default)]
     pub mute_during_recording: bool,
@@ -782,6 +786,10 @@ struct UserPreferencesWire {
     show_capsule: bool,
     #[serde(default)]
     capsule_style: CapsuleStyle,
+    #[serde(default = "default_true")]
+    capsule_transcript_enabled: bool,
+    #[serde(default = "default_capsule_transcript_font_size")]
+    capsule_transcript_font_size: u8,
     #[serde(default)]
     mute_during_recording: bool,
     #[serde(default)]
@@ -1019,6 +1027,8 @@ impl Default for UserPreferencesWire {
             launch_at_login: prefs.launch_at_login,
             show_capsule: prefs.show_capsule,
             capsule_style: prefs.capsule_style,
+            capsule_transcript_enabled: prefs.capsule_transcript_enabled,
+            capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
             stable_transcription_enabled: prefs.stable_transcription_enabled,
             audio_cue_on_record: prefs.audio_cue_on_record,
@@ -1178,6 +1188,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             launch_at_login: wire.launch_at_login,
             show_capsule: wire.show_capsule,
             capsule_style: wire.capsule_style,
+            capsule_transcript_enabled: wire.capsule_transcript_enabled,
+            capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
             stable_transcription_enabled: wire.stable_transcription_enabled,
             audio_cue_on_record: wire.audio_cue_on_record,
@@ -1537,6 +1549,8 @@ impl Default for UserPreferences {
             launch_at_login: false,
             show_capsule: true,
             capsule_style: CapsuleStyle::Siri,
+            capsule_transcript_enabled: true,
+            capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
             stable_transcription_enabled: false,
             audio_cue_on_record: true,
@@ -3396,5 +3410,44 @@ mod tests {
         assert_eq!(json["llmModel"], "deepseek-v3-2");
         assert_eq!(json["asrMs"], 230);
         assert_eq!(json["polishMs"], 1450);
+    }
+}
+
+fn default_capsule_transcript_font_size() -> u8 {
+    14
+}
+
+#[cfg(test)]
+mod capsule_transcript_preferences_tests {
+    use super::*;
+    #[test]
+    fn capsule_transcript_defaults_and_roundtrip() {
+        let mut value = serde_json::to_value(UserPreferences::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("capsuleTranscriptEnabled");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("capsuleTranscriptFontSize");
+        let old: UserPreferences = serde_json::from_value(value).unwrap();
+        assert!(old.capsule_transcript_enabled);
+        assert_eq!(old.capsule_transcript_font_size, 14);
+        let mut prefs = old;
+        prefs.capsule_transcript_enabled = false;
+        prefs.capsule_transcript_font_size = 20;
+        let restored: UserPreferences =
+            serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).unwrap();
+        assert!(!restored.capsule_transcript_enabled);
+        assert_eq!(restored.capsule_transcript_font_size, 20);
+        let mut value = serde_json::to_value(prefs).unwrap();
+        value["capsuleTranscriptFontSize"] = 0.into();
+        assert_eq!(
+            serde_json::from_value::<UserPreferences>(value)
+                .unwrap()
+                .capsule_transcript_font_size,
+            12
+        );
     }
 }

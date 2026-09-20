@@ -343,6 +343,8 @@ export interface UserPreferences {
   showCapsule: boolean;
   /** 录音胶囊外观；保存后同步到胶囊窗口。 */
   capsuleStyle: CapsuleStyle;
+  capsuleTranscriptEnabled: boolean;
+  capsuleTranscriptFontSize: number;
   /** 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。 */
   muteDuringRecording: boolean;
   /** 先完整录音，停止后再连接当前 ASR 并提交整段音频。默认关闭。 */

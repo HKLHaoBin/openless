@@ -47,6 +47,8 @@ export let mockSettings: UserPreferences = {
   launchAtLogin: false,
   showCapsule: true,
   capsuleStyle: 'siri',
+  capsuleTranscriptEnabled: true,
+  capsuleTranscriptFontSize: 14,
   muteDuringRecording: false,
   stableTranscriptionEnabled: false,
   audioCueOnRecord: true,

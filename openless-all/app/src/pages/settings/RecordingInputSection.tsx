@@ -448,6 +448,34 @@ export function RecordingInputSection() {
             </div>
           </SettingRow>
         )}
+        {os !== 'linux' && !isAndroid && (
+          <>
+            <SettingRow
+              label={t('settings.recording.capsuleTranscriptLabel')}
+              desc={t('settings.recording.capsuleTranscriptDesc')}
+            >
+              <Toggle
+                on={prefs.capsuleTranscriptEnabled ?? true}
+                onToggle={(next) => savePrefs({ ...prefs, capsuleTranscriptEnabled: next })}
+              />
+            </SettingRow>
+            {(prefs.capsuleTranscriptEnabled ?? true) && (
+              <SettingRow label={t('settings.recording.capsuleTranscriptFontSize')}>
+                <SelectLite
+                  value={String(prefs.capsuleTranscriptFontSize ?? 14)}
+                  onChange={(next) =>
+                    savePrefs({ ...prefs, capsuleTranscriptFontSize: Number(next) })
+                  }
+                  options={[12, 14, 16, 18, 20].map((size) => ({
+                    value: String(size),
+                    label: `${size}px`,
+                  }))}
+                  ariaLabel={t('settings.recording.capsuleTranscriptFontSize')}
+                />
+              </SettingRow>
+            )}
+          </>
+        )}
         <SettingRow
           label={t('settings.recording.stableTranscriptionLabel')}
           desc={t('settings.recording.stableTranscriptionDesc')}

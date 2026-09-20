@@ -6,6 +6,7 @@ import { warmUpSiriShaders } from './SiriGL';
 import { VoiceOrbStage } from './VoiceOrbStage';
 import { TypelessCapsule } from './TypelessCapsule';
 import { LiveTranscriptPill } from './LiveTranscriptPill';
+import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../lib/capsuleTranscript';
 import { getSettings } from '../lib/ipc/settings';
 import { cancelDictation, stopDictation } from '../lib/ipc/dictation';
 import {
@@ -21,6 +22,7 @@ import type {
   CapsuleStyle,
   InsertFallbackCardPayload,
   PendingCorrection,
+  UserPreferences,
 } from '../lib/types';
 import { VocabSuggestionCard } from './VocabSuggestionCard';
 import { InsertFallbackCard } from './InsertFallbackCard';
@@ -502,6 +504,7 @@ interface ClassicCapsuleProps {
   insertedChars: number;
   message?: string;
   transcript?: string;
+  transcriptFontSize?: number;
   operating?: boolean;
   translation: boolean;
 }
@@ -517,6 +520,7 @@ function ClassicCapsule({
   insertedChars,
   message,
   transcript,
+  transcriptFontSize = 14,
   operating,
   translation,
 }: ClassicCapsuleProps) {
@@ -580,6 +584,7 @@ function ClassicCapsule({
       {liveText ? (
         <LiveTranscriptPill
           text={liveText}
+          fontSize={transcriptFontSize}
           tone="frost"
           stageWidth={hostMetrics.width}
           maxWidth={hostMetrics.width - 16}
@@ -693,6 +698,16 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const [level, setLevel] = useState<number>(preview.level);
   const [message, setMessage] = useState<string | undefined>(preview.message);
   const [localAsrText, setLocalAsrText] = useState('');
+  const [transcriptEnabled, setTranscriptEnabled] = useState(
+    () => isTauri || new URLSearchParams(window.location.search).get('transcript') !== '0',
+  );
+  const [transcriptFontSize, setTranscriptFontSize] = useState(() =>
+    capsuleTranscriptFontSize(
+      isTauri
+        ? undefined
+        : Number(new URLSearchParams(window.location.search).get('fontSize') || 14),
+    ),
+  );
   const transcriptViewRef = useRef<TranscriptViewState>({
     sessionId: null,
     sequence: 0,
@@ -827,7 +842,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     let preferenceRevision = 0;
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
-      const handle = await listen<{ capsuleStyle?: CapsuleStyle }>('prefs:changed', (event) => {
+      const handle = await listen<UserPreferences>('prefs:changed', (event) => {
+        setTranscriptEnabled(event.payload.capsuleTranscriptEnabled ?? true);
+        setTranscriptFontSize(capsuleTranscriptFontSize(event.payload.capsuleTranscriptFontSize));
         preferenceRevision += 1;
         const next = parseCapsuleStyle(event.payload?.capsuleStyle);
         if (next) {
@@ -844,6 +861,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       const preferences = await getSettings();
       const next = parseCapsuleStyle(preferences.capsuleStyle);
       if (!cancelled && revisionAtRead === preferenceRevision && next) {
+        setTranscriptEnabled(preferences.capsuleTranscriptEnabled ?? true);
+        setTranscriptFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
         stylePreferenceReadyRef.current = true;
         setCapsuleStyle(next);
       }
@@ -957,13 +976,13 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       : state === 'transcribing' && localAsrText
         ? localAsrText
         : message;
-  const liveTranscript =
-    renderedState === 'recording' ||
-    renderedState === 'transcribing' ||
-    renderedState === 'polishing'
-      ? localAsrText.trim()
-      : '';
-  const showLiveTranscript = liveTranscript.length > 0 && !renderedSelectionPolish;
+  const liveTranscript = visibleCapsuleTranscript(
+    localAsrText,
+    transcriptEnabled,
+    renderedState,
+    renderedSelectionPolish,
+  );
+  const showLiveTranscript = liveTranscript.length > 0;
 
   return (
     <div
@@ -999,6 +1018,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             insertedChars={insertedCharsRef.current}
             message={renderedMessage}
             transcript={liveTranscript}
+            transcriptFontSize={transcriptFontSize}
             operating={operatingRef.current}
             translation={translation}
           />
@@ -1009,6 +1029,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             insertedChars={insertedCharsRef.current}
             message={renderedMessage}
             transcript={liveTranscript}
+            transcriptFontSize={transcriptFontSize}
             operating={operatingRef.current}
             translation={translation}
             warming={!leaving && warming}
@@ -1064,7 +1085,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             </div>
             <div
               style={{
-                opacity: showLiveTranscript ? 0.38 : 1,
+                opacity: 1,
                 transition: 'opacity .28s var(--ol-motion-soft)',
               }}
             >
@@ -1090,6 +1111,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
               >
                 <LiveTranscriptPill
                   text={liveTranscript}
+                  fontSize={transcriptFontSize}
                   tone="frost"
                   stageWidth={hostMetrics.width}
                   maxWidth={hostMetrics.width - 24}

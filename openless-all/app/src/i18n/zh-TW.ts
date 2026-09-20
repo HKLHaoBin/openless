@@ -1057,6 +1057,10 @@ export const zhTW: typeof zhCN = {
       capsuleLabel: '錄音膠囊',
       capsuleDesc: '錄音 / 轉寫時在屏幕底部顯示半透明膠囊。',
       capsuleStyleTypeless: 'Typeless 傳統風格',
+      capsuleTranscriptLabel: '顯示串流原文',
+      capsuleTranscriptDesc:
+        '在膠囊中顯示語音辨識原文，取代音訊條；關閉後恢復原有顯示。非串流辨識將於結果傳回後顯示。',
+      capsuleTranscriptFontSize: '原文字級',
       capsuleStyleLabel: '膠囊樣式',
       capsuleStyleSiri: '流光 Siri 風格',
       capsuleStyleClassic: 'Openless 預設風格',

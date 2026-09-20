@@ -1080,6 +1080,10 @@ export const ja: typeof zhCN = {
       capsuleLabel: '録音カプセル',
       capsuleDesc: '録音 / 転写中、画面下部に半透明のカプセルを表示。',
       capsuleStyleTypeless: 'Typeless コンパクトスタイル',
+      capsuleTranscriptLabel: '文字起こしをリアルタイム表示',
+      capsuleTranscriptDesc:
+        '音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。',
+      capsuleTranscriptFontSize: '文字起こしの文字サイズ',
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
       capsuleStyleClassic: 'Openless デフォルトスタイル',

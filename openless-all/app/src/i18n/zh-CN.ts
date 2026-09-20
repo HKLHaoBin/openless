@@ -1044,6 +1044,10 @@ export const zhCN = {
       capsuleLabel: '录音胶囊',
       capsuleDesc: '录音 / 转写时显示屏幕底部胶囊。',
       capsuleStyleTypeless: 'Typeless 传统风格',
+      capsuleTranscriptLabel: '显示流式原文',
+      capsuleTranscriptDesc:
+        '在胶囊中显示语音识别原文，替换音频条；关闭后恢复原有显示。非流式识别将在结果返回后显示。',
+      capsuleTranscriptFontSize: '原文字号',
       capsuleStyleLabel: '胶囊样式',
       capsuleStyleSiri: '流光 Siri 风格',
       capsuleStyleClassic: 'Openless 默认风格',

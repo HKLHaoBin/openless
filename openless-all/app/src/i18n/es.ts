@@ -1111,6 +1111,10 @@ export const es: typeof zhCN = {
       capsuleLabel: 'Cápsula de grabación',
       capsuleDesc: 'Muestra una cápsula en la parte inferior de la pantalla mientras grabas.',
       capsuleStyleTypeless: 'Estilo compacto Typeless',
+      capsuleTranscriptLabel: 'Mostrar transcripción en directo',
+      capsuleTranscriptDesc:
+        'Muestra el texto reconocido en lugar de las barras de audio. Sin streaming, aparece al recibir el resultado. Desactiva para restaurar la vista original.',
+      capsuleTranscriptFontSize: 'Tamaño de la transcripción',
       capsuleStyleLabel: 'Estilo de cápsula',
       capsuleStyleSiri: 'Estilo luminoso Siri',
       capsuleStyleClassic: 'Estilo predeterminado de OpenLess',

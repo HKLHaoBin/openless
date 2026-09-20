@@ -1072,6 +1072,10 @@ export const ko: typeof zhCN = {
       capsuleLabel: '녹음 캡슐',
       capsuleDesc: '녹음 / 전사 중 화면 하단에 반투명 캡슐을 표시합니다.',
       capsuleStyleTypeless: 'Typeless 컴팩트 스타일',
+      capsuleTranscriptLabel: '실시간 원문 표시',
+      capsuleTranscriptDesc:
+        '오디오 막대 대신 인식된 원문을 표시합니다. 끄면 기존 표시로 돌아갑니다. 비스트리밍 인식은 결과 수신 후 표시됩니다.',
+      capsuleTranscriptFontSize: '원문 글자 크기',
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
       capsuleStyleClassic: 'Openless 기본 스타일',

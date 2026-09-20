@@ -1116,6 +1116,10 @@ export const de: typeof zhCN = {
       capsuleDesc:
         'Zeigt während der Aufnahme eine halbtransparente Kapsel am unteren Bildschirmrand.',
       capsuleStyleTypeless: 'Kompakter Typeless-Stil',
+      capsuleTranscriptLabel: 'Live-Transkript anzeigen',
+      capsuleTranscriptDesc:
+        'Erkannten Originaltext statt Audiobalken anzeigen. Ohne Streaming erscheint der Text nach der Erkennung. Deaktivieren stellt die bisherige Anzeige wieder her.',
+      capsuleTranscriptFontSize: 'Transkript-Schriftgröße',
       capsuleStyleLabel: 'Kapselstil',
       capsuleStyleSiri: 'Schimmernder Siri-Stil',
       capsuleStyleClassic: 'OpenLess-Standardstil',

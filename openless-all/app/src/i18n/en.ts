@@ -1092,6 +1092,10 @@ export const en: typeof zhCN = {
       capsuleLabel: 'Recording capsule',
       capsuleDesc: 'Show a translucent capsule at the bottom of the screen while recording.',
       capsuleStyleTypeless: 'Typeless compact style',
+      capsuleTranscriptLabel: 'Show live transcript',
+      capsuleTranscriptDesc:
+        'Show recognized speech in the capsule instead of audio bars. Turn off to restore the original display. Non-streaming recognition appears when results arrive.',
+      capsuleTranscriptFontSize: 'Transcript font size',
       capsuleStyleLabel: 'Capsule style',
       capsuleStyleSiri: 'Shimmer Siri style',
       capsuleStyleClassic: 'OpenLess default style',

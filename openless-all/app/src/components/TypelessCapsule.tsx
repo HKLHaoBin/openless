@@ -12,6 +12,7 @@ interface TypelessCapsuleProps {
   level: number;
   message?: string;
   transcript?: string;
+  transcriptFontSize?: number;
   insertedChars?: number;
   operating?: boolean;
   translation?: boolean;
@@ -39,6 +40,7 @@ export function TypelessCapsule({
   level,
   message,
   transcript,
+  transcriptFontSize = 14,
   insertedChars = 0,
   operating = false,
   translation = false,
@@ -65,10 +67,11 @@ export function TypelessCapsule({
         {translation && <span className="ol-typeless-translation">{t('capsule.translating')}</span>}
         <LiveTranscriptPill
           text={liveText}
+          fontSize={transcriptFontSize / 0.447}
           tone="dark"
           stageWidth={460}
           maxWidth={440}
-          minWidth={176}
+          minWidth={232}
           height={64}
           controlSize={46}
           onCancel={cancel}
