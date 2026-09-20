@@ -2542,6 +2542,7 @@ impl OpenLessBackend {
                         &self.deps.task_spawner,
                         Arc::clone(&resources),
                         Arc::clone(&self.deps.dictation_engine).start_transcription_with_progress(
+                            Arc::clone(&self.deps.task_spawner),
                             session_id,
                             Arc::clone(&context),
                             Arc::clone(&partials) as Arc<dyn TextStreamSink>,
