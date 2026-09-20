@@ -4,12 +4,14 @@ import { cancelDictation, stopDictation } from '../lib/ipc/dictation';
 import type { CapsuleState, CapsuleStyle } from '../lib/types';
 import { Icon } from './Icon';
 import { VoiceOrbStage } from './VoiceOrbStage';
+import { LiveTranscriptPill } from './LiveTranscriptPill';
 import './CapsuleStyles.css';
 
 interface TypelessCapsuleProps {
   state: CapsuleState;
   level: number;
   message?: string;
+  transcript?: string;
   insertedChars?: number;
   operating?: boolean;
   translation?: boolean;
@@ -36,6 +38,7 @@ export function TypelessCapsule({
   state,
   level,
   message,
+  transcript,
   insertedChars = 0,
   operating = false,
   translation = false,
@@ -45,6 +48,7 @@ export function TypelessCapsule({
   const { t } = useTranslation();
   const recording = state === 'recording';
   const processing = state === 'transcribing' || state === 'polishing';
+  const liveText = transcript?.trim() ?? '';
   const label = processing
     ? t(operating ? 'capsule.using' : 'capsule.thinking')
     : state === 'done'
@@ -54,6 +58,29 @@ export function TypelessCapsule({
         : message || t('capsule.error');
   const cancel = useCallback(() => void cancelDictation(), []);
   const confirm = useCallback(() => void stopDictation(), []);
+
+  if (liveText) {
+    return (
+      <div className="ol-typeless-capsule-wrap" data-preview={preview} style={{ width: 460 }}>
+        {translation && <span className="ol-typeless-translation">{t('capsule.translating')}</span>}
+        <LiveTranscriptPill
+          text={liveText}
+          tone="dark"
+          stageWidth={460}
+          maxWidth={440}
+          minWidth={176}
+          height={64}
+          controlSize={46}
+          onCancel={cancel}
+          onConfirm={confirm}
+          cancelEnabled={!preview && (recording || processing)}
+          confirmEnabled={!preview && recording}
+          cancelLabel={t('common.cancel')}
+          confirmLabel={t('settings.shortcuts.confirm')}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="ol-typeless-capsule-wrap" data-preview={preview}>
