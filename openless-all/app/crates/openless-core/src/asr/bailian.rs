@@ -532,36 +532,24 @@ impl BailianRealtimeASR {
             .and_then(Value::as_i64)
             .unwrap_or(0);
 
-        let mut delta: Option<String> = None;
-        {
+        let snapshot = {
             let mut st = self.state.lock();
             st.last_result_text = trimmed.to_string();
-
             if is_sentence_final {
-                // 所有 final 结果（含 sentence_id == 0）都存入 final_segments。
-                // BTreeMap 覆盖语义保证同一 sentence_id 不会重复追加。
                 st.final_segments.insert(sentence_id, trimmed.to_string());
                 st.partial_segments.remove(&sentence_id);
             } else {
-                let previous = st
-                    .partial_segments
-                    .get(&sentence_id)
-                    .map(String::as_str)
-                    .unwrap_or("");
-                delta = trimmed
-                    .strip_prefix(previous)
-                    .filter(|suffix| !suffix.is_empty())
-                    .map(str::to_string);
                 st.partial_segments.insert(sentence_id, trimmed.to_string());
             }
-        }
-        if let Some(delta) = delta {
-            if let Some(sink) = self.partial_sink.lock().clone() {
-                let _ = sink.publish(TextStreamChunk {
-                    text: delta,
-                    offset: 0,
-                });
-            }
+            let mut segments = st.partial_segments.clone();
+            segments.extend(st.final_segments.clone());
+            merge_segments(&segments.into_values().collect::<Vec<_>>())
+        };
+        if let Some(sink) = self.partial_sink.lock().clone() {
+            let _ = sink.publish(TextStreamChunk {
+                text: snapshot,
+                offset: 0,
+            });
         }
     }
 
@@ -816,6 +804,33 @@ async fn close_writer(writer: &SharedWriter) -> Result<(), BailianASRError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcript_snapshots_keep_prefix_and_recognition_corrections() {
+        let asr = create_test_asr();
+        let sink = Arc::new(super::super::TranscriptCapture::default());
+        asr.set_partial_sink(sink.clone());
+        for (id, text, final_result) in [
+            (0, "你", false),
+            (0, "你好", false),
+            (0, "您好", false),
+            (0, "您好。", true),
+            (1, "世", false),
+            (1, "世界", false),
+            (1, "世界！", true),
+        ] {
+            asr.record_result(&make_result_event(id, text, final_result));
+        }
+        sink.assert_snapshots(&[
+            "你",
+            "你好",
+            "您好",
+            "您好。",
+            "您好。世",
+            "您好。世界",
+            "您好。世界！",
+        ]);
+    }
 
     // ---- helpers ----
 

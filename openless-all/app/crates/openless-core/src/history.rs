@@ -154,6 +154,37 @@ mod tests {
     }
 
     #[test]
+    fn legacy_quick_note_history_survives_read_and_append() {
+        let path = std::env::temp_dir().join(format!(
+            "openless-legacy-history-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let mut legacy =
+            serde_json::to_value(session("legacy", chrono::Utc::now().to_rfc3339())).unwrap();
+        legacy["source"] = "quick_note".into();
+        let bytes = serde_json::to_vec(&vec![legacy]).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let store = HistoryStore::at_path(path.clone());
+        assert_eq!(store.list().unwrap()[0].source, HistorySource::QuickNote);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "reading must not rewrite history"
+        );
+        store
+            .append_with_retention(session("new", chrono::Utc::now().to_rfc3339()), 0, None)
+            .unwrap();
+        let entries = store.list().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].source, HistorySource::QuickNote);
+        assert_eq!(entries[1].raw_transcript, "raw");
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted[1]["source"], "quick_note");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn append_orders_caps_and_filters_retention() {
         let path = std::env::temp_dir().join(format!(
             "openless-core-history-{}.json",
