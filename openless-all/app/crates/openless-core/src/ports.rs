@@ -277,6 +277,7 @@ pub trait DictationEngine: Send + Sync + 'static {
     /// It uses the same buffered lifecycle as normal voice capture.
     fn start_transcription_with_progress(
         self: Arc<Self>,
+        task_spawner: Arc<dyn crate::TaskSpawner>,
         session_id: SessionId,
         context: Arc<DictationContext>,
         partials: Arc<dyn TextStreamSink>,
@@ -286,7 +287,11 @@ pub trait DictationEngine: Send + Sync + 'static {
         Box::pin(async move {
             let prepared = preparation.await?;
             Ok(crate::dictation_engine::buffered_transcription_session(
-                prepared, context, partials, progress,
+                prepared,
+                context,
+                partials,
+                progress,
+                task_spawner,
             ))
         })
     }

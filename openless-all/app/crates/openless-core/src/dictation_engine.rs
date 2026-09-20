@@ -1011,6 +1011,7 @@ pub(crate) fn buffered_transcription_session(
     context: Arc<DictationContext>,
     partials: Arc<dyn TextStreamSink>,
     progress: Arc<dyn RecordingProgressSink>,
+    task_spawner: Arc<dyn crate::TaskSpawner>,
 ) -> Arc<dyn TranscriptionSession> {
     let partials = if context.recording.transcribe_after_stop {
         Arc::new(DiscardTextStream) as Arc<dyn TextStreamSink>
@@ -1021,7 +1022,7 @@ pub(crate) fn buffered_transcription_session(
         prepared, partials, progress,
     ));
     if !context.recording.transcribe_after_stop {
-        buffered.attach_in_background();
+        buffered.attach_in_background(task_spawner);
     }
     buffered
 }
@@ -1149,13 +1150,13 @@ impl BufferedTranscriptionSession {
         })
     }
 
-    fn attach_in_background(&self) {
+    fn attach_in_background(&self, task_spawner: Arc<dyn crate::TaskSpawner>) {
         let attaching = self.attach();
-        tokio::spawn(async move {
+        task_spawner.spawn(Box::pin(async move {
             if let Err(error) = attaching.await {
                 log::warn!("provider-only transcription startup failed: {error}");
             }
-        });
+        }));
     }
 
     fn prepared(&self) -> Arc<dyn PreparedTranscription> {
@@ -1906,6 +1907,53 @@ mod tests {
             transcription_starts,
             polish_calls,
             polish_contexts,
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_only_capture_uses_host_spawner_and_stable_mode_defers_start() {
+        #[derive(Default)]
+        struct QueuedSpawner(Mutex<Vec<BoxFuture<'static, ()>>>);
+        impl crate::TaskSpawner for QueuedSpawner {
+            fn spawn(&self, task: BoxFuture<'static, ()>) {
+                self.0.lock().unwrap().push(task);
+            }
+        }
+        for stable in [false, true] {
+            let fixture = fixture_engine(
+                false,
+                Ok(crate::ports::PolishOutput::text("unused")),
+                None,
+                None,
+            );
+            let spawner = Arc::new(QueuedSpawner::default());
+            let mut context = DictationContext::default();
+            context.recording.transcribe_after_stop = stable;
+            let session = Arc::new(fixture.engine)
+                .start_transcription_with_progress(
+                    spawner.clone(),
+                    SessionId::new(),
+                    Arc::new(context),
+                    Arc::new(DiscardTextStream),
+                    Arc::new(NoopRecordingProgress),
+                )
+                .await
+                .unwrap();
+            session.consume_pcm_chunk(&[1, 0, 2, 0]);
+            assert_eq!(fixture.transcription_starts.load(Ordering::SeqCst), 0);
+            assert!(fixture.pcm.lock().unwrap().is_empty());
+            let tasks = std::mem::take(&mut *spawner.0.lock().unwrap());
+            assert_eq!(tasks.len(), usize::from(!stable));
+            for task in tasks {
+                task.await;
+            }
+            if !stable {
+                assert_eq!(fixture.transcription_starts.load(Ordering::SeqCst), 1);
+                assert_eq!(*fixture.pcm.lock().unwrap(), vec![1, 0, 2, 0]);
+            }
+            assert_eq!(session.finish().await.unwrap().text, "raw text");
+            assert_eq!(fixture.transcription_starts.load(Ordering::SeqCst), 1);
+            assert_eq!(*fixture.pcm.lock().unwrap(), vec![1, 0, 2, 0]);
         }
     }
 
