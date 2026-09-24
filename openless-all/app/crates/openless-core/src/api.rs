@@ -9447,7 +9447,19 @@ mod tests {
             }
         }
         backend.cancel_dictation(Some(first)).await.unwrap();
-        let second = backend.start_dictation().await.unwrap();
+        let second = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                match backend.start_dictation().await {
+                    Ok(id) => break id,
+                    Err(error) if error.code == BackendErrorCode::Busy => {
+                        tokio::task::yield_now().await;
+                    }
+                    Err(error) => panic!("unexpected start failure: {error}"),
+                }
+            }
+        })
+        .await
+        .expect("successor dictation should become available after cancel");
         release_guard.release();
         settings.join().unwrap().unwrap();
         stopping.await.unwrap().unwrap();
