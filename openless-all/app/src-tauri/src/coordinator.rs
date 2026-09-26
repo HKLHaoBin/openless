@@ -856,7 +856,14 @@ impl Coordinator {
     /// Selection-voice claims the shared capsule from hotkey Start through
     /// session teardown so late dictation Done cannot overwrite Recording.
     pub(crate) fn selection_voice_owns_capsule(&self) -> bool {
-        selection_voice_session::selection_voice_owns_capsule(&self.inner)
+        #[cfg(all(not(mobile), target_os = "windows"))]
+        {
+            selection_voice_session::selection_voice_owns_capsule(&self.inner)
+        }
+        #[cfg(not(all(not(mobile), target_os = "windows")))]
+        {
+            false
+        }
     }
 
     pub(crate) fn present_core_capsule_if_current(
