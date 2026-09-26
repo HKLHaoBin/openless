@@ -120,8 +120,8 @@ impl openless_core::RecordingControlSink for SelectionVoiceRecordingControl {
 fn selection_voice_user_message(error: &str) -> String {
     match error {
         "dictationActive" => "正在听写，请先结束录音".into(),
-        "selectionVoiceNoSelection" => "请先选中文字".into(),
-        "selectionVoiceTargetUnavailable" => "无法定位选区，请重试".into(),
+        "selectionVoiceNoSelection" => "请先选中文字，或将光标放在可输入的文本框中".into(),
+        "selectionVoiceTargetUnavailable" => "无法定位输入目标，请先点击文本框后再试".into(),
         "selectionVoiceBusy" => "选区语音会话进行中".into(),
         other => other.into(),
     }
@@ -306,16 +306,6 @@ async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String>
         "[selection-voice] begin capture diag={}",
         capture_diag.summary()
     );
-    let selection = match selection_opt {
-        Some(selection) => selection,
-        None => {
-            log::warn!(
-                "[selection-voice] begin failed: selectionVoiceNoSelection ({})",
-                capture_diag.summary()
-            );
-            return Err("selectionVoiceNoSelection".into());
-        }
-    };
     if !crate::selection::selection_insertion_target_is_captured(&insertion_target) {
         log::warn!(
             "[selection-voice] begin failed: selectionVoiceTargetUnavailable ({})",
@@ -323,6 +313,20 @@ async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String>
         );
         return Err("selectionVoiceTargetUnavailable".into());
     }
+    // Empty selection is allowed when the insertion target is valid (Help me write / QA).
+    let selection = match selection_opt {
+        Some(selection) => selection,
+        None => {
+            log::info!(
+                "[selection-voice] begin with empty selection (compose/qa path) ({})",
+                capture_diag.summary()
+            );
+            crate::selection::SelectionContext {
+                text: String::new(),
+                source_app: capture_diag.front_app.clone(),
+            }
+        }
+    };
 
     let session_id = inner
         .backend
@@ -684,12 +688,16 @@ impl Coordinator {
         if !crate::selection::reactivate_selection_insertion_target(&insertion_target) {
             return Err("selectionVoiceTargetUnavailable".to_string());
         }
-        let validation = crate::selection::validate_selection_insertion_target(
-            &insertion_target,
-            &ticket.source_text,
-        );
-        if let Some(code) = validation.error_code() {
-            return Err(code.to_string());
+        // Empty source_text = caret insert (Help me write). Skip Ctrl+C content
+        // re-validation that assumes a non-empty selection (#1014).
+        if !ticket.source_text.trim().is_empty() {
+            let validation = crate::selection::validate_selection_insertion_target(
+                &insertion_target,
+                &ticket.source_text,
+            );
+            if let Some(code) = validation.error_code() {
+                return Err(code.to_string());
+            }
         }
         let status = self.inner.inserter.insert(
             &ticket.replacement_text,
