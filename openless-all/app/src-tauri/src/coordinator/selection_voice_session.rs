@@ -128,6 +128,7 @@ fn selection_voice_user_message(error: &str) -> String {
 }
 
 fn emit_selection_voice_begin_error(inner: &Arc<Inner>, error: &str) {
+    release_selection_voice_capsule_claim(inner);
     emit_capsule(
         inner,
         CapsuleState::Error,
@@ -194,6 +195,21 @@ pub(super) struct SelectionVoiceHostState {
     /// preview remain exclusively owned by `openless-core`.
     target_session_id: Option<CoreSessionId>,
     insertion_target: SelectionInsertionTarget,
+    /// Claim the shared capsule before clipboard capture finishes so a late
+    /// dictation Done/Idle cannot paint 「录音已完成」over the new session.
+    owns_capsule: bool,
+}
+
+fn claim_selection_voice_capsule(inner: &Arc<Inner>) {
+    inner.selection_voice_host.lock().owns_capsule = true;
+}
+
+fn release_selection_voice_capsule_claim(inner: &Arc<Inner>) {
+    inner.selection_voice_host.lock().owns_capsule = false;
+}
+
+pub(super) fn selection_voice_owns_capsule(inner: &Arc<Inner>) -> bool {
+    inner.selection_voice_host.lock().owns_capsule
 }
 
 fn core_error(error: BackendError) -> String {
@@ -300,6 +316,11 @@ pub(super) async fn handle_selection_voice_released(inner: &Arc<Inner>) {
 }
 
 async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String> {
+    // Claim + show Recording before Ctrl+C capture (~0.5–1s). Otherwise the
+    // previous dictation Done / streaming text stays visible as 「录音已完成」.
+    claim_selection_voice_capsule(inner);
+    emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
+
     let (selection_opt, insertion_target, capture_diag) =
         crate::selection::resolve_selection_workspace_capture_with_diag();
     log::info!(
@@ -311,6 +332,7 @@ async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String>
             "[selection-voice] begin failed: selectionVoiceTargetUnavailable ({})",
             capture_diag.summary()
         );
+        release_selection_voice_capsule_claim(inner);
         return Err("selectionVoiceTargetUnavailable".into());
     }
     // Empty selection is allowed when the insertion target is valid (Help me write / QA).
@@ -328,7 +350,7 @@ async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String>
         }
     };
 
-    let session_id = inner
+    let session_id = match inner
         .backend
         .services()
         .selection_voice
@@ -337,13 +359,22 @@ async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String>
             source_app: selection.source_app,
         })
         .await
-        .map_err(core_error)?;
+    {
+        Ok(session_id) => session_id,
+        Err(error) => {
+            release_selection_voice_capsule_claim(inner);
+            return Err(core_error(error));
+        }
+    };
     {
         let mut host = inner.selection_voice_host.lock();
         host.target_session_id = Some(session_id);
         host.insertion_target = insertion_target;
+        host.owns_capsule = true;
     }
 
+    // Re-assert Recording after core begin so a racing dictation event cannot
+    // leave the capsule on Done while the mic is open.
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
     let recording_control = Arc::new(SelectionVoiceRecordingControl::new(inner));
     match inner

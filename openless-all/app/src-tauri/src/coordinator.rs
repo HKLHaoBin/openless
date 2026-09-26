@@ -853,6 +853,12 @@ impl Coordinator {
         let _ = self.present_core_capsule_if_current(payload, None);
     }
 
+    /// Selection-voice claims the shared capsule from hotkey Start through
+    /// session teardown so late dictation Done cannot overwrite Recording.
+    pub(crate) fn selection_voice_owns_capsule(&self) -> bool {
+        selection_voice_session::selection_voice_owns_capsule(&self.inner)
+    }
+
     pub(crate) fn present_core_capsule_if_current(
         &self,
         payload: CapsulePayload,

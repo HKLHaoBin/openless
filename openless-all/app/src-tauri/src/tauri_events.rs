@@ -179,6 +179,9 @@ async fn forward_legacy_event(
                 capsule_owners.qa_voice = None;
                 capsule_owners.qa_capsule = None;
             }
+            if selection_voice_blocks_dictation_capsule(app) {
+                return;
+            }
             emit_dictation_state(app, backend, snapshot)
         }
         BackendEventKind::TranscriptDelta(_) => {}
@@ -186,6 +189,9 @@ async fn forward_legacy_event(
             capsule_owners.transcription_notice = None;
             capsule_owners.qa_voice = None;
             capsule_owners.qa_capsule = None;
+            if selection_voice_blocks_dictation_capsule(app) {
+                return;
+            }
             if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
                 let message = match &result.inserted {
                     openless_core::DictationInsertStatus::Inserted => "已输入",
@@ -426,6 +432,9 @@ fn emit_dictation_state(
     if snapshot.phase == DictationPhase::Completed {
         return;
     }
+    if selection_voice_blocks_dictation_capsule(app) {
+        return;
+    }
     let payload = map_dictation_state(snapshot, backend.get_preferences().capsule_style);
     if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
         coordinator.present_core_capsule(payload);
@@ -439,6 +448,11 @@ fn emit_dictation_state(
     }
     #[cfg(target_os = "android")]
     crate::android::notify_capsule_state(&payload);
+}
+
+fn selection_voice_blocks_dictation_capsule(app: &AppHandle) -> bool {
+    app.try_state::<Arc<crate::coordinator::Coordinator>>()
+        .is_some_and(|coordinator| coordinator.selection_voice_owns_capsule())
 }
 
 fn map_dictation_state(
