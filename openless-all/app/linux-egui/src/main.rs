@@ -5457,6 +5457,44 @@ mod linux_app {
     mod tests {
         use super::*;
 
+        fn disconnected_app() -> OpenLessEguiApp {
+            OpenLessEguiApp::new(
+                Arc::new(tokio::runtime::Runtime::new().unwrap()),
+                Err("fixture: plugin unavailable".into()),
+                None,
+                LinuxUpdateSupport::ManualOnly {
+                    releases_url: openless_linux_egui::RELEASES_URL,
+                },
+            )
+        }
+
+        fn rendered_text(mut draw: impl FnMut(&mut egui::Ui)) -> String {
+            let ctx = egui::Context::default();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(720.0, 1800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        draw(ui);
+                    });
+                },
+            );
+            output
+                .shapes
+                .into_iter()
+                .filter_map(|shape| match shape.shape {
+                    egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
         #[test]
         fn running_remote_status_shows_ca_fingerprint_or_unavailable_warning() {
             let mut app = disconnected_app();
