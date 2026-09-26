@@ -212,6 +212,16 @@ pub(super) fn selection_voice_owns_capsule(inner: &Arc<Inner>) -> bool {
     inner.selection_voice_host.lock().owns_capsule
 }
 
+/// Accept live meter frames only while this session still owns the shared capsule.
+pub(super) fn selection_voice_accepts_level(inner: &Arc<Inner>, session_id: &str) -> bool {
+    let host = inner.selection_voice_host.lock();
+    host.owns_capsule
+        && host
+            .target_session_id
+            .as_ref()
+            .is_some_and(|id| id.to_string() == session_id)
+}
+
 fn core_error(error: BackendError) -> String {
     match error.code {
         BackendErrorCode::Busy => "selectionVoiceBusy".to_string(),
@@ -749,6 +759,41 @@ impl Coordinator {
 mod tests {
     use super::*;
     use openless_core::RecordingControlSink;
+
+    #[test]
+    fn selection_voice_accepts_level_only_for_claimed_owner_session() {
+        let (coordinator, _, data_dir) =
+            super::super::hotkey_loops::windows_less_computer_tests::fixture_coordinator(
+                crate::types::HotkeyMode::Toggle,
+                std::time::Duration::ZERO,
+            );
+        let id = CoreSessionId::new();
+        let other = CoreSessionId::new();
+        assert!(!selection_voice_accepts_level(
+            &coordinator.inner,
+            &id.to_string()
+        ));
+        {
+            let mut host = coordinator.inner.selection_voice_host.lock();
+            host.owns_capsule = true;
+            host.target_session_id = Some(id);
+        }
+        assert!(selection_voice_accepts_level(
+            &coordinator.inner,
+            &id.to_string()
+        ));
+        assert!(!selection_voice_accepts_level(
+            &coordinator.inner,
+            &other.to_string()
+        ));
+        release_selection_voice_capsule_claim(&coordinator.inner);
+        assert!(!selection_voice_accepts_level(
+            &coordinator.inner,
+            &id.to_string()
+        ));
+        drop(coordinator);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
 
     #[test]
     fn paste_dispatch_is_a_terminal_receipt_without_claiming_inserted() {

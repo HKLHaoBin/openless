@@ -343,6 +343,25 @@ async fn forward_legacy_event(
                 serde_json::json!({ "sessionId": level.session_id, "level": level.level }),
             );
         }
+        BackendEventKind::SelectionVoiceLevel(level) => {
+            if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
+                if coordinator.selection_voice_accepts_level(&level.session_id) {
+                    coordinator.present_core_capsule(CapsulePayload {
+                        state: CapsuleState::Recording,
+                        level: level.level,
+                        elapsed_ms: level.elapsed_ms,
+                        message: None,
+                        inserted_chars: None,
+                        translation: false,
+                        operating: false,
+                        // First PCM frame proves capture is live (mirrors QA / Less Computer).
+                        warming: false,
+                        capsule_style: backend.get_preferences().capsule_style,
+                        selection_polish: false,
+                    });
+                }
+            }
+        }
         BackendEventKind::QaState(state) => {
             let _ = app.emit_to(crate::coordinator::qa_event_target(), "qa:state", state);
         }
@@ -1524,6 +1543,7 @@ fn migration_legacy_event_name(kind: &BackendEventKind) -> Option<&'static str> 
         BackendEventKind::MicrophoneDevicesChanged => Some("microphone:devices-changed"),
         BackendEventKind::QaLevel(_) => Some("qa:level"),
         BackendEventKind::QaState(_) => Some("qa:state"),
+        BackendEventKind::SelectionVoiceLevel(_) => None,
         BackendEventKind::RemoteInputStatusChanged(_) => Some("remote-input:running"),
         BackendEventKind::RemoteInputFailed(_) => Some("remote-input:error"),
         BackendEventKind::VocabularySuggestionsChanged(_) => Some("vocab:suggested"),

@@ -866,6 +866,18 @@ impl Coordinator {
         }
     }
 
+    pub(crate) fn selection_voice_accepts_level(&self, session_id: &str) -> bool {
+        #[cfg(all(not(mobile), target_os = "windows"))]
+        {
+            selection_voice_session::selection_voice_accepts_level(&self.inner, session_id)
+        }
+        #[cfg(not(all(not(mobile), target_os = "windows")))]
+        {
+            let _ = session_id;
+            false
+        }
+    }
+
     pub(crate) fn present_core_capsule_if_current(
         &self,
         payload: CapsulePayload,
