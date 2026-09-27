@@ -44,8 +44,8 @@ impl OmniConfig {
     /// 百炼/DashScope 兼容端点把 `input_audio.data` 按 URL/data-URL 解析，裸 Base64
     /// 会被 400 拒绝（"The provided URL does not appear to be valid"）。官方
     /// Qwen-Omni「输入 Base64 本地文件 · 音频」示例要求 `data:;base64,…`（无 MIME）
-    /// + 独立 `format`（issue #1118）；沿用 polish 的主机名关键词，但只检查 URL
-    /// 解析后的真实 host。
+    /// 并配合独立 `format`（issue #1118）；沿用 polish 的主机名关键词，但只检查
+    /// URL 解析后的真实 host。
     fn audio_requires_data_url(&self) -> bool {
         reqwest::Url::parse(self.base_url.trim())
             .ok()
