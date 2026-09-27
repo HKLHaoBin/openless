@@ -8572,7 +8572,7 @@ mod tests {
             "selection voice must publish voiced levels for the shared capsule meter: {levels:?}"
         );
         assert!(
-            levels.iter().any(|level| *level == 0.0),
+            levels.contains(&0.0),
             "selection voice must publish quiet levels for the shared capsule meter: {levels:?}"
         );
 
