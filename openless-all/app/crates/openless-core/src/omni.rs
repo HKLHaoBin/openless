@@ -554,6 +554,21 @@ mod tests {
     }
 
     #[test]
+    fn omni_body_omits_temperature_for_openai_gpt6_api_ids() {
+        for model in ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"] {
+            let mut omni = config();
+            omni.model = model.into();
+            let provider = OpenAICompatibleOmni::new(omni);
+            let body = provider.omni_body(false, vec![json!({"role": "user", "content": "x"})]);
+
+            assert!(
+                body.get("temperature").is_none(),
+                "{model} must not receive temperature (issue #1101)"
+            );
+        }
+    }
+
+    #[test]
     fn omni_gemini_routing_uses_provider_id_or_base_url() {
         assert!(!config().is_gemini());
         let mut gemini = config();

@@ -2009,18 +2009,13 @@ pub(crate) fn openai_model_is_gpt5_family(model: &str) -> bool {
 
 /// OpenAI 官方渠道下应省略自定义 `temperature` 的模型族。
 /// gpt-5*（#857）与 gpt-6*（#1101，含 Astra/Sol/Luna）只接受服务端默认值。
-/// 展示名如 `GPT-6 Astra` 归一化后仍以 `gpt-6` 开头，一并覆盖。
+/// API 模型 ID 如 `gpt-6-astra` 归一化后以 `gpt-6` 开头，一并覆盖。
 pub(crate) fn openai_model_omits_custom_temperature(model: &str) -> bool {
-    openai_model_is_gpt5_family(model)
-        || normalize_openai_model_id(model).starts_with("gpt-6")
+    openai_model_is_gpt5_family(model) || normalize_openai_model_id(model).starts_with("gpt-6")
 }
 
 fn openai_chat_reasoning_effort(model: &str, thinking_enabled: bool) -> Option<&'static str> {
-    let normalized = model
-        .trim()
-        .strip_prefix("openai/")
-        .unwrap_or_else(|| model.trim())
-        .to_ascii_lowercase();
+    let normalized = normalize_openai_model_id(model);
 
     if normalized.starts_with("gpt-5-pro") {
         return Some("high");
@@ -3405,12 +3400,11 @@ mod tests {
     }
 
     #[test]
-    fn chat_body_omits_temperature_for_openai_gpt6_family() {
+    fn chat_body_omits_temperature_for_openai_gpt6_api_ids() {
         for model in [
             "gpt-6-astra",
             "gpt-6-sol",
             "gpt-6-luna",
-            "GPT-6 Astra",
             "openai/gpt-6-astra",
         ] {
             let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
@@ -3423,6 +3417,7 @@ mod tests {
 
             let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
+            assert_eq!(body["model"], model);
             assert!(
                 body.get("temperature").is_none(),
                 "{model} must not receive temperature (issue #1101)"
