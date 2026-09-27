@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use crate::polish::{
     append_utf8_sse_chunk, apply_openai_compatible_thinking_control, chat_completions_url,
     extract_assistant_content, finish_utf8_sse_chunks, http_client_builder,
-    openai_model_is_gpt5_family, safe_str_slice, send_with_transient_retry, LLMError,
+    openai_model_omits_custom_temperature, safe_str_slice, send_with_transient_retry, LLMError,
 };
 
 pub const OMNI_GEMINI_PROVIDER_ID: &str = "gemini";
@@ -89,9 +89,9 @@ impl OpenAICompatibleOmni {
             "messages": messages,
         });
         if let Some(temperature) = self.config.temperature {
-            // OpenAI 官方 gpt-5 系列只接受默认 temperature=1（issue #857），同润色路径。
+            // OpenAI 官方 gpt-5 / gpt-6 只接受默认 temperature=1（#857 / #1101），同润色路径。
             if !(self.config.provider_id.trim() == "openai"
-                && openai_model_is_gpt5_family(&self.config.model))
+                && openai_model_omits_custom_temperature(&self.config.model))
             {
                 body["temperature"] = json!(temperature);
             }
