@@ -19,19 +19,69 @@ if (!lock.includes('name = "qwen3-asr-rs"')) {
   throw new Error(`openless Cargo.lock package 未包含 qwen3-asr-rs：${lockPath}`);
 }
 
-const cargoResult = spawnSync('cargo', ['generate-lockfile', '--manifest-path', cargoPath], {
-  cwd: appRoot,
-  stdio: 'inherit',
-});
-if (cargoResult.error) {
-  throw cargoResult.error;
+// Snapshot the committed Tauri stack before regenerate. `cargo generate-lockfile`
+// floats transitive crates (e.g. tauri-runtime 2.12) that break tauri 2.11.2.
+const pinPackages = [
+  'tauri',
+  'tauri-runtime',
+  'tauri-runtime-wry',
+  'tauri-utils',
+  'tauri-build',
+  'tauri-macros',
+  'tauri-codegen',
+  'tauri-plugin',
+  'wry',
+  'tao',
+];
+const pins = [];
+for (const name of pinPackages) {
+  const match = lock.match(new RegExp(`name = "${name}"\\nversion = "([^"]+)"`));
+  if (!match) {
+    throw new Error(`Cargo.lock missing package to re-pin after qwen3 disable: ${name}`);
+  }
+  pins.push([name, match[1]]);
 }
-if (cargoResult.status !== 0) {
-  throw new Error(`cargo generate-lockfile 失败，退出码：${cargoResult.status}`);
+
+function runCargo(args) {
+  const result = spawnSync('cargo', args, {
+    cwd: appRoot,
+    stdio: 'inherit',
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`cargo ${args.join(' ')} 失败，退出码：${result.status}`);
+  }
+}
+
+runCargo(['generate-lockfile', '--manifest-path', cargoPath]);
+for (const [name, version] of pins) {
+  runCargo([
+    'update',
+    '--manifest-path',
+    cargoPath,
+    '-p',
+    name,
+    '--precise',
+    version,
+  ]);
 }
 
 const regeneratedLock = readFileSync(lockPath, 'utf8');
 if (regeneratedLock.includes('name = "qwen3-asr-rs"')) {
   throw new Error(`cargo generate-lockfile 后仍包含 qwen3-asr-rs：${lockPath}`);
 }
-console.log('[ci] disabled macOS-only qwen3-asr-rs dependency for this target');
+for (const [name, version] of pins) {
+  const match = regeneratedLock.match(new RegExp(`name = "${name}"\\nversion = "([^"]+)"`));
+  if (!match || match[1] !== version) {
+    throw new Error(
+      `re-pin failed for ${name}: expected ${version}, got ${match ? match[1] : 'missing'}`,
+    );
+  }
+}
+console.log(
+  `[ci] disabled macOS-only qwen3-asr-rs; re-pinned ${pins
+    .map(([name, version]) => `${name}@${version}`)
+    .join(', ')}`,
+);
