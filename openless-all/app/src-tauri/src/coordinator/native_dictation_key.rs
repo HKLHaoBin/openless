@@ -15,6 +15,7 @@ impl Coordinator {
 
     /// Keep the previous listener until replacement registration succeeds. The
     /// caller is a worker thread; Carbon ownership changes run on the UI thread.
+    #[cfg(not(mobile))]
     pub(crate) fn try_update_native_dictation_binding(&self) -> Result<(), String> {
         let target = hotkey_runtime_target(&self.inner);
         if !is_unconfigured_shortcut(&target.dictation) {
@@ -124,6 +125,11 @@ impl Coordinator {
                 }
             }
         }
+    }
+
+    #[cfg(mobile)]
+    pub(crate) fn try_update_native_dictation_binding(&self) -> Result<(), String> {
+        Err("Global dictation shortcuts are unavailable on mobile".into())
     }
 }
 

@@ -11062,7 +11062,9 @@ mod tests {
         let mut preferences = backend.get_preferences();
         preferences.translation_target_language = "English".to_string();
         preferences.working_languages = vec!["简体中文".to_string()];
-        preferences.history_retention_days = 30;
+        // This fixed-clock test checks snapshot persistence, not wall-clock retention.
+        // Retention is covered independently by history::tests.
+        preferences.history_retention_days = 0;
         preferences.history_max_entries = Some(20);
         backend.set_preferences(preferences).unwrap();
         backend.start().await.unwrap();
