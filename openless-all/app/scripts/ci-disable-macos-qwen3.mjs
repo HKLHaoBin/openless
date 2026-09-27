@@ -35,7 +35,9 @@ for (const [name, version] of Object.entries(expected)) {
   }
 }
 
-const cargoResult = spawnSync('cargo', ['generate-lockfile', '--manifest-path', cargoPath], {
+// 仅调整移除 path 依赖后的工作区图，保留已验证的第三方依赖版本。
+// generate-lockfile 会重新解析整个依赖树，令非 macOS CI 偏离提交的锁文件。
+const cargoResult = spawnSync('cargo', ['update', '--workspace', '--manifest-path', cargoPath], {
   cwd: appRoot,
   stdio: 'inherit',
 });
@@ -43,18 +45,18 @@ if (cargoResult.error) {
   throw cargoResult.error;
 }
 if (cargoResult.status !== 0) {
-  throw new Error(`cargo generate-lockfile 失败，退出码：${cargoResult.status}`);
+  throw new Error(`cargo update --workspace 失败，退出码：${cargoResult.status}`);
 }
 
 const regeneratedLock = readFileSync(lockPath, 'utf8');
 if (regeneratedLock.includes('name = "qwen3-asr-rs"')) {
-  throw new Error(`cargo generate-lockfile 后仍包含 qwen3-asr-rs：${lockPath}`);
+  throw new Error(`cargo update --workspace 后仍包含 qwen3-asr-rs：${lockPath}`);
 }
 for (const [name, want] of Object.entries(expected)) {
   const got = lockVersion(regeneratedLock, name);
   if (got !== want) {
     throw new Error(
-      `generate-lockfile drifted ${name}: got ${got}, want ${want}. Check Cargo.toml pins.`,
+      `cargo update --workspace drifted ${name}: got ${got}, want ${want}. Check Cargo.toml pins.`,
     );
   }
 }

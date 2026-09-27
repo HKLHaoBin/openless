@@ -26,6 +26,7 @@
 ## 平台与运营
 
 - [macOS CI 与打包耗时](macos-build-performance.md)：基线日志、Rust 编译优化、缓存边界与仅 macOS 验证入口。
+- [CI 触发范围与缓存配额](ci-trigger-and-cache-policy.md)：改动范围门控、10 GB 缓存分配与维护、发版预热点。
 - [Android APK 编译耗时调研与实现](android-build-time-research-1103.md)：ABI 并行、缓存回写和发布验证。
 - [Typeless「帮我写」跟进调研](help-me-write-research-1100.md)：#1100 无选区成文差距、现有 Selection Voice/QA 复用点与分流建议。
 - [Android APK / 悬浮窗计划](android-mobile-apk-overlay-plan.md)（实施中）
