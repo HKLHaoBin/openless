@@ -12,7 +12,9 @@ name = "openless_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+# Keep on the same train as `tauri = "=2.11.2"`. Floating `version = "2"` resolves
+# to tauri-build 2.7 when CI regenerates the lockfile.
+tauri-build = { version = "=2.6.2", features = [] }
 # Compile vendored Open-Less/qwen-asr C sources for the local ASR engine on macOS.
 cc = "1.1"
 
@@ -21,11 +23,16 @@ zeroize = "1"
 # Framework-independent business core.  Tauri remains an adapter and owns the
 # window/plugin/IPC concerns; Linux must depend on the same crate directly.
 openless-core = { path = "../crates/openless-core" }
-# 钉死 2.11.2（与 Cargo.lock 一致）。Release/Android 的 tauri CLI 常会重新 resolve，
-# ~2.11 会漂到 2.11.6，与同次解析到的 tauri-runtime 不兼容（Monitor/UnexpectedMenuKind）。
+# Pin the whole 2.11.2 train. tauri 2.11.2 allows `tauri-runtime ^2.11`, so an
+# unlocked resolve picks 2.12.0 and fails to compile (Monitor / UnexpectedMenuKind).
+# Direct pins keep `cargo generate-lockfile` (ci-disable-macos-qwen3) compatible.
 # macos-private-api must live in [dependencies] so tauri_build can match tauri.conf.json
 # macOSPrivateApi; tray-icon stays desktop-only in the target table below.
 tauri = { version = "=2.11.2", features = ["macos-private-api"] }
+tauri-runtime = "=2.11.2"
+tauri-runtime-wry = "=2.11.2"
+tauri-macros = "=2.6.2"
+tauri-utils = "=2.9.2"
 # 锁 >=2.3.5 修复 GHSA-c9pr-q8gx-3mgp：tauri-plugin-shell `open` 端点作用域校验绕过（CRITICAL，issue #668）。
 tauri-plugin-shell = "2.3.5"
 tauri-plugin-dialog = "2.7.2"

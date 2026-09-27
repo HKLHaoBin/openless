@@ -19,58 +19,45 @@ if (!lock.includes('name = "qwen3-asr-rs"')) {
   throw new Error(`openless Cargo.lock package 未包含 qwen3-asr-rs：${lockPath}`);
 }
 
-// Do not run `cargo generate-lockfile`: it floats the Tauri stack (e.g. tauri-runtime
-// 2.12 against tauri 2.11.2) and breaks Android/Windows. Surgically drop only the
-// macOS-only package entries from the committed lockfile.
-const removedNames = new Set();
-let next = lock.replace(/\r\n/g, '\n');
-const packageBlock =
-  /\[\[package\]\]\n(?:(?!\[\[)[^\n]*\n)*?name = "([^"]+)"\n(?:(?!\[\[)[^\n]*\n)*/g;
-next = next.replace(packageBlock, (block, name) => {
-  if (name === 'qwen3-asr-rs' || name.startsWith('qwen3-asr-rs-')) {
-    removedNames.add(name);
-    return '';
+function lockVersion(text, name) {
+  const match = text.match(new RegExp(`name = "${name}"\\r?\\nversion = "([^"]+)"`));
+  return match?.[1] ?? null;
+}
+
+const expected = {
+  tauri: lockVersion(lock, 'tauri'),
+  'tauri-runtime': lockVersion(lock, 'tauri-runtime'),
+  'tauri-build': lockVersion(lock, 'tauri-build'),
+};
+for (const [name, version] of Object.entries(expected)) {
+  if (!version) {
+    throw new Error(`Cargo.lock missing ${name} before qwen3 disable`);
   }
-  return block;
+}
+
+const cargoResult = spawnSync('cargo', ['generate-lockfile', '--manifest-path', cargoPath], {
+  cwd: appRoot,
+  stdio: 'inherit',
 });
-if (removedNames.size === 0) {
-  throw new Error(`未能从 Cargo.lock 删除 qwen3-asr-rs 包：${lockPath}`);
+if (cargoResult.error) {
+  throw cargoResult.error;
+}
+if (cargoResult.status !== 0) {
+  throw new Error(`cargo generate-lockfile 失败，退出码：${cargoResult.status}`);
 }
 
-for (const name of removedNames) {
-  const depLine = new RegExp(`^\\s*"${name}(?: [^=\\n]+)?",\\n`, 'gm');
-  next = next.replace(depLine, '');
+const regeneratedLock = readFileSync(lockPath, 'utf8');
+if (regeneratedLock.includes('name = "qwen3-asr-rs"')) {
+  throw new Error(`cargo generate-lockfile 后仍包含 qwen3-asr-rs：${lockPath}`);
 }
-
-// Collapse blank runs left by deleted packages so the lockfile stays tidy.
-next = next.replace(/\n{3,}/g, '\n\n');
-if (!next.endsWith('\n')) {
-  next += '\n';
-}
-writeFileSync(lockPath, next);
-
-const verify = spawnSync(
-  'cargo',
-  ['metadata', '--locked', '--manifest-path', cargoPath, '--format-version', '1'],
-  {
-    cwd: appRoot,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  },
-);
-if (verify.error) {
-  throw verify.error;
-}
-if (verify.status !== 0) {
-  throw new Error(
-    `cargo metadata --locked 失败（lockfile 手术后不一致）：\n${verify.stderr || verify.stdout}`,
-  );
-}
-if (readFileSync(lockPath, 'utf8').includes('name = "qwen3-asr-rs"')) {
-  throw new Error(`lockfile 手术后仍包含 qwen3-asr-rs：${lockPath}`);
+for (const [name, want] of Object.entries(expected)) {
+  const got = lockVersion(regeneratedLock, name);
+  if (got !== want) {
+    throw new Error(
+      `generate-lockfile drifted ${name}: got ${got}, want ${want}. Check Cargo.toml pins.`,
+    );
+  }
 }
 console.log(
-  `[ci] disabled macOS-only qwen3-asr-rs dependency; removed lock packages: ${[
-    ...removedNames,
-  ].join(', ')}`,
+  `[ci] disabled macOS-only qwen3-asr-rs (tauri ${expected.tauri}, tauri-runtime ${expected['tauri-runtime']})`,
 );
