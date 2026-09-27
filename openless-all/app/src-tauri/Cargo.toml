@@ -21,11 +21,11 @@ zeroize = "1"
 # Framework-independent business core.  Tauri remains an adapter and owns the
 # window/plugin/IPC concerns; Linux must depend on the same crate directly.
 openless-core = { path = "../crates/openless-core" }
-# 锁 ~2.11 因为 npm @tauri-apps/api 与 plugin-dialog 都已升 2.11；
-# tauri build 跨 minor 一致性检查会拒绝 npm 2.11 + Rust 2.10 的组合。
+# 钉死 2.11.2（与 Cargo.lock 一致）。Release/Android 的 tauri CLI 常会重新 resolve，
+# ~2.11 会漂到 2.11.6，与同次解析到的 tauri-runtime 不兼容（Monitor/UnexpectedMenuKind）。
 # macos-private-api must live in [dependencies] so tauri_build can match tauri.conf.json
 # macOSPrivateApi; tray-icon stays desktop-only in the target table below.
-tauri = { version = "~2.11", features = ["macos-private-api"] }
+tauri = { version = "=2.11.2", features = ["macos-private-api"] }
 # 锁 >=2.3.5 修复 GHSA-c9pr-q8gx-3mgp：tauri-plugin-shell `open` 端点作用域校验绕过（CRITICAL，issue #668）。
 tauri-plugin-shell = "2.3.5"
 tauri-plugin-dialog = "2.7.2"
@@ -77,7 +77,7 @@ tauri-plugin-fs = "2.5.1"
 # Desktop-only plugins, hotkey/insertion helpers, and tray-icon (not built for mobile).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
-tauri = { version = "~2.11", features = ["macos-private-api", "tray-icon"] }
+tauri = { version = "=2.11.2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-updater = "=2.10.1"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
