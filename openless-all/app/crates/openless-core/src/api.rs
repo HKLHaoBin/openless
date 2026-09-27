@@ -11323,7 +11323,10 @@ mod tests {
         let mut preferences = backend.get_preferences();
         preferences.translation_target_language = "English".to_string();
         preferences.working_languages = vec!["简体中文".to_string()];
-        preferences.history_retention_days = 30;
+        // Age prune uses wall-clock Utc::now(), while this fixture stamps
+        // created_at via FixedClock (2026-08-28). Non-zero retention eventually
+        // deletes the just-written entry once wall time drifts past the window.
+        preferences.history_retention_days = 0;
         preferences.history_max_entries = Some(20);
         backend.set_preferences(preferences).unwrap();
         backend.start().await.unwrap();
