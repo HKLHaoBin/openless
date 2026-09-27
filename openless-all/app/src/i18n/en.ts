@@ -1442,6 +1442,7 @@ export const en: typeof zhCN = {
       comboRecorded: 'Recorded',
       comboClear: 'Clear',
       comboConflict: 'This shortcut combination is not available',
+      shortcutSaveFailed: 'Failed to save shortcut',
       mouseSideHint: 'Mouse4 / Mouse5 side buttons are supported as global dictation hotkeys on Windows',
       allowNonTsfFallbackLabel: 'Allow non-TSF fallback',
       allowNonTsfFallbackDesc:

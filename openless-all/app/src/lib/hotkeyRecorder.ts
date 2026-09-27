@@ -1,3 +1,6 @@
+import type { ShortcutBinding } from './types';
+import { windowMouseHotkeyCode } from './windowHotkeyFallback';
+
 export interface HotkeyRecorderState {
   pressedCodes: string[];
   draftCodes: string[];
@@ -166,4 +169,22 @@ function primaryFromPrintableCode(code: string): string {
     IntlBackslash: '\\',
   };
   return codeToPrimary[code] || '';
+}
+/** Preserve backend failure details without classifying localized strings. */
+export function formatShortcutSaveError(reason: unknown, fallback: string): string {
+  const message =
+    reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : '';
+  return message.trim() || fallback;
+}
+export function shortcutFromMouseEvent(
+  event: Pick<MouseEvent, 'button' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>,
+): ShortcutBinding | null {
+  const primary = windowMouseHotkeyCode(event.button);
+  if (!primary) return null;
+  const modifiers: string[] = [];
+  if (event.ctrlKey) modifiers.push('ctrl');
+  if (event.altKey) modifiers.push('alt');
+  if (event.shiftKey) modifiers.push('shift');
+  if (event.metaKey) modifiers.push('super');
+  return { primary, modifiers };
 }

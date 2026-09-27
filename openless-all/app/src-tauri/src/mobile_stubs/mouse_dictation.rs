@@ -8,6 +8,17 @@ use crate::types::ShortcutBinding;
 pub struct MouseDictationMonitor;
 
 impl MouseDictationMonitor {
+    pub fn start_with_bridge(
+        _binding: ShortcutBinding,
+        _bridge: impl FnOnce(std::sync::mpsc::Receiver<ComboHotkeyEvent>) -> Result<(), String>,
+    ) -> Result<Self, String> {
+        Err("Mouse shortcuts are only supported on Windows".into())
+    }
+
+    pub fn is_running(&self) -> bool {
+        false
+    }
+
     pub fn start(
         _binding: ShortcutBinding,
         _tx: Sender<ComboHotkeyEvent>,

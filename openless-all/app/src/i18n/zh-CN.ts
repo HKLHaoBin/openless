@@ -1373,6 +1373,7 @@ export const zhCN = {
       comboRecorded: '已录制',
       comboClear: '清除',
       comboConflict: '该快捷键组合不可用',
+      shortcutSaveFailed: '保存快捷键失败',
       mouseSideHint: '支持鼠标侧键 Mouse4 / Mouse5（Windows 全局）',
       allowNonTsfFallbackLabel: '允许非 TSF 兜底',
       allowNonTsfFallbackDesc:

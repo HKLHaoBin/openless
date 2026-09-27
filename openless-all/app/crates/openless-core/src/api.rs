@@ -2502,6 +2502,7 @@ impl OpenLessBackend {
                     Arc::clone(&marketplace),
                     github_client_id,
                     BackendEventPublisher::new(Arc::clone(&events)),
+                    Arc::clone(&deps.task_spawner),
                 )?;
                 encrypted_sync = Some(service);
                 encrypted_sync_store = Some(store);
@@ -9340,6 +9341,42 @@ mod tests {
             runtime.actions.lock().unwrap().as_slice(),
             ["prepare", "commit", "restore"]
         );
+    }
+
+    #[test]
+    fn mouse_shortcut_registration_failure_rolls_back_before_retry() {
+        let (backend, _) = backend();
+        let previous = backend.get_preferences().dictation_hotkey;
+        let mut next = backend.get_preferences();
+        next.dictation_hotkey = crate::shared_types::ShortcutBinding {
+            primary: "Mouse4".into(),
+            modifiers: vec!["ctrl".into()],
+        };
+        let runtime = RecordingSettingsRuntime {
+            fail_commit: true,
+            ..RecordingSettingsRuntime::default()
+        };
+        assert!(backend
+            .update_settings(next.clone(), crate::SettingsUpdateOptions::STRICT, &runtime)
+            .is_err());
+        assert_eq!(backend.get_preferences().dictation_hotkey, previous);
+        assert_eq!(backend.snapshot().preferences_revision, 0);
+        assert_eq!(
+            runtime.actions.lock().unwrap().as_slice(),
+            ["prepare", "commit", "restore"]
+        );
+        backend
+            .update_settings(
+                next.clone(),
+                crate::SettingsUpdateOptions::STRICT,
+                &RecordingSettingsRuntime::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            backend.get_preferences().dictation_hotkey,
+            next.dictation_hotkey
+        );
+        assert_eq!(backend.snapshot().preferences_revision, 1);
     }
 
     #[test]

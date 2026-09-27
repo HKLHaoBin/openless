@@ -1471,6 +1471,7 @@ export const de: typeof zhCN = {
       comboRecorded: 'Aufgezeichnet',
       comboClear: 'Leeren',
       comboConflict: 'Diese Tastenkombination ist nicht verfügbar',
+      shortcutSaveFailed: 'Tastenkombination konnte nicht gespeichert werden',
       mouseSideHint: 'Mausseitentasten Mouse4 / Mouse5 werden als globale Diktier-Hotkeys unter Windows unterstützt',
       allowNonTsfFallbackLabel: 'Alternative ohne TSF erlauben',
       allowNonTsfFallbackDesc:

@@ -914,6 +914,24 @@ mod tests {
     }
 
     #[test]
+    fn mouse_bindings_are_dictation_only_and_reject_side_modifiers() {
+        for primary in ["Mouse4", "Mouse5"] {
+            let binding = combo(primary, &["ctrl"]);
+            assert!(validate_shortcut_binding(&binding).is_ok());
+            assert_eq!(
+                reject_side_specific_non_dictation(&binding).unwrap_err(),
+                MOUSE_NON_DICTATION_MSG
+            );
+            assert!(validate_shortcut_binding(&combo(primary, &["ctrl-left"])).is_err());
+            let preferences = UserPreferences {
+                qa_hotkey: Some(binding),
+                ..UserPreferences::default()
+            };
+            assert!(reject_hotkey_collisions(&preferences).is_err());
+        }
+    }
+
+    #[test]
     fn side_specific_rules_are_shared_by_all_hosts() {
         let side_specific = combo("D", &["cmd-left", "shift-right"]);
         assert!(validate_shortcut_binding(&side_specific).is_ok());
@@ -933,7 +951,9 @@ mod tests {
         assert!(is_modifier_chord_binding(&chord));
 
         assert!(validate_shortcut_binding(&combo("ModifierChord", &["ctrl-left"])).is_err());
-        assert!(validate_shortcut_binding(&combo("ModifierChord", &["ctrl", "super-left"])).is_err());
+        assert!(
+            validate_shortcut_binding(&combo("ModifierChord", &["ctrl", "super-left"])).is_err()
+        );
         assert!(
             validate_shortcut_binding(&combo("ModifierChord", &["cmd-left", "super-left"]))
                 .is_err()

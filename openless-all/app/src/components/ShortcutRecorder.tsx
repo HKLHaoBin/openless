@@ -8,8 +8,11 @@ import {
   MODIFIER_CHORD_PRIMARY,
   modifiersFromPressedCodes,
 } from '../lib/hotkey';
-import { primaryFromKeyboardEvent } from '../lib/hotkeyRecorder';
-import { windowMouseHotkeyCode } from '../lib/windowHotkeyFallback';
+import {
+  primaryFromKeyboardEvent,
+  formatShortcutSaveError,
+  shortcutFromMouseEvent,
+} from '../lib/hotkeyRecorder';
 import { KbdGroup } from './Kbd';
 import { setShortcutRecordingActive, validateShortcutBinding } from '../lib/ipc';
 import type { ShortcutBinding } from '../lib/types';
@@ -36,6 +39,7 @@ export function ShortcutRecorder({
   comboOnly = false,
   sideSpecificModifiers = false,
   allowMacDictationKey = false,
+  allowMouseButtons = false,
 }: {
   value: ShortcutBinding | null;
   onSave: (binding: ShortcutBinding) => Promise<void>;
@@ -55,6 +59,8 @@ export function ShortcutRecorder({
   sideSpecificModifiers?: boolean;
   /** macOS dictation only: choose the dedicated key as the single trigger. */
   allowMacDictationKey?: boolean;
+  /** Windows dictation only; other shortcut consumers cannot install mouse hooks. */
+  allowMouseButtons?: boolean;
 }) {
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
@@ -132,7 +138,7 @@ export function ShortcutRecorder({
       setRecording(false);
       setError(null);
     } catch (reason) {
-      setError(formatShortcutSaveError(String(reason), t('settings.recording.comboConflict')));
+      setError(formatShortcutSaveError(reason, t('settings.recording.shortcutSaveFailed')));
     }
   };
 
@@ -167,16 +173,13 @@ export function ShortcutRecorder({
       }
     })();
     const onMouseDown = (e: MouseEvent) => {
-      if (cancelled) return;
-      const primary = windowMouseHotkeyCode(e.button);
-      if (!primary) return;
+      if (cancelled || !allowMouseButtons) return;
+      const binding = shortcutFromMouseEvent(e);
+      if (!binding) return;
       e.preventDefault();
       e.stopPropagation();
       clearPendingModifier();
-      void finishRef.current({
-        primary,
-        modifiers: modifiersFromPressedCodes(pressedCodes.current, sideSpecificModifiers),
-      });
+      void finishRef.current(binding);
     };
     window.addEventListener('mousedown', onMouseDown, true);
     return () => {
@@ -185,7 +188,7 @@ export function ShortcutRecorder({
       window.removeEventListener('mousedown', onMouseDown, true);
       void setShortcutRecordingActive(false);
     };
-  }, [recording, sideSpecificModifiers]);
+  }, [recording, allowMouseButtons]);
 
   /** 开始录入：同时收起菜单——「录制快捷键」按下后，重置/停用两个按钮随之消失。 */
   const startRecording = () => {
@@ -273,7 +276,7 @@ export function ShortcutRecorder({
     try {
       await onReset?.();
     } catch (reason) {
-      setError(formatShortcutSaveError(String(reason), t('settings.recording.comboConflict')));
+      setError(formatShortcutSaveError(reason, t('settings.recording.shortcutSaveFailed')));
     }
   };
 
@@ -385,8 +388,7 @@ export function ShortcutRecorder({
             {t('settings.recording.comboRecordHint')}
             <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 4 }}>
               Esc · {t('common.cancel')}
-              {' · '}
-              {t('settings.recording.mouseSideHint')}
+              {allowMouseButtons && <> · {t('settings.recording.mouseSideHint')}</>}
             </div>
           </motion.div>
         ) : (
@@ -403,7 +405,6 @@ export function ShortcutRecorder({
               {value && <KbdGroup keys={formatComboParts(value)} />}
               <div style={controlsGroupStyle}>
                 <motion.button
-                  whileTap={{ scale: 0.9 }}
                   onClick={() => setMenuOpen((open) => !open)}
                   aria-label={t('settings.recording.comboMenuToggle', 'More options')}
                   aria-expanded={menuOpen}
@@ -463,8 +464,6 @@ export function ShortcutRecorder({
                       initial={{ y: 4, opacity: 0 }}
                       animate={{ y: 0, opacity: 1 }}
                       transition={{ duration: 0.16, ease: menuEase }}
-                      whileHover={{ y: -1 }}
-                      whileTap={{ scale: 0.96 }}
                       onClick={startRecording}
                       style={menuPrimaryStyle}
                     >
@@ -475,8 +474,6 @@ export function ShortcutRecorder({
                         initial={{ y: 4, opacity: 0 }}
                         animate={{ y: 0, opacity: 1 }}
                         transition={{ duration: 0.16, ease: menuEase, delay: 0.03 }}
-                        whileHover={{ y: -1 }}
-                        whileTap={{ scale: 0.96 }}
                         onClick={doReset}
                         style={menuButtonStyle}
                       >
@@ -487,8 +484,6 @@ export function ShortcutRecorder({
                       initial={{ y: 4, opacity: 0 }}
                       animate={{ y: 0, opacity: 1 }}
                       transition={{ duration: 0.16, ease: menuEase, delay: 0.06 }}
-                      whileHover={canDisable ? { y: -1 } : undefined}
-                      whileTap={canDisable ? { scale: 0.96 } : undefined}
                       onClick={canDisable ? doDisable : undefined}
                       title={canDisable ? undefined : disableHint}
                       style={canDisable ? menuButtonStyle : disabledMenuButtonStyle}
@@ -526,21 +521,4 @@ function modifierPrimaryFromCode(code: string, key: string): string {
   if (code === 'MetaLeft') return 'LeftCommand';
   if (key === 'Shift') return 'Shift';
   return '';
-}
-
-/** Surface real validate/register errors instead of always masking as comboConflict (#1109). */
-function formatShortcutSaveError(message: string, fallback: string): string {
-  if (message.includes('macDictationKey')) return message;
-  if (
-    message.includes('不支持的主键') ||
-    message.includes('不支持的修饰键') ||
-    message.includes('UnsupportedKey') ||
-    message.includes('UnsupportedModifier') ||
-    message.includes('注册全局快捷键失败') ||
-    message.includes('RegisterFailed') ||
-    message.includes('(空)')
-  ) {
-    return message;
-  }
-  return fallback;
 }

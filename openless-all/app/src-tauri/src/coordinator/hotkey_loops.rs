@@ -98,24 +98,6 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.hotkey.lock().is_some() {
             return;
         }
-        // Linux: 启动前检查 fcitx5 插件是否可用
-        #[cfg(target_os = "linux")]
-        if !crate::linux_fcitx::available() {
-            *inner.hotkey_status.lock() = HotkeyStatus {
-                adapter: capability.adapter,
-                state: HotkeyStatusState::Failed,
-                message: Some("fcitx5 插件不可用 — 请确保 fcitx5 已安装且在运行".into()),
-                last_error: Some(crate::types::HotkeyInstallError {
-                    code: "fcitx5_unavailable".into(),
-                    message: "fcitx5 插件 DBus 接口无响应".into(),
-                }),
-            };
-            log::warn!("[hotkey-supervisor] fcitx5 plugin unavailable, retrying...");
-            attempts += 1;
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            continue;
-        }
         *inner.hotkey_status.lock() = HotkeyStatus {
             adapter: capability.adapter,
             state: HotkeyStatusState::Starting,
@@ -130,12 +112,8 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
             keys: None,
         };
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
-        #[cfg(target_os = "linux")]
-        let (fcitx_tx, fcitx_binding) = (tx.clone(), binding.clone());
         let cancel_tx = spawn_esc_cancel_bridge(&inner);
         let combo_tx = spawn_combo_abort_bridge(&inner, handle_trigger_combined);
-        #[cfg(target_os = "linux")]
-        let combo_tx_for_fcitx = combo_tx.clone();
         match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
@@ -164,27 +142,6 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
                     .name("openless-hotkey-bridge".into())
                     .spawn(move || hotkey_bridge_loop(inner_clone, rx))
                     .ok();
-                // Linux: 启动 fcitx5 插件信号监听作为热键源。
-                #[cfg(target_os = "linux")]
-                {
-                    let (qa_trigger, selection_polish_trigger, translation_trigger) =
-                        modifier_shortcut_triggers(&inner);
-                    let custom_key = custom_dictation_key_string(&inner);
-                    crate::linux_fcitx::start_dictation_signal_listener(
-                        fcitx_tx,
-                        combo_tx_for_fcitx,
-                        fcitx_binding.clone(),
-                        qa_trigger,
-                        selection_polish_trigger,
-                        translation_trigger,
-                        custom_key,
-                    );
-                    if fcitx_binding.trigger == crate::types::HotkeyTrigger::Custom {
-                        sync_custom_dictation_to_plugin(&inner);
-                    } else {
-                        crate::linux_fcitx::sync_binding_to_plugin(&fcitx_binding);
-                    }
-                }
                 return;
             }
             Err(e) => {
@@ -1432,129 +1389,15 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
             return;
         }
 
-        if crate::shortcut_binding::binding_requires_mouse_hook(&binding) {
-            take_combo_hotkey_on_main_thread(&inner);
-            inner.side_aware_combo.lock().take();
-            if inner.mouse_dictation.lock().is_some() {
-                return;
-            }
-            let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-            match crate::mouse_dictation::MouseDictationMonitor::start(binding, tx) {
-                Ok(monitor) => {
-                    *inner.mouse_dictation.lock() = Some(monitor);
-                    let inner_clone = Arc::clone(&inner);
-                    std::thread::Builder::new()
-                        .name("openless-mouse-dictation-bridge".into())
-                        .spawn(move || combo_hotkey_bridge_loop(inner_clone, rx))
-                        .ok();
-                    return;
-                }
-                Err(e) => {
-                    attempts += 1;
-                    if attempts <= 3 || attempts % 10 == 0 {
-                        log::warn!(
-                            "[coord] mouse dictation 第 {attempts} 次注册失败: {e}; 3s 后重试"
-                        );
-                    }
-                    drop(registration);
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    continue;
-                }
-            }
-        }
-
-        if crate::shortcut_binding::binding_requires_side_aware_hook(&binding) {
-            take_combo_hotkey_on_main_thread(&inner);
-            inner.mouse_dictation.lock().take();
-            if inner.side_aware_combo.lock().is_some() {
-                return;
-            }
-            let (tx, rx) = mpsc::channel::<HotkeyEvent>();
-            let combo_tx = spawn_combo_abort_bridge(&inner, handle_trigger_combined);
-            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx, combo_tx) {
-                Ok(monitor) => {
-                    *inner.side_aware_combo.lock() = Some(monitor);
-                    let inner_clone = Arc::clone(&inner);
-                    std::thread::Builder::new()
-                        .name("openless-side-combo-bridge".into())
-                        .spawn(move || hotkey_bridge_loop(inner_clone, rx))
-                        .ok();
-                    return;
-                }
-                Err(e) => {
-                    attempts += 1;
-                    if attempts <= 3 || attempts % 10 == 0 {
-                        log::warn!(
-                            "[coord] side-aware combo 第 {attempts} 次注册失败: {e}; 3s 后重试"
-                        );
-                    }
-                    drop(registration);
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    continue;
-                }
-            }
-        }
-
-        inner.side_aware_combo.lock().take();
-        inner.mouse_dictation.lock().take();
-
-        if inner.combo_hotkey.lock().is_some() {
-            return;
-        }
-
-        let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-        let (init_tx, init_rx) =
-            mpsc::sync_channel::<Result<ComboHotkeyMonitor, ComboHotkeyError>>(0);
-        let binding_for_main = binding.clone();
-        if inner
-            .host
-            .run_on_main_thread(move || {
-                let result = ComboHotkeyMonitor::start(binding_for_main, tx);
-                let _ = init_tx.send(result);
-            })
-            .is_err()
-        {
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            continue;
-        }
-
-        let init_result = match init_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(r) => r,
-            Err(_) => {
-                drop(init_rx);
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[coord] combo hotkey 第 {attempts} 次注册超时（主线程未回执）；3s 后重试"
-                    );
-                }
-                drop(registration);
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                continue;
-            }
+        let coordinator = Coordinator {
+            inner: Arc::clone(&inner),
         };
-
-        match init_result {
-            Ok(monitor) => {
-                *inner.combo_hotkey.lock() = Some(monitor);
-                log::info!(
-                    "[coord] combo hotkey listener installed on main thread (after {} attempt(s))",
-                    attempts + 1
-                );
-                let inner_clone = Arc::clone(&inner);
-                std::thread::Builder::new()
-                    .name("openless-combo-hotkey-bridge".into())
-                    .spawn(move || combo_hotkey_bridge_loop(inner_clone, rx))
-                    .ok();
-                #[cfg(target_os = "linux")]
-                sync_custom_dictation_to_plugin(&inner);
-                return;
-            }
-            Err(e) => {
+        match coordinator.try_update_native_dictation_binding() {
+            Ok(()) => return,
+            Err(error) => {
                 attempts += 1;
                 if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!("[coord] combo hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试");
+                    log::warn!("[coord] dictation shortcut registration attempt {attempts} failed: {error}; retrying in 3s");
                 }
                 drop(registration);
                 std::thread::sleep(std::time::Duration::from_secs(3));
@@ -2185,35 +2028,6 @@ pub(super) fn handle_style_pack_hotkey_pressed(inner: &Arc<Inner>, pack_id: &str
 
 pub(super) fn is_builtin_translation_shift(binding: &crate::types::ShortcutBinding) -> bool {
     binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift")
-}
-
-/// Linux: 从 runtime target 读取自定义组合键，同步到 fcitx5 插件。
-#[cfg(target_os = "linux")]
-pub(super) fn custom_dictation_key_string(inner: &Arc<Inner>) -> Option<String> {
-    let target = hotkey_runtime_target(inner);
-    let key_string = crate::linux_fcitx::binding_to_fcitx_key_string(&target.dictation);
-    if key_string.is_empty() {
-        None
-    } else {
-        Some(key_string)
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub(super) fn sync_custom_dictation_to_plugin(inner: &Arc<Inner>) {
-    let target = hotkey_runtime_target(inner);
-    let dictation = &target.dictation;
-    let key_string = crate::linux_fcitx::binding_to_fcitx_key_string(dictation);
-    if key_string.is_empty() {
-        return;
-    }
-    match crate::linux_fcitx::set_custom_dictation_trigger(&key_string) {
-        Ok(()) => log::info!(
-            "[fcitx] Synced custom dictation trigger '{}' to plugin",
-            key_string
-        ),
-        Err(e) => log::warn!("[fcitx] Failed to sync custom dictation trigger: {e}"),
-    }
 }
 
 pub(super) fn modifier_shortcut_triggers(

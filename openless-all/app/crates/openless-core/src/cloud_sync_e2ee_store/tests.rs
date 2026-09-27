@@ -1,8 +1,3 @@
-#![cfg(test)]
-// Seam scanner looks for #[cfg(test)] (inner attr alone is not enough).
-#[cfg(test)]
-mod __runtime_seam_test_marker {}
-
 use super::*;
 use crate::cloud_sync_e2ee_documents::*;
 use crate::cloud_sync_e2ee_protocol::{
@@ -322,6 +317,7 @@ impl Fixture {
             device,
             gate,
             extensions.clone(),
+            Arc::new(crate::TokioTaskSpawner),
         )
         .unwrap();
         store.bind_runtime_idle_probe(Arc::new(|| true)).unwrap();
@@ -364,6 +360,7 @@ impl Fixture {
             device,
             gate,
             extensions.clone(),
+            Arc::new(crate::TokioTaskSpawner),
         )
         .unwrap();
         store.bind_runtime_idle_probe(Arc::new(|| true)).unwrap();

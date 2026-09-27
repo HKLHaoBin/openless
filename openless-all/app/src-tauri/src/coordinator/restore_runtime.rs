@@ -26,6 +26,10 @@ impl openless_core::config::RestoreRuntimeEffects for RestoreHost {
                 .ok_or_else(|| failure("restore_host_unavailable"))?;
             openless_core::reject_hotkey_collisions(&target)
                 .map_err(|_| failure("restore_hotkey_conflict"))?;
+            if crate::shortcut_binding::binding_requires_mouse_hook(&target.dictation_hotkey) {
+                crate::shortcut_binding::validate_binding(&target.dictation_hotkey)
+                    .map_err(|_| failure("restore_mouse_hotkey_unsupported"))?;
+            }
             let coord = Coordinator {
                 inner: Arc::clone(&inner),
             };
@@ -200,25 +204,7 @@ fn reconcile_hotkeys_on_main(
         inner.mouse_dictation.lock().take();
     } else if crate::shortcut_binding::binding_requires_mouse_hook(&target.dictation) {
         inner.side_aware_combo.lock().take();
-        let mut mouse_slot = inner.mouse_dictation.lock();
-        if let Some(monitor) = mouse_slot.as_ref() {
-            monitor
-                .update_binding(target.dictation.clone())
-                .map_err(|error| error.to_string())?;
-        } else {
-            let (send, receive) = mpsc::channel();
-            let monitor = crate::mouse_dictation::MouseDictationMonitor::start(
-                target.dictation.clone(),
-                send,
-            )
-            .map_err(|error| error.to_string())?;
-            let owned = Arc::clone(inner);
-            std::thread::Builder::new()
-                .name("openless-mouse-dictation-bridge".into())
-                .spawn(move || combo_hotkey_bridge_loop(owned, receive))
-                .map_err(|error| error.to_string())?;
-            *mouse_slot = Some(monitor);
-        }
+        try_install_mouse_dictation(inner, target.dictation.clone())?;
     } else if crate::shortcut_binding::binding_requires_side_aware_hook(&target.dictation) {
         inner.mouse_dictation.lock().take();
         let mut side_slot = inner.side_aware_combo.lock();

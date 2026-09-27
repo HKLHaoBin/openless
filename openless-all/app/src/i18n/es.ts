@@ -1463,6 +1463,7 @@ export const es: typeof zhCN = {
       comboRecorded: 'Atajo registrado',
       comboClear: 'Borrar',
       comboConflict: 'Esta combinación de teclas no está disponible',
+      shortcutSaveFailed: 'No se pudo guardar el atajo',
       mouseSideHint: 'Los botones laterales Mouse4 / Mouse5 se admiten como atajos globales de dictado en Windows',
       allowNonTsfFallbackLabel: 'Permitir alternativa sin TSF',
       allowNonTsfFallbackDesc:

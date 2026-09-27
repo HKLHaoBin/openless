@@ -14,6 +14,15 @@ pub use openless_core::{
 
 pub fn validate_binding(binding: &ShortcutBinding) -> Result<(), ShortcutBindingError> {
     openless_core::validate_shortcut_binding(binding)?;
+    if binding_requires_mouse_hook(binding) {
+        return if cfg!(target_os = "windows") {
+            Ok(())
+        } else {
+            Err(ShortcutBindingError::UnsupportedKey(
+                "Mouse4/Mouse5 global shortcuts require Windows".into(),
+            ))
+        };
+    }
     #[cfg(target_os = "macos")]
     if binding.primary == crate::macos_dictation_key::PRIMARY {
         return Ok(());
@@ -21,7 +30,6 @@ pub fn validate_binding(binding: &ShortcutBinding) -> Result<(), ShortcutBinding
     if legacy_modifier_trigger(binding).is_some()
         || (binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift"))
         || binding_requires_side_aware_hook(binding)
-        || binding_requires_mouse_hook(binding)
     {
         return Ok(());
     }
@@ -277,7 +285,10 @@ mod tests {
             modifiers: vec![],
         };
         assert!(binding_requires_mouse_hook(&binding));
-        assert!(validate_binding(&binding).is_ok());
+        assert_eq!(
+            validate_binding(&binding).is_ok(),
+            cfg!(target_os = "windows")
+        );
         assert!(parse_global_hotkey(&binding).is_err());
     }
 
@@ -288,7 +299,10 @@ mod tests {
             modifiers: vec!["ctrl".into()],
         };
         assert!(binding_requires_mouse_hook(&binding));
-        assert!(validate_binding(&binding).is_ok());
+        assert_eq!(
+            validate_binding(&binding).is_ok(),
+            cfg!(target_os = "windows")
+        );
     }
 
     #[test]
