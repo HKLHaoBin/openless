@@ -19,69 +19,58 @@ if (!lock.includes('name = "qwen3-asr-rs"')) {
   throw new Error(`openless Cargo.lock package 未包含 qwen3-asr-rs：${lockPath}`);
 }
 
-// Snapshot the committed Tauri stack before regenerate. `cargo generate-lockfile`
-// floats transitive crates (e.g. tauri-runtime 2.12) that break tauri 2.11.2.
-const pinPackages = [
-  'tauri',
-  'tauri-runtime',
-  'tauri-runtime-wry',
-  'tauri-utils',
-  'tauri-build',
-  'tauri-macros',
-  'tauri-codegen',
-  'tauri-plugin',
-  'wry',
-  'tao',
-];
-const pins = [];
-for (const name of pinPackages) {
-  const match = lock.match(new RegExp(`name = "${name}"\\nversion = "([^"]+)"`));
-  if (!match) {
-    throw new Error(`Cargo.lock missing package to re-pin after qwen3 disable: ${name}`);
+// Do not run `cargo generate-lockfile`: it floats the Tauri stack (e.g. tauri-runtime
+// 2.12 against tauri 2.11.2) and breaks Android/Windows. Surgically drop only the
+// macOS-only package entries from the committed lockfile.
+const removedNames = new Set();
+let next = lock.replace(/\r\n/g, '\n');
+const packageBlock =
+  /\[\[package\]\]\n(?:(?!\[\[)[^\n]*\n)*?name = "([^"]+)"\n(?:(?!\[\[)[^\n]*\n)*/g;
+next = next.replace(packageBlock, (block, name) => {
+  if (name === 'qwen3-asr-rs' || name.startsWith('qwen3-asr-rs-')) {
+    removedNames.add(name);
+    return '';
   }
-  pins.push([name, match[1]]);
+  return block;
+});
+if (removedNames.size === 0) {
+  throw new Error(`未能从 Cargo.lock 删除 qwen3-asr-rs 包：${lockPath}`);
 }
 
-function runCargo(args) {
-  const result = spawnSync('cargo', args, {
+for (const name of removedNames) {
+  const depLine = new RegExp(`^\\s*"${name}(?: [^=\\n]+)?",\\n`, 'gm');
+  next = next.replace(depLine, '');
+}
+
+// Collapse blank runs left by deleted packages so the lockfile stays tidy.
+next = next.replace(/\n{3,}/g, '\n\n');
+if (!next.endsWith('\n')) {
+  next += '\n';
+}
+writeFileSync(lockPath, next);
+
+const verify = spawnSync(
+  'cargo',
+  ['metadata', '--locked', '--manifest-path', cargoPath, '--format-version', '1'],
+  {
     cwd: appRoot,
-    stdio: 'inherit',
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error(`cargo ${args.join(' ')} 失败，退出码：${result.status}`);
-  }
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  },
+);
+if (verify.error) {
+  throw verify.error;
 }
-
-runCargo(['generate-lockfile', '--manifest-path', cargoPath]);
-for (const [name, version] of pins) {
-  runCargo([
-    'update',
-    '--manifest-path',
-    cargoPath,
-    '-p',
-    name,
-    '--precise',
-    version,
-  ]);
+if (verify.status !== 0) {
+  throw new Error(
+    `cargo metadata --locked 失败（lockfile 手术后不一致）：\n${verify.stderr || verify.stdout}`,
+  );
 }
-
-const regeneratedLock = readFileSync(lockPath, 'utf8');
-if (regeneratedLock.includes('name = "qwen3-asr-rs"')) {
-  throw new Error(`cargo generate-lockfile 后仍包含 qwen3-asr-rs：${lockPath}`);
-}
-for (const [name, version] of pins) {
-  const match = regeneratedLock.match(new RegExp(`name = "${name}"\\nversion = "([^"]+)"`));
-  if (!match || match[1] !== version) {
-    throw new Error(
-      `re-pin failed for ${name}: expected ${version}, got ${match ? match[1] : 'missing'}`,
-    );
-  }
+if (readFileSync(lockPath, 'utf8').includes('name = "qwen3-asr-rs"')) {
+  throw new Error(`lockfile 手术后仍包含 qwen3-asr-rs：${lockPath}`);
 }
 console.log(
-  `[ci] disabled macOS-only qwen3-asr-rs; re-pinned ${pins
-    .map(([name, version]) => `${name}@${version}`)
-    .join(', ')}`,
+  `[ci] disabled macOS-only qwen3-asr-rs dependency; removed lock packages: ${[
+    ...removedNames,
+  ].join(', ')}`,
 );
