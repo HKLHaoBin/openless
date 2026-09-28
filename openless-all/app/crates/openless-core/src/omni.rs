@@ -42,9 +42,10 @@ impl OmniConfig {
     }
 
     /// 百炼/DashScope 兼容端点把 `input_audio.data` 按 URL/data-URL 解析，裸 Base64
-    /// 会被 400 拒绝（"The provided URL does not appear to be valid"）。与
-    /// `asr::dashscope_multimodal` 转写通道同款，Base64 须带 data-URL 前缀；
-    /// 沿用 polish 的主机名关键词，但只检查 URL 解析后的真实 host。
+    /// 会被 400 拒绝（"The provided URL does not appear to be valid"）。官方
+    /// Qwen-Omni「输入 Base64 本地文件 · 音频」示例要求 `data:;base64,…`（无 MIME）
+    /// 并配合独立 `format`（issue #1118）；沿用 polish 的主机名关键词，但只检查
+    /// URL 解析后的真实 host。
     fn audio_requires_data_url(&self) -> bool {
         reqwest::Url::parse(self.base_url.trim())
             .ok()
@@ -96,6 +97,10 @@ impl OpenAICompatibleOmni {
                 body["temperature"] = json!(temperature);
             }
         }
+        // 百炼 Omni 官方示例普遍带 modalities=["text"]（只要文本输出）；其他兼容端点不注入。
+        if self.config.audio_requires_data_url() {
+            body["modalities"] = json!(["text"]);
+        }
         apply_openai_compatible_thinking_control(
             &mut body,
             &self.config.provider_id,
@@ -115,9 +120,10 @@ impl OpenAICompatibleOmni {
         let user_content = match wav_bytes {
             Some(wav) => {
                 let encoded = base64::engine::general_purpose::STANDARD.encode(wav);
-                // 百炼系端点要求 data-URL 前缀；OpenAI 官方等其他兼容端点保持裸 Base64。
+                // 百炼 Omni 官方 Base64 音频：`data:;base64,`（无 MIME）+ format 字段；
+                // OpenAI 官方等其他兼容端点保持裸 Base64。
                 let data = if self.config.audio_requires_data_url() {
-                    format!("data:audio/wav;base64,{encoded}")
+                    format!("data:;base64,{encoded}")
                 } else {
                     encoded
                 };
@@ -486,8 +492,8 @@ mod tests {
             .as_str()
             .expect("audio data");
         let payload = data
-            .strip_prefix("data:audio/wav;base64,")
-            .expect("data-url prefix for DashScope");
+            .strip_prefix("data:;base64,")
+            .expect("official DashScope Omni data-url prefix");
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(payload)
             .expect("valid base64");
@@ -505,7 +511,7 @@ mod tests {
         assert!(parts[0]["input_audio"]["data"]
             .as_str()
             .expect("audio data")
-            .starts_with("data:audio/wav;base64,"));
+            .starts_with("data:;base64,"));
     }
 
     #[test]
@@ -551,6 +557,16 @@ mod tests {
         assert_eq!(body["model"], "gpt-4o-audio-preview");
         // temperature 以 f32 存（0.3f32 序列化后是 0.30000001192092896），用容差比较。
         assert!((body["temperature"].as_f64().unwrap() - 0.3).abs() < 1e-6);
+        assert!(body.get("modalities").is_none());
+    }
+
+    #[test]
+    fn omni_body_sets_text_modalities_for_dashscope() {
+        let mut dashscope = config();
+        dashscope.base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1".into();
+        let provider = OpenAICompatibleOmni::new(dashscope);
+        let body = provider.omni_body(true, vec![json!({"role": "user", "content": "x"})]);
+        assert_eq!(body["modalities"], json!(["text"]));
     }
 
     #[test]
