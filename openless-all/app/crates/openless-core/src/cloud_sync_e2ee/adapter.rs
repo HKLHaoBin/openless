@@ -43,9 +43,17 @@ pub(crate) fn build(
     }
     let origin = origin.origin().ascii_serialization();
     let root = data_dir.join("encrypted-sync");
-    std::fs::create_dir_all(&root).map_err(|_| super::error("local_storage_unavailable"))?;
-    let gate =
-        crate::cloud_sync_e2ee_store::gate::open_for_data_dir(data_dir).map_err(document_error)?;
+    std::fs::create_dir_all(&root).map_err(|error| {
+        log::error!(
+            "[e2ee-adapter] create encrypted-sync root failed path={} err={error}",
+            root.display()
+        );
+        super::error("local_storage_unavailable")
+    })?;
+    let gate = crate::cloud_sync_e2ee_store::gate::open_for_data_dir(data_dir).map_err(|error| {
+        log::error!("[e2ee-adapter] reopen sync write gate failed: {error:#}");
+        document_error(error)
+    })?;
     let device_id = load_device_id(&root)?;
     let device = SourceDevice {
         id: device_id.clone(),
@@ -69,7 +77,10 @@ pub(crate) fn build(
             Arc::new(local.clone()),
             tasks,
         )
-        .map_err(document_error)?,
+        .map_err(|error| {
+            log::error!("[e2ee-adapter] CoreSyncStore::new failed: {error:#}");
+            document_error(error)
+        })?,
     );
     let service = super::EncryptedSyncService::new(
         super::SyncServiceConfig {
@@ -90,17 +101,37 @@ pub(crate) fn load_device_id(root: &Path) -> SyncResult<String> {
         Ok(value) => value,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Never invent another keyring/AAD binding for existing ciphertext.
-            for entry in
-                std::fs::read_dir(root).map_err(|_| super::error("local_storage_unavailable"))?
-            {
-                let entry = entry.map_err(|_| super::error("local_storage_unavailable"))?;
+            for entry in std::fs::read_dir(root).map_err(|error| {
+                log::error!(
+                    "[e2ee-adapter] read encrypted-sync root failed path={} err={error}",
+                    root.display()
+                );
+                super::error("local_storage_unavailable")
+            })? {
+                let entry = entry.map_err(|error| {
+                    log::error!(
+                        "[e2ee-adapter] read encrypted-sync entry failed path={} err={error}",
+                        root.display()
+                    );
+                    super::error("local_storage_unavailable")
+                })?;
                 let path = entry.path();
                 if path.is_dir()
                     && std::fs::read_dir(&path)
-                        .map_err(|_| super::error("local_storage_unavailable"))?
+                        .map_err(|error| {
+                            log::error!(
+                                "[e2ee-adapter] inspect protected dir failed path={} err={error}",
+                                path.display()
+                            );
+                            super::error("local_storage_unavailable")
+                        })?
                         .next()
                         .is_some()
                 {
+                    log::error!(
+                        "[e2ee-adapter] device-id missing but ciphertext present under {}; recovery required",
+                        path.display()
+                    );
                     return Err(super::error("recovery_required"));
                 }
             }
@@ -108,14 +139,30 @@ pub(crate) fn load_device_id(root: &Path) -> SyncResult<String> {
             if super::local::durable_create(&device_path, id.as_bytes())? {
                 id
             } else {
-                std::fs::read_to_string(&device_path)
-                    .map_err(|_| super::error("local_storage_unavailable"))?
+                std::fs::read_to_string(&device_path).map_err(|error| {
+                    log::error!(
+                        "[e2ee-adapter] reread raced device-id failed path={} err={error}",
+                        device_path.display()
+                    );
+                    super::error("local_storage_unavailable")
+                })?
             }
         }
-        Err(_) => return Err(super::error("local_storage_unavailable")),
+        Err(error) => {
+            log::error!(
+                "[e2ee-adapter] read device-id failed path={} err={error}",
+                device_path.display()
+            );
+            return Err(super::error("local_storage_unavailable"));
+        }
     };
-    crate::cloud_sync_e2ee_protocol::types::UuidV4::parse(&device_id)
-        .map_err(|_| super::error("recovery_required"))?;
+    crate::cloud_sync_e2ee_protocol::types::UuidV4::parse(&device_id).map_err(|error| {
+        log::error!(
+            "[e2ee-adapter] device-id is not a UuidV4 path={} err={error}",
+            device_path.display()
+        );
+        super::error("recovery_required")
+    })?;
     Ok(device_id)
 }
 
