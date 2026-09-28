@@ -41,9 +41,23 @@ pub fn run() {
             let core_backend = coordinator.backend();
             app.manage(Arc::clone(&core_backend));
             coordinator.tauri_host().bind(app.handle().clone());
-            let startup = tauri::async_runtime::block_on(core_backend.start())?;
-            if !startup.backend.running {
-                return Err("OpenLess Core did not reach the running state".into());
+            // Blocked startup must not abort the process: keep the Activity alive so
+            // diagnostics / recovery UI can surface the concrete Core error.
+            if let Some(error) = coordinator.startup_error() {
+                log::error!(
+                    "[mobile] startup blocked before backend.start: code={:?} message={error}",
+                    error.code
+                );
+            } else {
+                let startup = tauri::async_runtime::block_on(core_backend.start()).map_err(
+                    |error| {
+                        log::error!("[mobile] backend.start failed: {error}");
+                        error
+                    },
+                )?;
+                if !startup.backend.running {
+                    return Err("OpenLess Core did not reach the running state".into());
+                }
             }
             crate::tauri_events::start(app.handle().clone(), Arc::clone(&core_backend));
             #[cfg(target_os = "android")]
@@ -51,7 +65,9 @@ pub fn run() {
                 crate::android::register_android_backend(core_backend);
                 crate::android::register_android_coordinator(coordinator.clone());
                 crate::android::register_android_app_handle(app.handle().clone());
-                coordinator.apply_android_overlay_on_startup();
+                if coordinator.startup_error().is_none() {
+                    coordinator.apply_android_overlay_on_startup();
+                }
             }
             Ok(())
         })

@@ -362,12 +362,18 @@ fn startup_storage_error() -> openless_core::BackendError {
 
 fn startup_sync_gate(
 ) -> Result<Arc<openless_core::cloud_sync_e2ee_store::SyncWriteGate>, openless_core::BackendError> {
-    let directory = crate::persistence::data_dir().map_err(|_| startup_storage_error())?;
-    openless_core::cloud_sync_e2ee_store::gate::open_for_data_dir(&directory)
-        .map_err(|_| startup_storage_error())
+    let directory = crate::persistence::data_dir().map_err(|error| {
+        log::error!("[core] data directory unavailable at startup: {error:#}");
+        startup_storage_error()
+    })?;
+    openless_core::cloud_sync_e2ee_store::gate::open_for_data_dir(&directory).map_err(|error| {
+        log::error!("[core] sync write gate open failed: {error:#}");
+        startup_storage_error()
+    })
 }
 
-fn startup_store<T, E>(
+fn startup_store<T, E: std::fmt::Display>(
+    label: &str,
     startup_error: &mut Option<openless_core::BackendError>,
     open: impl FnOnce() -> Result<T, E>,
     fallback: impl FnOnce() -> T,
@@ -377,8 +383,10 @@ fn startup_store<T, E>(
     }
     match open() {
         Ok(store) => store,
-        Err(_) => {
-            log::error!("[core] local store initialization failed; startup is blocked");
+        Err(error) => {
+            log::error!(
+                "[core] local store initialization failed ({label}): {error}; startup is blocked"
+            );
             *startup_error = Some(startup_storage_error());
             fallback()
         }
@@ -453,11 +461,13 @@ fn shared_backend_from_stores(
             repositories,
         ) {
             Ok(backend) => backend,
-            Err(_) => {
+            Err(error) => {
                 log::error!(
-                    "[core] shared backend initialization failed; exposing blocked startup"
+                    "[core] shared backend initialization failed (new_with_repositories): {error}"
                 );
-                openless_core::OpenLessBackend::blocked_startup(config, startup_storage_error())
+                // Keep the concrete Core error so mobile/desktop diagnostics and
+                // blocked-startup UI show the real failure instead of a generic vault hint.
+                openless_core::OpenLessBackend::blocked_startup(config, error)
             }
         },
     );
@@ -603,11 +613,13 @@ impl Coordinator {
             // fails, later constructors use fallbacks and no real repository is touched.
             let _sync_gate = gate.ok();
             let history = startup_store(
+                "history",
                 &mut startup_error,
                 HistoryStore::new,
                 HistoryStore::new_fallback,
             );
             let prefs = startup_store(
+                "preferences",
                 &mut startup_error,
                 PreferencesStore::new,
                 PreferencesStore::new_fallback,
@@ -620,21 +632,25 @@ impl Coordinator {
                 crate::net::set_use_system_proxy(prefs.get().use_system_proxy);
             }
             let style_packs = startup_store(
+                "style_packs",
                 &mut startup_error,
                 || StylePackStore::new(&prefs),
                 StylePackStore::new_fallback,
             );
             let vocab = startup_store(
+                "vocabulary",
                 &mut startup_error,
                 DictionaryStore::new,
                 DictionaryStore::new_fallback,
             );
             let correction_rules = startup_store(
+                "correction_rules",
                 &mut startup_error,
                 CorrectionRuleStore::new,
                 CorrectionRuleStore::new_fallback,
             );
             let activity = startup_store(
+                "activity",
                 &mut startup_error,
                 ActivityStore::load,
                 ActivityStore::new_fallback,
@@ -727,11 +743,13 @@ impl Coordinator {
         // fails, later constructors use fallbacks and no real repository is touched.
         let _sync_gate = gate.ok();
         let history = startup_store(
+            "history",
             &mut startup_error,
             HistoryStore::new,
             HistoryStore::new_fallback,
         );
         let prefs = startup_store(
+            "preferences",
             &mut startup_error,
             PreferencesStore::new,
             PreferencesStore::new_fallback,
@@ -744,21 +762,25 @@ impl Coordinator {
             crate::net::set_use_system_proxy(prefs.get().use_system_proxy);
         }
         let style_packs = startup_store(
+            "style_packs",
             &mut startup_error,
             || StylePackStore::new(&prefs),
             StylePackStore::new_fallback,
         );
         let vocab = startup_store(
+            "vocabulary",
             &mut startup_error,
             DictionaryStore::new,
             DictionaryStore::new_fallback,
         );
         let correction_rules = startup_store(
+            "correction_rules",
             &mut startup_error,
             CorrectionRuleStore::new,
             CorrectionRuleStore::new_fallback,
         );
         let activity = startup_store(
+            "activity",
             &mut startup_error,
             ActivityStore::load,
             ActivityStore::new_fallback,
@@ -1817,10 +1839,11 @@ mod startup_restore_tests {
     #[test]
     fn restore_host_denied_store_blocks_later_real_constructors() {
         let mut failure = None;
-        let first = startup_store(&mut failure, || Err::<u8, _>("denied"), || 7);
+        let first = startup_store("test", &mut failure, || Err::<u8, _>("denied"), || 7);
         assert_eq!(first, 7);
         assert!(failure.is_some());
         let second = startup_store(
+            "test",
             &mut failure,
             || -> Result<u8, ()> { panic!("must not open another real store after failure") },
             || 9,
@@ -1840,6 +1863,7 @@ mod startup_restore_tests {
         let mut failure = None;
         assert_eq!(
             startup_store(
+                "test",
                 &mut failure,
                 || Ok::<_, ()>(11),
                 || panic!("unexpected fallback")
