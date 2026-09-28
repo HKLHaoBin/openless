@@ -43,6 +43,11 @@ pub(crate) fn build(
     }
     let origin = origin.origin().ascii_serialization();
     let root = data_dir.join("encrypted-sync");
+    log::error!(
+        "[e2ee-adapter] build start data_dir={} root={}",
+        data_dir.display(),
+        root.display()
+    );
     std::fs::create_dir_all(&root).map_err(|error| {
         log::error!(
             "[e2ee-adapter] create encrypted-sync root failed path={} err={error}",
@@ -50,11 +55,14 @@ pub(crate) fn build(
         );
         super::error("local_storage_unavailable")
     })?;
+    log::error!("[e2ee-adapter] stage=gate_open");
     let gate = crate::cloud_sync_e2ee_store::gate::open_for_data_dir(data_dir).map_err(|error| {
         log::error!("[e2ee-adapter] reopen sync write gate failed: {error:#}");
         document_error(error)
     })?;
+    log::error!("[e2ee-adapter] stage=device_id");
     let device_id = load_device_id(&root)?;
+    log::error!("[e2ee-adapter] stage=device_id_ok id_len={}", device_id.len());
     let device = SourceDevice {
         id: device_id.clone(),
         os: std::env::consts::OS.into(),
@@ -67,6 +75,7 @@ pub(crate) fn build(
         device_id,
         credentials.clone(),
     );
+    log::error!("[e2ee-adapter] stage=store_new");
     let store = Arc::new(
         CoreSyncStore::new(
             repositories,
@@ -82,6 +91,7 @@ pub(crate) fn build(
             document_error(error)
         })?,
     );
+    log::error!("[e2ee-adapter] stage=store_ok");
     let service = super::EncryptedSyncService::new(
         super::SyncServiceConfig {
             origin,
@@ -136,7 +146,17 @@ pub(crate) fn load_device_id(root: &Path) -> SyncResult<String> {
                 }
             }
             let id = uuid::Uuid::new_v4().to_string();
-            if super::local::durable_create(&device_path, id.as_bytes())? {
+            log::error!(
+                "[e2ee-adapter] device-id missing; durable_create path={}",
+                device_path.display()
+            );
+            if super::local::durable_create(&device_path, id.as_bytes()).map_err(|error| {
+                log::error!(
+                    "[e2ee-adapter] durable_create device-id failed path={} err={error:#}",
+                    device_path.display()
+                );
+                error
+            })? {
                 id
             } else {
                 std::fs::read_to_string(&device_path).map_err(|error| {
