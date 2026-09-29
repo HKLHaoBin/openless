@@ -102,7 +102,7 @@
       "qa_state": {"sequence": 1, "sessionId": null, "kind": {"type": "qa_state", "payload": {"kind": "idle"}}},
       "remote_input_status_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "remote_input_status_changed", "payload": {"running": false}}},
       "remote_input_failed": {"sequence": 1, "sessionId": null, "kind": {"type": "remote_input_failed", "payload": {"reason": "unavailable", "port": 18989}}},
-      "vocabulary_suggestions_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "vocabulary_suggestions_changed", "payload": [{"id": "1", "pattern": "old", "replacement": "new"}]}}
+      "vocabulary_suggestions_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "vocabulary_suggestions_changed", "payload": [{"id": "1", "expiresAtMs": 2000000000000, "pattern": "old", "replacement": "new"}]}}
     }
   },
   "lessComputerVoice": {
