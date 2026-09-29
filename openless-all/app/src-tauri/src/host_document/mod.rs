@@ -5,9 +5,8 @@
 //!
 //! ## 边界
 //!
-//! 所有平台差异关在本模块内。非 macOS 一律返回 [`HostDocumentStatus::Unsupported`]：
-//! Windows 没有任何 UIAutomation 代码且 TSF 只在提交瞬间激活；Linux 的 fcitx5
-//! SurroundingText 多数客户端不支持。留着接口形状一致，将来补实现不用改调用方。
+//! 光标上下文目前仅 macOS 提供。手改学词使用独立授权：macOS AX、Windows UIA
+//! 与 Android 无障碍分别提供短时观察；Linux 保留显式加词入口。
 //!
 //! ## 三条硬约束（新代码不得违反，哪怕仓库里的旧 AX 代码就是这么写的）
 //!
@@ -17,8 +16,8 @@
 //! 2. **不在 tokio worker 上同步调 AX**。走 `spawn_blocking` + `tokio::time::timeout`
 //!    双保险（形状照 `windows_ime_ipc.rs` 的原生调用边界）。内层超时保护线程本身，
 //!    外层保证 async 调用方无论如何都能按时返回。
-//! 3. **读之前先过安全闸门**。我们读的是别的应用里的任意文本，最终会进 LLM 请求体。
-//!    密码框、Secure Input、密码管理器、终端一律不读，一次 AX 都不发。
+//! 3. **读正文之前先过安全闸门**。密码框、Secure Input、已知密码管理器和终端不读。
+//!    光标上下文可按授权进入 LLM 请求；手改观察文本仅用于本地差分。
 //!
 //! ## 本里程碑的范围
 //!
@@ -27,6 +26,10 @@
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub(crate) use windows::insert_with_delivery_check;
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{KeyboardDelivery, KeyboardDeliveryOutcome};
@@ -318,15 +321,19 @@ fn blocked_result(reason: BlockReason) -> HostDocumentReadResult {
 /// 的每次击键唤醒。所以除了这里的 RAII，观察线程自己还有 60 秒硬超时和「前台 app 一换
 /// 就自杀」两道保险。
 pub struct EditWatcher {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(target_os = "android")]
+    generation: u64,
 }
 
 impl EditWatcher {
     /// 主动解除。幂等，drop 时会自动调用。
     pub fn disarm(&self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(target_os = "android")]
+        crate::android::edit_observation::disarm(self.generation);
     }
 }
 
@@ -356,7 +363,16 @@ where
         let stop = macos::spawn_edit_watcher(typed_text, Box::new(on_edit))?;
         Some(EditWatcher { stop })
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::spawn_edit_watcher(typed_text, Box::new(on_edit)).map(|stop| EditWatcher { stop })
+    }
+    #[cfg(target_os = "android")]
+    {
+        crate::android::edit_observation::arm(typed_text, Box::new(on_edit))
+            .map(|generation| EditWatcher { generation })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "android")))]
     {
         let _ = (typed_text, on_edit);
         None

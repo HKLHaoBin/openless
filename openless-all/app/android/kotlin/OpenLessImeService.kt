@@ -644,7 +644,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             )
             correctionToggleRow.addView(
                 TextView(this).apply {
-                    text = ui("同时加入纠错规则（下次自动改正）", "Also add as a correction rule")
+                    text = ui("同时将正确词汇加入词典", "Also remember the corrected word")
                     textSize = 12f
                     setTextColor(tone(Color.rgb(180, 180, 180), Color.rgb(120, 120, 125)))
                 },
@@ -2543,7 +2543,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             editingReplacesWholeResult = true
         }
         editingForClipboardCorrection = false
-        addCorrectionRuleForEdit = true
+        addCorrectionRuleForEdit = false
         editingDictationResult = true
         awaitingEditReplacement = true
         refreshInputView()
@@ -2618,8 +2618,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             connection.commitText(text, 1)
         }
         if (shouldAddRule && text != original) {
-            runNativeAction("记录纠错") {
-                OpenLessNative.nativeAddCorrectionRule(original, text)
+            runNativeAction("加入词典") {
+                check(OpenLessNative.nativeAddLearnedVocabulary(text)) { "词典保存失败，请在历史中重试" }
             }
         }
         // A sub-span correction leaves the surrounding text's exact new

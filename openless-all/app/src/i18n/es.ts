@@ -841,6 +841,13 @@ export const es: typeof zhCN = {
       clear: 'Borrar resultados',
     },
   },
+  vocabLearning: {
+    open: 'Recordar una palabra',
+    label: 'Introduce la palabra correcta',
+    confirm: 'Confirmar y añadir al diccionario',
+    saved: 'Guardado. Puedes gestionarla en el diccionario.',
+    failed: 'No se pudo guardar: {{error}}',
+  },
   vocabCard: {
     title: '¿Recordar esta palabra?',
     accept: 'Recordar',
@@ -880,7 +887,7 @@ export const es: typeof zhCN = {
     editEmpty: 'La palabra no puede estar vacía.',
     filter: {
       all: 'Todas',
-      auto: 'Añadidas automáticamente',
+      auto: 'Confirmadas',
       manual: 'Añadidas manualmente',
     },
     searchPlaceholder: 'Buscar',
@@ -892,7 +899,7 @@ export const es: typeof zhCN = {
     newWordTemplates: 'Plantillas predefinidas',
     newWordTemplateCount: '{{count}} palabras',
     newWordAddSelected: 'Añadir seleccionadas',
-    learnedSection: 'Recogidas automáticamente ({{count}})',
+    learnedSection: 'Confirmadas ({{count}})',
     removeAllLearned: 'Eliminar todas',
     corrections: {
       title: 'Reglas de corrección',
@@ -1259,11 +1266,14 @@ export const es: typeof zhCN = {
         'Al activarlo, las solicitudes usan el proxy del sistema. Al desactivarlo, se conectan directamente, lo que suele reducir la latencia con servicios locales, pero puede impedir el acceso a GitHub y las actualizaciones en algunas regiones. No afecta a los flujos de voz en tiempo real ni a Less Computer.',
     },
     dataStorage: {
+      vocabularyLearningLabel: 'Aprender de las correcciones (experimental)',
+      vocabularyLearningDesc:
+        'Tras insertar texto, detecta cambios en el campo localmente durante un máximo de 60 segundos y pide confirmación antes de guardar palabras. El texto observado no se envía al modelo. Se excluyen contraseñas y aplicaciones sensibles conocidas. En Windows y Android depende del editor; Android requiere accesibilidad. Al desactivarlo se detiene la observación.',
       title: 'Almacenamiento de datos',
       desc: 'Historial de conversaciones y contexto guardados en este dispositivo.',
       cursorContextLabel: 'Contexto del cursor (experimental)',
       cursorContextDesc:
-        'Al mejorar el texto, lee lo que rodea al cursor en el documento para distinguir homófonos, nombres propios y pronombres. Si se activa, ese texto se envía al proveedor LLM configurado junto con la solicitud. Si se desactiva, no se lee nada. Nunca se leen campos de contraseña, Entrada Segura, gestores de contraseñas ni terminales. Solo macOS.',
+        'Envía el texto cercano al cursor al modelo para pulirlo (solo macOS). Es independiente del aprendizaje local. Se excluyen contraseñas y aplicaciones sensibles conocidas.',
     },
     codingConsole: {
       title: 'Consola de Claude',
@@ -1464,7 +1474,8 @@ export const es: typeof zhCN = {
       comboClear: 'Borrar',
       comboConflict: 'Esta combinación de teclas no está disponible',
       shortcutSaveFailed: 'No se pudo guardar el atajo',
-      mouseSideHint: 'Los botones laterales Mouse4 / Mouse5 se admiten como atajos globales de dictado en Windows',
+      mouseSideHint:
+        'Los botones laterales Mouse4 / Mouse5 se admiten como atajos globales de dictado en Windows',
       allowNonTsfFallbackLabel: 'Permitir alternativa sin TSF',
       allowNonTsfFallbackDesc:
         'Windows: si falla la inserción TSF, usa SendInput Unicode con pausas. Si también falla, copia el texto al portapapeles.',

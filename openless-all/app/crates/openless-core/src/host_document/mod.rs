@@ -3,11 +3,13 @@
 //! AX/IME/clipboard 读取仍由宿主实现；Core 只提供可测试的纯函数。
 
 mod diff;
+mod observation;
 mod window;
 
 pub use diff::{
     edit_is_within_typed_text, is_vocab_worthy, learned_rule, minimal_edit, EditPair, LearnedRule,
 };
+pub use observation::ObservedInsertion;
 pub use window::{plan_window, utf16_offset_to_char_offset, window_around_cursor, WindowSpan};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

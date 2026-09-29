@@ -6,6 +6,21 @@ export function listVocab(): Promise<DictionaryEntry[]> {
   return invokeOrMock('list_vocab', undefined, () => mockVocab.map((entry) => ({ ...entry })));
 }
 
+export function addLearnedVocab(phrase: string): Promise<void> {
+  return invokeOrMock('add_learned_vocab', { phrase }, () => {
+    if (!mockVocab.some((entry) => entry.phrase === phrase.trim())) {
+      mockVocab.unshift({
+        id: crypto.randomUUID(),
+        phrase: phrase.trim(),
+        note: '从手改中自动收集',
+        enabled: true,
+        hits: 0,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  });
+}
+
 export function addVocab(phrase: string, note?: string): Promise<DictionaryEntry> {
   return invokeOrMock('add_vocab', { phrase, note }, () => {
     const entry = {

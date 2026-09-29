@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
+import { LearnVocabulary } from '../components/LearnVocabulary';
 import { Tooltip } from '../components/Tooltip';
 import { AssistantMarkdown } from '../components/chat/markdown';
 import { detectOS } from '../components/WindowChrome';
@@ -337,10 +338,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
       const file = new File([bin], `openless-recording-${item.id}.wav`, {
         type: 'audio/wav',
       });
-      if (
-        !navigator.share ||
-        (navigator.canShare && !navigator.canShare({ files: [file] }))
-      ) {
+      if (!navigator.share || (navigator.canShare && !navigator.canShare({ files: [file] }))) {
         await onExportAudio();
         return;
       }
@@ -553,7 +551,9 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                       : t('history.empty', {
                           trigger: prefs
                             ? formatComboLabel(
-                                (quickNotesOnly ? prefs.quickNoteHotkey : prefs.dictationHotkey) ?? {
+                                (quickNotesOnly
+                                  ? prefs.quickNoteHotkey
+                                  : prefs.dictationHotkey) ?? {
                                   primary: '',
                                   modifiers: [],
                                 },
@@ -706,7 +706,9 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                     </span>
                   </div>
                   <HistoryActionMenu
-                    hasAudioRecording={item.hasAudioRecording === true && !audioMissingIds.has(item.id)}
+                    hasAudioRecording={
+                      item.hasAudioRecording === true && !audioMissingIds.has(item.id)
+                    }
                     audioLoading={audioLoading}
                     showShare={os === 'android'}
                     canRetranscribe={
@@ -885,6 +887,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                           t('quickNote.noTranscript', 'No transcript yet.')
                         }
                       />
+                      <LearnVocabulary key={item.id} />
                     </div>
                   </div>
                   {showRawTranscript && (
@@ -941,21 +944,21 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
                 {repolishOpen &&
                   (item.rawTranscript.trim() || quickNotesOnly) &&
                   item.errorCode !== 'qaSession' && (
-                  <RepolishPanel
-                    session={item}
-                    mobile={mobile}
-                    allPacks={allPacks}
-                    packsError={packsError}
-                    onClose={() => setRepolishOpen(false)}
-                    persistOnApply={quickNotesOnly}
-                    onApplied={(updated) =>
-                      setItems((prev) =>
-                        prev.map((entry) => (entry.id === updated.id ? updated : entry)),
-                      )
-                    }
-                    key={`repolish-${item.id}`}
-                  />
-                )}
+                    <RepolishPanel
+                      session={item}
+                      mobile={mobile}
+                      allPacks={allPacks}
+                      packsError={packsError}
+                      onClose={() => setRepolishOpen(false)}
+                      persistOnApply={quickNotesOnly}
+                      onApplied={(updated) =>
+                        setItems((prev) =>
+                          prev.map((entry) => (entry.id === updated.id ? updated : entry)),
+                        )
+                      }
+                      key={`repolish-${item.id}`}
+                    />
+                  )}
               </>
             ) : (
               <div
@@ -1330,7 +1333,7 @@ function RepolishPanel({
       const updated = await applyQuickNoteRepolish(
         session.id,
         result.text,
-        result.key === '__retry__' ? session.stylePackId ?? undefined : result.key,
+        result.key === '__retry__' ? (session.stylePackId ?? undefined) : result.key,
       );
       onApplied(updated);
     } catch (err) {
@@ -1550,12 +1553,7 @@ function HistoryResultCard({
           </Btn>
         )}
         {onApply && text.trim() && (
-          <Btn
-            variant="ghost"
-            size="sm"
-            disabled={applying}
-            onClick={onApply}
-          >
+          <Btn variant="ghost" size="sm" disabled={applying} onClick={onApply}>
             {applying ? t('quickNote.applying', 'Applying…') : applyLabel}
           </Btn>
         )}
@@ -1578,7 +1576,7 @@ function isUserCancelled(message: string): boolean {
 }
 
 /** 当 session.hasAudioRecording 为 true 时渲染：由详情操作菜单触发加载，拿到字节后切换为
-  *  原生 audio controls。Blob URL 在组件 unmount 时 revoke，避免泄漏。
+ *  原生 audio controls。Blob URL 在组件 unmount 时 revoke，避免泄漏。
  *  `onMissing` 在后端返回 'recording not found'（wav 已被 prune）时触发，让父组件
  *  把按钮永久隐藏，避免用户继续点击得到同样错误。 */
 function AudioRecordingPlayer({

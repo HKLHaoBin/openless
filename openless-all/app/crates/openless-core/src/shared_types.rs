@@ -246,6 +246,8 @@ pub use crate::types::{CorrectionRule, RuleSource};
 #[serde(rename_all = "camelCase")]
 pub struct PendingCorrection {
     pub id: String,
+    /// Absolute deadline shared by native and web confirmation surfaces.
+    pub expires_at_ms: i64,
     /// 改之前那个（错的）写法。只用来在卡片上让用户看清改的是什么，不入库。
     pub pattern: String,
     /// 用户最后要的那个词 —— 点「好」之后进词汇表的就是它。
@@ -646,6 +648,9 @@ pub struct UserPreferences {
     /// 密码框 / Secure Input / 密码管理器 / 终端一律硬拦，与本开关无关。
     #[serde(default)]
     pub cursor_context_enabled: bool,
+    /// Observe corrections locally after insertion; independent of LLM context.
+    #[serde(default)]
+    pub vocabulary_learning_enabled: bool,
     /// 概览页是否显示「年度活动」热力图卡。默认 true；关闭只隐藏卡片，
     /// 活动计数照常记录（persistence/activity.rs），再打开时全年数据仍在。
     #[serde(default = "default_true")]
@@ -953,6 +958,8 @@ struct UserPreferencesWire {
     streaming_insert_save_clipboard: bool,
     #[serde(default)]
     cursor_context_enabled: bool,
+    #[serde(default)]
+    vocabulary_learning_enabled: bool,
     #[serde(default = "default_true")]
     show_overview_activity_heatmap: bool,
     #[serde(default)]
@@ -1126,6 +1133,7 @@ impl Default for UserPreferencesWire {
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
             cursor_context_enabled: prefs.cursor_context_enabled,
+            vocabulary_learning_enabled: prefs.vocabulary_learning_enabled,
             show_overview_activity_heatmap: prefs.show_overview_activity_heatmap,
             stacked_row_layout: prefs.stacked_row_layout,
             conservative_layout: prefs.conservative_layout,
@@ -1328,6 +1336,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
             cursor_context_enabled: wire.cursor_context_enabled,
+            vocabulary_learning_enabled: wire.vocabulary_learning_enabled,
             show_overview_activity_heatmap: wire.show_overview_activity_heatmap,
             stacked_row_layout: wire.stacked_row_layout,
             conservative_layout: wire.conservative_layout,
@@ -1678,6 +1687,7 @@ impl Default for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
             cursor_context_enabled: false,
+            vocabulary_learning_enabled: false,
             show_overview_activity_heatmap: true,
             stacked_row_layout: false,
             conservative_layout: false,

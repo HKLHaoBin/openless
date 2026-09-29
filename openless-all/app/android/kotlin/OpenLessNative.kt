@@ -27,6 +27,13 @@ object OpenLessNative {
     @JvmStatic external fun nativeStopDictationAsQuickNote()
 
     @JvmStatic external fun nativeCancelDictation()
+    @JvmStatic external fun nativeObserveVocabularyText(generation: Long, text: String): Boolean
+    @JvmStatic external fun nativeVocabularyObservationActive(generation: Long): Boolean
+    @JvmStatic external fun nativeCurrentVocabularyObservation(): Long
+    @JvmStatic external fun nativeStopVocabularyObservation(generation: Long)
+    @JvmStatic external fun nativePendingVocabularySuggestions(): String
+    @JvmStatic external fun nativeResolveVocabularySuggestion(id: String, accept: Boolean): Boolean
+    @JvmStatic external fun nativeAddLearnedVocabulary(phrase: String): Boolean
 
     /** Records a hand-corrected span from the IME's "edit result" flow into the shared correction dictionary. */
     @JvmStatic external fun nativeAddCorrectionRule(pattern: String, replacement: String)

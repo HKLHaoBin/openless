@@ -844,6 +844,13 @@ export const de: typeof zhCN = {
       clear: 'Ergebnisse leeren',
     },
   },
+  vocabLearning: {
+    open: 'Wort merken',
+    label: 'Das richtige Wort eingeben',
+    confirm: 'Bestätigen und zum Wörterbuch hinzufügen',
+    saved: 'Gespeichert. Im Wörterbuch verwalten.',
+    failed: 'Speichern fehlgeschlagen: {{error}}',
+  },
   vocabCard: {
     title: 'Dieses Wort merken?',
     accept: 'Merken',
@@ -883,7 +890,7 @@ export const de: typeof zhCN = {
     editEmpty: 'Das Wort darf nicht leer sein.',
     filter: {
       all: 'Alle',
-      auto: 'Automatisch hinzugefügt',
+      auto: 'Bestätigt',
       manual: 'Manuell hinzugefügt',
     },
     searchPlaceholder: 'Suchen',
@@ -895,7 +902,7 @@ export const de: typeof zhCN = {
     newWordTemplates: 'Vorlagen',
     newWordTemplateCount: 'Wörter: {{count}}',
     newWordAddSelected: 'Auswahl hinzufügen',
-    learnedSection: 'Automatisch gesammelt ({{count}})',
+    learnedSection: 'Bestätigt ({{count}})',
     removeAllLearned: 'Alle entfernen',
     corrections: {
       title: 'Korrekturregeln',
@@ -1265,11 +1272,14 @@ export const de: typeof zhCN = {
         'Anfragen verwenden den Systemproxy, wenn diese Option aktiv ist. Andernfalls werden alle Anfragen direkt gesendet, was bei inländischen Diensten meist schneller ist. Ausländische Dienste wie GitHub-Anmeldung und Updates können dann fehlschlagen. Echtzeit-Sprachstreams und Less Computer sind davon unabhängig.',
     },
     dataStorage: {
+      vocabularyLearningLabel: 'Aus Korrekturen lernen (experimentell)',
+      vocabularyLearningDesc:
+        'Nach dem Einfügen werden Änderungen im Eingabefeld bis zu 60 Sekunden lokal erkannt. Wörter werden erst nach Bestätigung gespeichert. Der beobachtete Text wird nicht an ein Modell gesendet. Passwortfelder und bekannte sensible Apps sind ausgeschlossen. Die Unterstützung unter Windows und Android hängt vom Editor ab; Android benötigt Bedienungshilfen. Ausschalten beendet die Beobachtung.',
       title: 'Datenspeicherung',
       desc: 'Gesprächsverlauf und Kontext, die auf diesem Gerät gespeichert werden.',
       cursorContextLabel: 'Cursorkontext (experimentell)',
       cursorContextDesc:
-        'Liest beim Überarbeiten den Text rund um den Cursor im aktuellen Dokument, damit das Modell gleich klingende Wörter, Eigennamen und Pronomen unterscheiden kann. Bei Aktivierung wird dieser Text mit der Anfrage an deinen LLM-Dienst gesendet; andernfalls wird nichts gelesen. Passwortfelder, Secure Input, Passwortmanager und Terminals werden nie gelesen. Nur unter macOS.',
+        'Text rund um den Cursor zur Überarbeitung an das Modell senden (nur macOS). Diese Einstellung ist vom lokalen Lernen getrennt. Passwortfelder und bekannte sensible Apps sind ausgeschlossen.',
     },
     codingConsole: {
       title: 'Claude-Konsole',
@@ -1472,7 +1482,8 @@ export const de: typeof zhCN = {
       comboClear: 'Leeren',
       comboConflict: 'Diese Tastenkombination ist nicht verfügbar',
       shortcutSaveFailed: 'Tastenkombination konnte nicht gespeichert werden',
-      mouseSideHint: 'Mausseitentasten Mouse4 / Mouse5 werden als globale Diktier-Hotkeys unter Windows unterstützt',
+      mouseSideHint:
+        'Mausseitentasten Mouse4 / Mouse5 werden als globale Diktier-Hotkeys unter Windows unterstützt',
       allowNonTsfFallbackLabel: 'Alternative ohne TSF erlauben',
       allowNonTsfFallbackDesc:
         'Windows: Falls das Einfügen über TSF fehlschlägt, wird Unicode-Text dosiert über SendInput eingegeben. Schlägt auch das fehl, wird der Text in die Zwischenablage kopiert.',

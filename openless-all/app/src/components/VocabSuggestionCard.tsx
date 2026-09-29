@@ -13,15 +13,8 @@
 import { Icon } from './Icon';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  acceptPendingCorrection,
-  dismissVocabSuggestions,
-  rejectPendingCorrection,
-} from '../lib/ipc';
+import { acceptPendingCorrection, rejectPendingCorrection } from '../lib/ipc';
 import type { PendingCorrection } from '../lib/types';
-
-/// 卡片自己消失的时间，与后端 `VOCAB_SUGGESTION_TTL_MS` 对齐。
-const TTL_MS = 10_000;
 
 interface VocabSuggestionCardProps {
   suggestions: PendingCorrection[];
@@ -33,14 +26,23 @@ export function VocabSuggestionCard({ suggestions }: VocabSuggestionCardProps) {
   const [resolved, setResolved] = useState<Set<string>>(new Set());
   const timerRef = useRef<number | null>(null);
 
-  // 10 秒倒计时。列表一变就重新计时：同一次听写里连着改了几个词会陆续追加进来，
-  // 不重置的话后来的那条可能刚出现就没了。
+  // Each suggestion has a Core deadline; new suggestions do not extend old ones.
   useEffect(() => {
     if (suggestions.length === 0) return;
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => {
-      void dismissVocabSuggestions();
-    }, TTL_MS);
+    const earliest = Math.min(...suggestions.map((s) => s.expiresAtMs));
+    timerRef.current = window.setTimeout(
+      () => {
+        const expired = suggestions.filter((s) => s.expiresAtMs <= Date.now());
+        setResolved((previous) => new Set([...previous, ...expired.map((s) => s.id)]));
+        for (const suggestion of suggestions) {
+          if (suggestion.expiresAtMs <= Date.now()) {
+            void rejectPendingCorrection(suggestion.id).catch(() => {});
+          }
+        }
+      },
+      Math.max(0, earliest - Date.now()),
+    );
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };

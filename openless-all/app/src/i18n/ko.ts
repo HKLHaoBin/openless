@@ -816,6 +816,13 @@ export const ko: typeof zhCN = {
       clear: '결과 지우기',
     },
   },
+  vocabLearning: {
+    open: '단어 기억하기',
+    label: '기억할 올바른 단어를 입력하세요',
+    confirm: '확인하고 사전에 추가',
+    saved: '저장했습니다. 사전에서 관리할 수 있습니다.',
+    failed: '저장 실패: {{error}}',
+  },
   vocabCard: {
     title: '이 단어를 기억할까요?',
     accept: '기억하기',
@@ -853,7 +860,7 @@ export const ko: typeof zhCN = {
     editTitle: '단어 편집',
     editSave: '저장',
     editEmpty: '단어를 입력하세요.',
-    filter: { all: '전체', auto: '자동 추가', manual: '수동 추가' },
+    filter: { all: '전체', auto: '확인 후 수집', manual: '수동 추가' },
     searchPlaceholder: '검색',
     searchEmpty: '일치하는 단어가 없습니다.',
     newWord: '새 단어',
@@ -863,7 +870,7 @@ export const ko: typeof zhCN = {
     newWordTemplates: '프리셋 템플릿',
     newWordTemplateCount: '{{count}}개 단어',
     newWordAddSelected: '선택 추가',
-    learnedSection: '자동 수집 ({{count}})',
+    learnedSection: '확인 후 수집 ({{count}})',
     removeAllLearned: '모두 삭제',
     corrections: {
       title: '교정 규칙',
@@ -1223,11 +1230,14 @@ export const ko: typeof zhCN = {
         '켜면 요청이 시스템 프록시를 따릅니다. 끄면 모든 요청이 직결됩니다(국내 서비스는 보통 더 빠름). GitHub 로그인·업데이트 등 해외 서비스는 연결되지 않을 수 있습니다. 실시간 음성 스트림과 Less Computer는 영향을 받지 않습니다.',
     },
     dataStorage: {
+      vocabularyLearningLabel: '수정한 단어 학습 (실험)',
+      vocabularyLearningDesc:
+        '입력 후 최대 60초 동안 기기에서 해당 입력란의 수정을 감지하고 확인 후 사전에 추가합니다. 관찰한 텍스트는 모델에 보내지 않습니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다. Windows 및 Android는 편집기에 따라 지원이 다르며 Android는 접근성 서비스가 필요합니다. 끄면 관찰을 중지합니다.',
       title: '데이터 저장',
       desc: '이 기기에 보관되는 대화 기록과 컨텍스트.',
       cursorContextLabel: '커서 문맥 (실험적)',
       cursorContextDesc:
-        '다듬을 때 작성 중인 문서에서 커서 주변 원문을 읽어, 동음이의어·고유명사·대명사를 모델이 구분할 수 있게 합니다. 켜면 해당 텍스트가 요청과 함께 설정된 LLM 제공자로 전송됩니다. 끄면 한 글자도 읽지 않습니다. 비밀번호 입력란, Secure Input, 비밀번호 관리자, 터미널은 항상 읽지 않습니다. macOS 전용.',
+        '다듬기 요청 시 커서 주변 텍스트를 모델에 보냅니다(macOS 전용). 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다.',
     },
     codingConsole: {
       title: 'Claude 콘솔',
@@ -1421,7 +1431,8 @@ export const ko: typeof zhCN = {
       comboClear: '지우기',
       comboConflict: '이 단축키 조합은 사용할 수 없습니다',
       shortcutSaveFailed: '단축키를 저장하지 못했습니다',
-      mouseSideHint: '마우스 측면 버튼 Mouse4 / Mouse5는 Windows에서 전역 받아쓰기 단축키로 지원됩니다',
+      mouseSideHint:
+        '마우스 측면 버튼 Mouse4 / Mouse5는 Windows에서 전역 받아쓰기 단축키로 지원됩니다',
       allowNonTsfFallbackLabel: '비 TSF 폴백 허용',
       allowNonTsfFallbackDesc:
         'Windows: TSF 입력이 실패하면 분할된 Unicode SendInput을 사용하고, 그래도 실패하면 텍스트를 클립보드에 복사합니다.',

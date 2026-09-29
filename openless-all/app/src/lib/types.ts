@@ -123,6 +123,7 @@ export interface HostDocumentReadResult {
 /** 一条等待用户确认的纠正建议（Tier2）。后端只存在内存里，重启即空——建议本身是
  *  易逝的，用户下次犯同样的错会再产生一条。 */
 export interface PendingCorrection {
+  expiresAtMs: number;
   id: string;
   pattern: string;
   replacement: string;
@@ -510,6 +511,7 @@ export interface UserPreferences {
    *  默认 false —— 开启后每次听写都会读取前台 app 的正文并把其中一段发给 LLM 服务商。
    *  仅 macOS 有实现；密码框 / Secure Input / 密码管理器 / 终端一律硬拦。 */
   cursorContextEnabled: boolean;
+  vocabularyLearningEnabled: boolean;
   /** 概览页是否显示「年度活动」热力图卡。默认 true；关闭只隐藏卡片，活动计数照常记录。 */
   showOverviewActivityHeatmap: boolean;
   /** 易读布局：小屏或大字号时强制同行控件换行，避免横向溢出。默认 false。 */

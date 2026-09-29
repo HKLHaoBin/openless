@@ -794,6 +794,13 @@ export const zhTW: typeof zhCN = {
       clear: '清除結果',
     },
   },
+  vocabLearning: {
+    open: '記住詞彙',
+    label: '輸入要記住的正確詞彙',
+    confirm: '確認加入詞典',
+    saved: '已記住，可在詞典中管理',
+    failed: '儲存失敗：{{error}}',
+  },
   vocabCard: {
     title: '要記住這個詞嗎？',
     accept: '記住',
@@ -831,7 +838,7 @@ export const zhTW: typeof zhCN = {
     editEmpty: '詞條不能為空。',
     filter: {
       all: '所有',
-      auto: '自動新增',
+      auto: '確認收集',
       manual: '手動新增',
     },
     searchPlaceholder: '搜尋',
@@ -843,7 +850,7 @@ export const zhTW: typeof zhCN = {
     newWordTemplates: '預設範本',
     newWordTemplateCount: '{{count}} 詞',
     newWordAddSelected: '新增所選',
-    learnedSection: '自動收集（{{count}}）',
+    learnedSection: '確認收集（{{count}}）',
     removeAllLearned: '全部刪除',
     corrections: {
       title: '糾正規則',
@@ -1191,11 +1198,14 @@ export const zhTW: typeof zhCN = {
         '開啟時請求跟隨系統代理；關閉後所有網路請求直連（國內服務延遲通常更低），GitHub 登入、更新等境外服務可能連不上。即時語音串流與 Less Computer 不受此開關影響。',
     },
     dataStorage: {
+      vocabularyLearningLabel: '手改學詞（實驗）',
+      vocabularyLearningDesc:
+        '插入後在本機觀察目前輸入框內的修改，最長 60 秒，確認後才加入詞典。觀察文字不會傳給模型；排除密碼欄位和已知敏感應用程式。Windows、Android 支援取決於編輯器；Android 需開啟無障礙服務。關閉後停止觀察。',
       title: '資料儲存',
       desc: '本機保留的歷史會話與對話上下文。',
       cursorContextLabel: '遊標上下文（實驗）',
       cursorContextDesc:
-        '潤稿時讀取你正在寫的那篇檔案中游標附近的原文，幫模型判斷同音詞、專有名詞與代詞該怎麼寫。開啟後這段文字會隨請求送給你設定的 LLM 服務商；關閉時一個字都不讀。密碼輸入框、Secure Input、密碼管理器與終端機始終不讀。僅 macOS。',
+        '潤色時將游標附近文字傳給模型（僅 macOS）。此開關與本機手改學詞獨立；排除密碼欄位和已知敏感應用程式。',
     },
     codingConsole: {
       title: 'Claude 主控臺',

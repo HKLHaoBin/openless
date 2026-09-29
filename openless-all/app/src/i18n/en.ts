@@ -832,6 +832,13 @@ export const en: typeof zhCN = {
       clear: 'Clear results',
     },
   },
+  vocabLearning: {
+    open: 'Remember a word',
+    label: 'Enter the correct word to remember',
+    confirm: 'Confirm and add to dictionary',
+    saved: 'Saved. Manage this word in Dictionary.',
+    failed: 'Could not save: {{error}}',
+  },
   vocabCard: {
     title: 'Remember this word?',
     accept: 'Remember',
@@ -869,7 +876,7 @@ export const en: typeof zhCN = {
     editTitle: 'Edit Word',
     editSave: 'Save',
     editEmpty: 'Word cannot be empty.',
-    filter: { all: 'All', auto: 'Auto-Added', manual: 'Manually Added' },
+    filter: { all: 'All', auto: 'Confirmed', manual: 'Manually Added' },
     searchPlaceholder: 'Search',
     searchEmpty: 'No matching words.',
     newWord: 'New Word',
@@ -879,7 +886,7 @@ export const en: typeof zhCN = {
     newWordTemplates: 'Preset Templates',
     newWordTemplateCount: '{{count}} words',
     newWordAddSelected: 'Add Selected',
-    learnedSection: 'Auto-collected ({{count}})',
+    learnedSection: 'Confirmed ({{count}})',
     removeAllLearned: 'Remove all',
     corrections: {
       title: 'Correction rules',
@@ -1246,8 +1253,11 @@ export const en: typeof zhCN = {
       title: 'Data storage',
       desc: 'Conversation history and context kept on this device.',
       cursorContextLabel: 'Cursor context (experimental)',
+      vocabularyLearningLabel: 'Learn from corrections (experimental)',
+      vocabularyLearningDesc:
+        'After insertion, observe edits locally for up to 60 seconds and ask before saving a word. Observation text is not sent to a model. Password fields and known sensitive apps are excluded. Windows and Android support depends on the editor; Android requires accessibility. Turning this off stops observation.',
       cursorContextDesc:
-        'While polishing, read the text around your cursor in the document you are writing, so the model can tell homophones, proper nouns and pronouns apart. When on, that text is sent to your configured LLM provider with the request; when off, nothing is read at all. Password fields, Secure Input, password managers and terminals are never read. macOS only.',
+        'Send nearby document text with polish requests (macOS only). This switch is separate from local vocabulary learning. Password fields and known sensitive apps are excluded.',
     },
     codingConsole: {
       title: 'Claude Console',
@@ -1443,7 +1453,8 @@ export const en: typeof zhCN = {
       comboClear: 'Clear',
       comboConflict: 'This shortcut combination is not available',
       shortcutSaveFailed: 'Failed to save shortcut',
-      mouseSideHint: 'Mouse4 / Mouse5 side buttons are supported as global dictation hotkeys on Windows',
+      mouseSideHint:
+        'Mouse4 / Mouse5 side buttons are supported as global dictation hotkeys on Windows',
       allowNonTsfFallbackLabel: 'Allow non-TSF fallback',
       allowNonTsfFallbackDesc:
         'Windows: when TSF insertion fails, use paced Unicode SendInput; if that still fails, copy the text to the clipboard.',
