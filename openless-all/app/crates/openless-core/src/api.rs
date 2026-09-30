@@ -6760,7 +6760,13 @@ mod tests {
         prefs.vocabulary_learning_settings.observation_seconds = 20;
         prefs.vocabulary_learning_settings.suggestion_seconds = 30;
         prefs.vocabulary_learning_settings.max_phrase_chars = 16;
-        backend.set_preferences(prefs).unwrap();
+        backend
+            .update_settings(
+                prefs,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
         let sink = CoreEditObservationSink {
             settings: backend.get_preferences().vocabulary_learning_settings,
             expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
@@ -6786,7 +6792,13 @@ mod tests {
         assert!((before + 30_000..=after + 30_000).contains(&suggestion.expires_at_ms));
         let mut prefs = backend.get_preferences();
         prefs.vocabulary_learning_settings.observation_seconds = 999;
-        backend.set_preferences(prefs).unwrap();
+        backend
+            .update_settings(
+                prefs,
+                crate::SettingsUpdateOptions::STRICT,
+                &crate::NoopSettingsRuntime,
+            )
+            .unwrap();
         assert_eq!(
             backend
                 .get_preferences()
