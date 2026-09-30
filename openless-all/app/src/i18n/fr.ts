@@ -2122,6 +2122,13 @@ export const fr: typeof zhCN = {
         notWindows: 'Disponible uniquement sous Windows.',
       },
     },
+    inputMethod: {
+      guidanceTitle: 'Méthode de saisie OpenLess',
+      enableSystemIme:
+        'Dans les paramètres Android → Clavier / Méthodes de saisie, activez OpenLess Voice et sélectionnez-le si nécessaire.',
+      longPressLogo:
+        'Dans le clavier OpenLess, maintenez le logo en haut à gauche pour ouvrir les réglages natifs du clavier.',
+    },
     advanced: {
       multimodalPipelineTitle: 'Reconnaissance multimodale (expérimentale)',
       multimodalPipelineTitleHint:
@@ -2360,6 +2367,7 @@ export const fr: typeof zhCN = {
     descriptions: {
       general:
         'Choisissez un microphone, réglez l’enregistrement et la saisie de texte, ou connectez votre téléphone.',
+      inputMethod: 'Configurez la fenêtre flottante et la méthode de saisie Android.',
       shortcuts: 'Configurez les raccourcis et choisissez l’action appliquée au texte sélectionné.',
       services:
         'Choisissez les services de reconnaissance vocale et de traitement du texte. Gérez les canaux, modèles locaux et connexions.',
@@ -2374,6 +2382,7 @@ export const fr: typeof zhCN = {
     searchKeywords: {
       general:
         'microphone enregistrement saisie téléphone distant réseau local LAN PIN capsule muet démarrage automatique',
+      inputMethod: 'méthode de saisie IME clavier fenêtre flottante Android',
       shortcuts: 'raccourci touche combinaison sélection amélioration voix modification',
       services: 'ASR LLM API canal modèle cloud local hors ligne réseau proxy catalogue',
       appearance: 'thème sombre clair langue police texte taille disposition carte activité',
@@ -2386,6 +2395,7 @@ export const fr: typeof zhCN = {
       appearance: 'Apparence et langue',
       shortcuts: 'Raccourcis et sélection',
       general: 'Enregistrement et saisie',
+      inputMethod: 'Méthode de saisie',
       services: 'Services et modèles d’IA',
       privacy: 'Autorisations et données',
       advanced: 'Expériences et extensions',

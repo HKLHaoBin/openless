@@ -2631,9 +2631,9 @@ impl AudioRecorder for TauriAudioRecorder {
                     preview.stop();
                 }
             }
-            let permanent_archive = !matches!(
+            let permanent_archive = matches!(
                 context.output_target,
-                openless_core::DictationOutputTarget::ForegroundApp
+                openless_core::DictationOutputTarget::QuickNote | openless_core::DictationOutputTarget::Undecided
             );
             // Undecided Android captures use the permanent quick-note spool
             // until the terminal tap/gesture classifies the session.

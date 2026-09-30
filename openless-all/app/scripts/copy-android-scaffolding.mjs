@@ -59,16 +59,28 @@ const KOTLIN_FILES = [
   'OpenLessContentReader.kt',
   'OpenLessContentWriter.kt',
   'OpenLessImeService.kt',
+  'ImeLearningPolicy.kt',
+  'StrokeInputController.kt',
   'StrokeInput.kt',
+  'LitePinyinController.kt',
+  'LitePinyinRepository.kt',
+  'LitePinyinUserFrequency.kt',
+  'LitePinyinLearnedPhrases.kt',
+  'OpenLessSettingsExport.kt',
   'StrokePhraseRepository.kt',
   'StrokeUserFrequency.kt',
+  'EnglishCandidateProvider.kt',
+  'EnglishUserFrequency.kt',
   'OpenLessRuntimeService.kt',
   'OpenLessBackendWarmupActivity.kt',
   'OpenLessClipboardHistory.kt',
   'OpenLessKeyboardSettingsActivity.kt',
+  'OpenLessProcessRestartStats.kt',
+  'OpenLessBuildInfo.kt',
 ];
 
 const KOTLIN_TEST_FILES = [
+  'ImeLearningPolicyTest.kt',
   'OpenLessContentReaderTest.kt',
   'OpenLessCredentialCipherTest.kt',
   'OpenLessShizukuBridgeTest.kt',
@@ -77,7 +89,10 @@ const KOTLIN_TEST_FILES = [
   'OpenLessPasteVerificationTest.kt',
   'OpenLessAccessibilityComponentIdsTest.kt',
 ];
-const KOTLIN_ANDROID_TEST_FILES = ['OpenLessCredentialVaultInstrumentedTest.kt'];
+const KOTLIN_ANDROID_TEST_FILES = [
+  'OpenLessCredentialVaultInstrumentedTest.kt',
+  'ImeLearningMigrationTest.kt',
+];
 
 const XML_FILES = [
   ['res/xml/openless_accessibility_config.xml', 'openless_accessibility_config.xml'],
