@@ -512,6 +512,11 @@ export interface UserPreferences {
    *  仅 macOS 有实现；密码框 / Secure Input / 密码管理器 / 终端一律硬拦。 */
   cursorContextEnabled: boolean;
   vocabularyLearningEnabled: boolean;
+  vocabularyLearningSettings: {
+    observationSeconds: number;
+    suggestionSeconds: number;
+    maxPhraseChars: number;
+  };
   /** 概览页是否显示「年度活动」热力图卡。默认 true；关闭只隐藏卡片，活动计数照常记录。 */
   showOverviewActivityHeatmap: boolean;
   /** 易读布局：小屏或大字号时强制同行控件换行，避免横向溢出。默认 false。 */

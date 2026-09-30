@@ -29,7 +29,7 @@ use core_foundation::runloop::{
 
 use super::{
     evaluate_gate, minimal_edit, plan_window, utf16_offset_to_char_offset, window_around_cursor,
-    EditPair, GateInputs, ReadOutcome, AX_MESSAGING_TIMEOUT_SECS, EDIT_WATCH_MAX_LIFETIME,
+    EditPair, GateInputs, ReadOutcome, AX_MESSAGING_TIMEOUT_SECS,
 };
 
 /// 超过这个 UTF-16 长度就不整篇 `AXValue` 读回来，改走 `AXStringForRange` 只取光标附近。
@@ -1103,6 +1103,7 @@ const EDIT_WATCH_MAX_UTF16: usize = 20_000;
 /// `spawn_blocking` 好 —— 那个要排 tokio 阻塞池的队，负载高时反而更晚。
 pub(super) fn spawn_edit_watcher(
     typed_text: String,
+    lifetime: std::time::Duration,
     on_edit: Box<dyn Fn(EditPair) -> bool + Send + Sync>,
 ) -> Option<Arc<AtomicBool>> {
     let stop = Arc::new(AtomicBool::new(false));
@@ -1144,6 +1145,7 @@ pub(super) fn spawn_edit_watcher(
                 pid,
                 bundle_id,
                 thread_stop,
+                lifetime,
             );
         });
 
@@ -1239,6 +1241,7 @@ fn run_edit_watch_loop(
     pid: i32,
     bundle_id: Option<String>,
     stop: Arc<AtomicBool>,
+    lifetime: std::time::Duration,
 ) {
     unsafe {
         let mut observer: AxObserverRef = std::ptr::null_mut();
@@ -1308,7 +1311,7 @@ fn run_edit_watch_loop(
                 break;
             }
             // 60 秒硬上限：过了这么久还在改，多半是在写新东西而不是纠我们插的词。
-            if started.elapsed() >= EDIT_WATCH_MAX_LIFETIME {
+            if started.elapsed() >= lifetime {
                 end_reason = "timeout";
                 break;
             }

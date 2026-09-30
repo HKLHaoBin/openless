@@ -83,7 +83,7 @@ export function rejectPendingCorrection(id: string): Promise<void> {
   return invokeOrMock('reject_pending_correction', { id }, () => undefined);
 }
 
-/** 卡片 10 秒到期，或新一轮听写开始。 */
+/** 卡片按配置到期，或新一轮听写开始。 */
 export function dismissVocabSuggestions(): Promise<void> {
   return invokeOrMock('dismiss_vocab_suggestions', undefined, () => undefined);
 }

@@ -80,10 +80,21 @@ assert.equal(
 );
 assert.deepEqual(
   visibleAdvancedPages('android', 'android').map((item) => item.id),
-  ['multimodal', 'debug'],
+  ['multimodal', 'vocabularyLearning', 'debug'],
   'Android keeps its experimental switch and diagnostics without desktop agents',
 );
 console.log('settings navigation tests passed');
+
+assert.equal(
+  visibleAdvancedPages('desktop', 'linux').some((item) => item.id === 'vocabularyLearning'),
+  false,
+  'unsupported native observers do not expose a learning configuration page',
+);
+assert.equal(
+  visibleAdvancedPages('desktop', 'mac').some((item) => item.id === 'vocabularyLearning'),
+  true,
+  'macOS retains its native correction observer settings',
+);
 
 const omniViews = availableServiceViews(true, true, true);
 assert.deepEqual(

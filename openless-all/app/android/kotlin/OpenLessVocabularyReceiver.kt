@@ -25,7 +25,14 @@ class OpenLessVocabularyReceiver : BroadcastReceiver() {
                     OpenLessNative.nativeStopVocabularyObservation(intent.getLongExtra("generation", 0))
                     true
                 }
-                "active" -> OpenLessNative.nativeVocabularyObservationActive(intent.getLongExtra("generation", 0))
+                "active" -> {
+                    // elapsedRealtime is shared across processes. Timestamp before the
+                    // native query so IPC latency can only shorten the observation.
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    val remaining = OpenLessNative.nativeVocabularyObservationRemainingMs(intent.getLongExtra("generation", 0))
+                    response.putLong("deadline", now + remaining)
+                    remaining > 0L
+                }
                 "observe" -> {
                     val text = intent.getStringExtra("text")
                     text != null && text.length <= 20_000 && OpenLessNative.nativeObserveVocabularyText(intent.getLongExtra("generation", 0), text)

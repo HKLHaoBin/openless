@@ -94,6 +94,7 @@ pub(crate) fn insert_with_delivery_check(
 struct Request {
     text: String,
     window: isize,
+    lifetime: Duration,
     stop: Arc<AtomicBool>,
     callback: Callback,
 }
@@ -124,7 +125,11 @@ impl IUIAutomationPropertyChangedEventHandler_Impl for Changed_Impl {
     }
 }
 
-pub(super) fn spawn_edit_watcher(text: String, callback: Callback) -> Option<Arc<AtomicBool>> {
+pub(super) fn spawn_edit_watcher(
+    text: String,
+    lifetime: Duration,
+    callback: Callback,
+) -> Option<Arc<AtomicBool>> {
     if text.trim().is_empty() {
         return None;
     }
@@ -153,6 +158,7 @@ pub(super) fn spawn_edit_watcher(text: String, callback: Callback) -> Option<Arc
     worker
         .send(Request {
             text,
+            lifetime,
             window: unsafe { GetForegroundWindow().0 as isize },
             stop: stop.clone(),
             callback,
@@ -280,7 +286,7 @@ unsafe fn observe(request: &Request) -> Result<()> {
     // only retain their own dirty flag; no host text or Core sink is accessible.
     let result = (|| -> Result<()> {
         let mut changed_at = Some(Instant::now());
-        while started.elapsed() < Duration::from_secs(60) && active()? {
+        while started.elapsed() < request.lifetime && active()? {
             if dirty.swap(false, Ordering::AcqRel) {
                 changed_at = Some(Instant::now());
             }

@@ -1265,10 +1265,28 @@ export const es: typeof zhCN = {
       useSystemProxyDesc:
         'Al activarlo, las solicitudes usan el proxy del sistema. Al desactivarlo, se conectan directamente, lo que suele reducir la latencia con servicios locales, pero puede impedir el acceso a GitHub y las actualizaciones en algunas regiones. No afecta a los flujos de voz en tiempo real ni a Less Computer.',
     },
-    dataStorage: {
-      vocabularyLearningLabel: 'Aprender de las correcciones (experimental)',
-      vocabularyLearningDesc:
+    vocabularyLearning: {
+      title: 'Aprender de las correcciones',
+      enabled: 'Activar aprendizaje de correcciones',
+      observationSeconds: 'Tiempo de observación',
+      observationSecondsHint:
+        'Observar el campo actual durante un máximo de 10–60 segundos después del dictado.',
+      suggestionSeconds: 'Duración de las sugerencias',
+      suggestionSecondsHint:
+        'Las sugerencias sin confirmar caducan tras 5–60 segundos sin añadirse al diccionario.',
+      maxPhraseChars: 'Longitud máxima',
+      maxPhraseCharsHint:
+        'Limitar el original y el reemplazo de las sugerencias automáticas a 2–32 caracteres. No afecta a las adiciones manuales.',
+      seconds: '{{count}} s',
+      characters: '{{count}} caracteres',
+      changeHint:
+        'Cambiar parámetros detiene la observación y borra las sugerencias pendientes. Se aplican al siguiente dictado. Restablecer parámetros no cambia la activación.',
+      reset: 'Restablecer parámetros',
+      saveError: 'No se pudo guardar. Inténtalo de nuevo.',
+      description:
         'Tras insertar texto, detecta cambios en el campo localmente durante un máximo de 60 segundos y pide confirmación antes de guardar palabras. El texto observado no se envía al modelo. Se excluyen contraseñas y aplicaciones sensibles conocidas. En Windows y Android depende del editor; Android requiere accesibilidad. Al desactivarlo se detiene la observación.',
+    },
+    dataStorage: {
       title: 'Almacenamiento de datos',
       desc: 'Historial de conversaciones y contexto guardados en este dispositivo.',
       cursorContextLabel: 'Contexto del cursor (experimental)',
@@ -2317,6 +2335,8 @@ export const es: typeof zhCN = {
     autoSaveHint: 'Los cambios se guardan automáticamente',
     backToAdvanced: 'Volver a Experimentos y extensiones',
     advancedPages: {
+      vocabularyLearning:
+        'Aprender de correcciones manuales; configurar observación, confirmación y longitud.',
       lessComputer: 'Elige un agente y configura su modelo, permisos y directorio de trabajo.',
       claudeConsole: 'Detecta Claude Code y consulta la salida de las tareas de prueba.',
       multimodal: 'Administra la activación del reconocimiento multimodal experimental.',
@@ -2343,7 +2363,8 @@ export const es: typeof zhCN = {
       appearance: 'tema oscuro claro idioma fuente texto tamaño diseño mapa actividad',
       privacy:
         'permiso micrófono accesibilidad historial grabación almacenamiento privacidad exportar',
-      advanced: 'Less Computer Claude agente multimodal Omni depuración registros experimento',
+      advanced:
+        'Less Computer Claude agente multimodal Omni depuración registros experimento Aprender de las correcciones vocabulary learning',
       about: 'versión Beta estable actualización actualizar',
     },
     sections: {

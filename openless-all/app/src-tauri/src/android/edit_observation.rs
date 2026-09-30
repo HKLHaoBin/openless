@@ -15,18 +15,24 @@ struct Observation {
     text: String,
     anchor: Option<ObservedInsertion>,
     started: Instant,
+    lifetime: Duration,
     callback: Box<dyn Fn(EditPair) -> bool + Send + Sync>,
 }
 static OBSERVATION: Mutex<Option<Observation>> = Mutex::new(None);
 static NEXT: AtomicU64 = AtomicU64::new(1);
 
-pub fn arm(text: String, callback: Box<dyn Fn(EditPair) -> bool + Send + Sync>) -> Option<u64> {
+pub fn arm(
+    text: String,
+    lifetime: Duration,
+    callback: Box<dyn Fn(EditPair) -> bool + Send + Sync>,
+) -> Option<u64> {
     let generation = NEXT.fetch_add(1, Ordering::AcqRel);
     *OBSERVATION.lock().ok()? = Some(Observation {
         generation,
         text,
         anchor: None,
         started: Instant::now(),
+        lifetime,
         callback,
     });
     let result = super::jni::android::with_android_env(|env, context| {
@@ -60,7 +66,7 @@ pub fn arm(text: String, callback: Box<dyn Fn(EditPair) -> bool + Send + Sync>) 
             disarm(generation);
             return;
         }
-        tokio::time::sleep(Duration::from_secs(59)).await;
+        tokio::time::sleep(lifetime.saturating_sub(Duration::from_secs(1))).await;
         disarm(generation);
     });
     Some(generation)
@@ -106,7 +112,7 @@ pub extern "system" fn Java_com_openless_app_OpenLessNative_nativeCurrentVocabul
         return 0;
     };
     if slot.as_ref().is_some_and(|o| {
-        o.started.elapsed() >= Duration::from_secs(60)
+        o.started.elapsed() >= o.lifetime
             || (o.anchor.is_none() && o.started.elapsed() >= Duration::from_secs(1))
     }) {
         *slot = None;
@@ -130,10 +136,33 @@ pub extern "system" fn Java_com_openless_app_OpenLessNative_nativeVocabularyObse
     generation: jlong,
 ) -> jboolean {
     OBSERVATION.lock().ok().is_some_and(|slot| {
-        slot.as_ref().is_some_and(|o| {
-            o.generation == generation as u64 && o.started.elapsed() < Duration::from_secs(60)
-        })
+        slot.as_ref()
+            .is_some_and(|o| o.generation == generation as u64 && o.started.elapsed() < o.lifetime)
     }) as jboolean
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_openless_app_OpenLessNative_nativeVocabularyObservationRemainingMs(
+    _: JNIEnv,
+    _: JClass,
+    generation: jlong,
+) -> jlong {
+    OBSERVATION
+        .lock()
+        .ok()
+        .and_then(|slot| {
+            slot.as_ref()
+                .filter(|o| o.generation == generation as u64)
+                .map(|o| {
+                    let elapsed = o.started.elapsed();
+                    if o.anchor.is_none() && elapsed >= Duration::from_secs(1) {
+                        0
+                    } else {
+                        o.lifetime.saturating_sub(elapsed).as_millis() as jlong
+                    }
+                })
+        })
+        .unwrap_or(0)
 }
 
 #[no_mangle]
@@ -153,7 +182,7 @@ pub extern "system" fn Java_com_openless_app_OpenLessNative_nativeObserveVocabul
     let Some(observation) = slot.as_mut().filter(|o| o.generation == generation as u64) else {
         return 0;
     };
-    if observation.started.elapsed() >= Duration::from_secs(60)
+    if observation.started.elapsed() >= observation.lifetime
         || (observation.anchor.is_none() && observation.started.elapsed() >= Duration::from_secs(1))
     {
         *slot = None;

@@ -1237,10 +1237,26 @@ export const ja: typeof zhCN = {
       useSystemProxyDesc:
         'オンにするとリクエストはシステムプロキシを経由します。オフにするとすべて直接接続します（国内サービスの遅延が低くなる傾向）。GitHub ログインやアップデートなど海外サービスには接続できない場合があります。リアルタイム音声ストリームと Less Computer は影響を受けません。',
     },
-    dataStorage: {
-      vocabularyLearningLabel: '修正から単語を学習（実験）',
-      vocabularyLearningDesc:
+    vocabularyLearning: {
+      title: '修正から単語を学習',
+      enabled: '修正からの学習を有効にする',
+      observationSeconds: '監視時間',
+      observationSecondsHint: '音声入力後、現在の入力欄を監視する最大時間（10～60 秒）。',
+      suggestionSeconds: '候補の表示時間',
+      suggestionSecondsHint: '未確認の候補は 5～60 秒後に消え、辞書には追加されません。',
+      maxPhraseChars: '最大文字数',
+      maxPhraseCharsHint:
+        '自動候補の元の語と置換後の語を 2～32 文字に制限します。手動追加には影響しません。',
+      seconds: '{{count}} 秒',
+      characters: '{{count}} 文字',
+      changeHint:
+        '設定を変更すると現在の監視を終了し、未確認の候補を消去します。次の音声入力から適用されます。リセットしても有効化スイッチは変わりません。',
+      reset: '設定値をリセット',
+      saveError: '保存できませんでした。再試行してください。',
+      description:
         '挿入後、入力欄の修正を端末内で最大60秒間検出し、確認後に辞書へ追加します。検出した文章はモデルに送信しません。パスワード欄と既知の機密アプリは除外します。Windows・Androidではエディターによって対応が異なり、Androidはユーザー補助が必要です。オフにすると検出を停止します。',
+    },
+    dataStorage: {
       title: 'データ保存',
       desc: 'この端末に保存される会話履歴とコンテキスト。',
       cursorContextLabel: 'カーソル文脈（実験的）',
@@ -2245,6 +2261,8 @@ export const ja: typeof zhCN = {
     autoSaveHint: '変更は自動保存されます',
     backToAdvanced: '実験と拡張に戻る',
     advancedPages: {
+      vocabularyLearning:
+        '音声入力後の手動修正から学習し、監視時間・確認時間・文字数を設定します。',
       lessComputer: 'Agent を選び、モデル・権限・作業ディレクトリを設定します。',
       claudeConsole: 'Claude Code を検出し、テストタスクの実行出力を確認します。',
       multimodal: '実験的なマルチモーダル認識の有効・無効を設定します。',
@@ -2265,7 +2283,8 @@ export const ja: typeof zhCN = {
       services: 'ASR LLM API チャンネル モデル クラウド ローカル ネットワーク プロキシ マーケット',
       appearance: 'テーマ ダーク ライト 言語 フォント 文字 サイズ レイアウト ヒートマップ',
       privacy: '権限 マイク アクセシビリティ 履歴 録音 保存 プライバシー エクスポート',
-      advanced: 'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験',
+      advanced:
+        'Less Computer Claude Agent マルチモーダル Omni デバッグ ログ 実験 修正から単語を学習 vocabulary learning',
       about: 'バージョン Beta 安定 更新 アップデート',
     },
 

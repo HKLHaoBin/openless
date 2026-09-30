@@ -29,6 +29,7 @@ object OpenLessNative {
     @JvmStatic external fun nativeCancelDictation()
     @JvmStatic external fun nativeObserveVocabularyText(generation: Long, text: String): Boolean
     @JvmStatic external fun nativeVocabularyObservationActive(generation: Long): Boolean
+    @JvmStatic external fun nativeVocabularyObservationRemainingMs(generation: Long): Long
     @JvmStatic external fun nativeCurrentVocabularyObservation(): Long
     @JvmStatic external fun nativeStopVocabularyObservation(generation: Long)
     @JvmStatic external fun nativePendingVocabularySuggestions(): String

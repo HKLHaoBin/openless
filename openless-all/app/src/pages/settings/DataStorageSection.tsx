@@ -93,18 +93,6 @@ export function DataStorageSection() {
           />
         </SettingRow>
       )}
-      <SettingRow
-        label={t('settings.dataStorage.vocabularyLearningLabel', '手改学词（实验）')}
-        desc={t(
-          'settings.dataStorage.vocabularyLearningDesc',
-          '听写落字后，最多观察当前输入框 60 秒，在本机识别改词并请求确认。确认前不入词典，观察文本不发送给模型。密码框不观察；Windows 和 Android 的支持取决于目标应用，Android 需开启无障碍。关闭后立即停止观察。',
-        )}
-      >
-        <Toggle
-          on={prefs.vocabularyLearningEnabled}
-          onToggle={(next) => void savePrefs({ ...prefs, vocabularyLearningEnabled: next })}
-        />
-      </SettingRow>
     </Card>
   );
 }

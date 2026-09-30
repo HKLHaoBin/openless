@@ -2770,8 +2770,11 @@ impl EditObservationAdapter for TauriEditObservationAdapter {
         typed_text: String,
         sink: Arc<dyn EditObservationSink>,
     ) -> Result<(), BackendError> {
-        *self.watcher.lock() =
-            crate::host_document::watch_for_edits(typed_text, move |edit| sink.publish(edit));
+        *self.watcher.lock() = crate::host_document::watch_for_edits(
+            typed_text,
+            sink.observation_duration(),
+            move |edit| sink.publish(edit),
+        );
         Ok(())
     }
 

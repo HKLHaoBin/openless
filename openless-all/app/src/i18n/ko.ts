@@ -1229,10 +1229,26 @@ export const ko: typeof zhCN = {
       useSystemProxyDesc:
         '켜면 요청이 시스템 프록시를 따릅니다. 끄면 모든 요청이 직결됩니다(국내 서비스는 보통 더 빠름). GitHub 로그인·업데이트 등 해외 서비스는 연결되지 않을 수 있습니다. 실시간 음성 스트림과 Less Computer는 영향을 받지 않습니다.',
     },
-    dataStorage: {
-      vocabularyLearningLabel: '수정한 단어 학습 (실험)',
-      vocabularyLearningDesc:
+    vocabularyLearning: {
+      title: '수정으로 단어 학습',
+      enabled: '수정 학습 사용',
+      observationSeconds: '관찰 시간',
+      observationSecondsHint: '음성 입력 후 현재 입력란을 관찰하는 최대 시간입니다(10~60초).',
+      suggestionSeconds: '제안 유지 시간',
+      suggestionSecondsHint: '확인하지 않은 제안은 5~60초 후 사전에 추가되지 않고 사라집니다.',
+      maxPhraseChars: '최대 글자 수',
+      maxPhraseCharsHint:
+        '자동 제안의 원문과 대체 문구를 2~32자로 제한합니다. 수동 추가에는 영향을 주지 않습니다.',
+      seconds: '{{count}}초',
+      characters: '{{count}}자',
+      changeHint:
+        '설정을 변경하면 현재 관찰을 중지하고 대기 중인 제안을 지웁니다. 다음 음성 입력부터 적용됩니다. 초기화해도 사용 스위치는 바뀌지 않습니다.',
+      reset: '매개변수 초기화',
+      saveError: '저장하지 못했습니다. 다시 시도하세요.',
+      description:
         '입력 후 최대 60초 동안 기기에서 해당 입력란의 수정을 감지하고 확인 후 사전에 추가합니다. 관찰한 텍스트는 모델에 보내지 않습니다. 비밀번호 입력란과 알려진 민감한 앱은 제외됩니다. Windows 및 Android는 편집기에 따라 지원이 다르며 Android는 접근성 서비스가 필요합니다. 끄면 관찰을 중지합니다.',
+    },
+    dataStorage: {
       title: '데이터 저장',
       desc: '이 기기에 보관되는 대화 기록과 컨텍스트.',
       cursorContextLabel: '커서 문맥 (실험적)',
@@ -2226,6 +2242,8 @@ export const ko: typeof zhCN = {
     autoSaveHint: '변경 사항이 자동 저장됩니다',
     backToAdvanced: '실험 및 확장으로 돌아가기',
     advancedPages: {
+      vocabularyLearning:
+        '음성 입력 후 수동 수정으로 학습하고 관찰 시간, 확인 시간, 글자 수를 설정합니다.',
       lessComputer: 'Agent를 선택하고 모델, 권한, 작업 디렉터리를 설정합니다.',
       claudeConsole: 'Claude Code를 감지하고 테스트 작업의 실행 출력을 확인합니다.',
       multimodal: '실험적 멀티모달 인식 기능의 사용 여부를 설정합니다.',
@@ -2246,7 +2264,8 @@ export const ko: typeof zhCN = {
       services: 'ASR LLM API 채널 모델 클라우드 로컬 네트워크 프록시 마켓',
       appearance: '테마 다크 라이트 언어 글꼴 글자 크기 배치 레이아웃 히트맵',
       privacy: '권한 마이크 접근성 기록 녹음 저장 개인정보 내보내기',
-      advanced: 'Less Computer Claude Agent 멀티모달 Omni 디버그 로그 실험',
+      advanced:
+        'Less Computer Claude Agent 멀티모달 Omni 디버그 로그 실험 수정으로 단어 학습 vocabulary learning',
       about: '버전 Beta 안정 업데이트 업그레이드',
     },
 

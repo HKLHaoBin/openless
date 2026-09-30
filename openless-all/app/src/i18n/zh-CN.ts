@@ -1197,13 +1197,28 @@ export const zhCN = {
       useSystemProxyDesc:
         '开启时请求跟随系统代理；关闭后所有网络请求直连（国内服务延迟通常更低），GitHub 登录、更新等境外服务可能连不上。实时语音流与 Less Computer 不受此开关影响。',
     },
+    vocabularyLearning: {
+      title: '手改学词',
+      enabled: '启用手改学词',
+      observationSeconds: '观察时长',
+      observationSecondsHint: '听写落字后观察当前输入框的最长时间，10–60 秒。',
+      suggestionSeconds: '建议保留时长',
+      suggestionSecondsHint: '未确认的建议会在 5–60 秒后消失，不加入词典。',
+      maxPhraseChars: '最大词长',
+      maxPhraseCharsHint: '自动建议中原词和替换词的长度上限，2–32 个字符；不影响手动加词。',
+      seconds: '{{count}} 秒',
+      characters: '{{count}} 个字符',
+      changeHint:
+        '更改参数会结束当前观察并清除待确认建议，下次听写生效。恢复参数不会改变启用开关。',
+      reset: '恢复默认参数',
+      saveError: '保存失败，请重试。',
+      description:
+        '插入后在本机观察当前输入框内的修改，最长 60 秒，确认后才加入词典。观察文本不会发给模型；排除密码框和已知敏感应用。Windows、Android 的支持取决于编辑器；Android 需开启无障碍服务。关闭后停止观察。',
+    },
     dataStorage: {
       title: '数据存储',
       desc: '本机保留的历史会话与对话上下文。',
       cursorContextLabel: '光标上下文（实验）',
-      vocabularyLearningLabel: '手改学词（实验）',
-      vocabularyLearningDesc:
-        '插入后在本机观察当前输入框内的修改，最长 60 秒，确认后才加入词典。观察文本不会发给模型；排除密码框和已知敏感应用。Windows、Android 的支持取决于编辑器；Android 需开启无障碍服务。关闭后停止观察。',
       cursorContextDesc:
         '润色时将光标附近文本发给模型（仅 macOS）。此开关与本地手改学词独立；排除密码框和已知敏感应用。',
     },
@@ -2149,6 +2164,7 @@ export const zhCN = {
     autoSaveHint: '修改后自动保存',
     backToAdvanced: '返回实验与扩展',
     advancedPages: {
+      vocabularyLearning: '从听写后的手动改词中学习，配置观察时长、确认时间和词长。',
       lessComputer: '选择 Agent，配置模型、权限与工作目录。',
       claudeConsole: '检测 Claude Code，并查看测试任务的运行输出。',
       multimodal: '管理多模态识别的实验性开关。',
@@ -2169,7 +2185,8 @@ export const zhCN = {
       services: 'ASR LLM API 渠道 模型 云 本地 网络 代理 市场',
       appearance: '主题 深色 浅色 暗色 语言 字号 排版 布局 热力图',
       privacy: '权限 麦克风 辅助功能 历史 录音 存储 隐私 导出',
-      advanced: 'Less Computer Claude Agent 多模态 Omni 调试 日志 实验',
+      advanced:
+        'Less Computer Claude Agent 多模态 Omni 调试 日志 实验 手改学词 vocabulary learning',
       about: '版本 Beta 稳定 更新 升级',
     },
 

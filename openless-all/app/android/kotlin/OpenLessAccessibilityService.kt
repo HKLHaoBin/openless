@@ -70,12 +70,15 @@ class OpenLessAccessibilityService : AccessibilityService() {
         if (generation == 0L || vocabularyGeneration == generation) return
         stopVocabularyObservation()
         vocabularyGeneration = generation
-        requestVocabulary("active", Bundle().apply { putLong("generation", generation) }, true) { active, _ ->
-            if (active) captureVocabularyNode(generation) else stopVocabularyObservation()
+        requestVocabulary("active", Bundle().apply { putLong("generation", generation) }, true) { active, response ->
+            val deadline = response?.getLong("deadline") ?: 0L
+            if (active && deadline > android.os.SystemClock.elapsedRealtime()) {
+                captureVocabularyNode(generation, deadline)
+            } else stopVocabularyObservation()
         }
     }
 
-    private fun captureVocabularyNode(generation: Long) {
+    private fun captureVocabularyNode(generation: Long, deadline: Long) {
         val root = rootInActiveWindow ?: run { stopVocabularyObservation(); return }
         val node = try { root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) } finally { root.recycle() }
         if (node == null) { stopVocabularyObservation(); return }
@@ -89,9 +92,11 @@ class OpenLessAccessibilityService : AccessibilityService() {
         vocabularyGeneration = generation
         vocabularyNode = node
         vocabularyStarted = android.os.SystemClock.elapsedRealtime()
-        vocabularyDeadline = vocabularyStarted + 60_000L
+        vocabularyDeadline = deadline
+        val remaining = deadline - vocabularyStarted
+        if (remaining <= 0L) { stopVocabularyObservation(); return }
         mainHandler.post(vocabularyRead)
-        mainHandler.postDelayed(vocabularyTimeout, 60_000L)
+        mainHandler.postDelayed(vocabularyTimeout, remaining)
     }
 
     private fun stopVocabularyObservation() {

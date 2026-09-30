@@ -290,6 +290,35 @@ pub const INSERT_FALLBACK_REASON_INSERT_FAILED: &str = "insertFailed";
 /// 换来的好处。
 pub const VOCAB_SUGGESTION_TTL_MS: u64 = 10_000;
 
+/// Local-only tuning. Consent and sensitive-field protections remain separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct VocabularyLearningSettings {
+    pub observation_seconds: u32,
+    pub suggestion_seconds: u32,
+    pub max_phrase_chars: u32,
+}
+
+impl Default for VocabularyLearningSettings {
+    fn default() -> Self {
+        Self {
+            observation_seconds: 60,
+            suggestion_seconds: 10,
+            max_phrase_chars: 12,
+        }
+    }
+}
+
+impl VocabularyLearningSettings {
+    pub fn normalized(self) -> Self {
+        Self {
+            observation_seconds: self.observation_seconds.clamp(10, 60),
+            suggestion_seconds: self.suggestion_seconds.clamp(5, 60),
+            max_phrase_chars: self.max_phrase_chars.clamp(2, 32),
+        }
+    }
+}
+
 pub use crate::types::{VocabPreset, VocabPresetStore};
 
 pub use crate::style_packs::*;
@@ -651,6 +680,8 @@ pub struct UserPreferences {
     /// Observe corrections locally after insertion; independent of LLM context.
     #[serde(default)]
     pub vocabulary_learning_enabled: bool,
+    #[serde(default)]
+    pub vocabulary_learning_settings: VocabularyLearningSettings,
     /// 概览页是否显示「年度活动」热力图卡。默认 true；关闭只隐藏卡片，
     /// 活动计数照常记录（persistence/activity.rs），再打开时全年数据仍在。
     #[serde(default = "default_true")]
@@ -960,6 +991,7 @@ struct UserPreferencesWire {
     cursor_context_enabled: bool,
     #[serde(default)]
     vocabulary_learning_enabled: bool,
+    vocabulary_learning_settings: VocabularyLearningSettings,
     #[serde(default = "default_true")]
     show_overview_activity_heatmap: bool,
     #[serde(default)]
@@ -1134,6 +1166,7 @@ impl Default for UserPreferencesWire {
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
             cursor_context_enabled: prefs.cursor_context_enabled,
             vocabulary_learning_enabled: prefs.vocabulary_learning_enabled,
+            vocabulary_learning_settings: prefs.vocabulary_learning_settings,
             show_overview_activity_heatmap: prefs.show_overview_activity_heatmap,
             stacked_row_layout: prefs.stacked_row_layout,
             conservative_layout: prefs.conservative_layout,
@@ -1337,6 +1370,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
             cursor_context_enabled: wire.cursor_context_enabled,
             vocabulary_learning_enabled: wire.vocabulary_learning_enabled,
+            vocabulary_learning_settings: wire.vocabulary_learning_settings.normalized(),
             show_overview_activity_heatmap: wire.show_overview_activity_heatmap,
             stacked_row_layout: wire.stacked_row_layout,
             conservative_layout: wire.conservative_layout,
@@ -1688,6 +1722,7 @@ impl Default for UserPreferences {
             streaming_insert_save_clipboard: true,
             cursor_context_enabled: false,
             vocabulary_learning_enabled: false,
+            vocabulary_learning_settings: VocabularyLearningSettings::default(),
             show_overview_activity_heatmap: true,
             stacked_row_layout: false,
             conservative_layout: false,

@@ -1286,10 +1286,28 @@ export const fr: typeof zhCN = {
       useSystemProxyDesc:
         'Les requêtes suivent le proxy système si cette option est activée. Sinon, elles se connectent directement, ce qui réduit souvent la latence des services locaux, mais peut empêcher l’accès à GitHub ou aux mises à jour dans certaines régions. Les flux vocaux en temps réel et Less Computer ne sont pas concernés.',
     },
-    dataStorage: {
-      vocabularyLearningLabel: 'Apprendre des corrections (expérimental)',
-      vocabularyLearningDesc:
+    vocabularyLearning: {
+      title: 'Apprendre des corrections',
+      enabled: 'Activer l’apprentissage des corrections',
+      observationSeconds: 'Durée d’observation',
+      observationSecondsHint:
+        'Observer le champ actuel pendant 10 à 60 secondes au maximum après la dictée.',
+      suggestionSeconds: 'Durée des suggestions',
+      suggestionSecondsHint:
+        'Les suggestions non confirmées expirent après 5 à 60 secondes sans ajout au dictionnaire.',
+      maxPhraseChars: 'Longueur maximale',
+      maxPhraseCharsHint:
+        'Limiter le texte original et son remplacement à 2–32 caractères dans les suggestions automatiques. Les ajouts manuels ne sont pas concernés.',
+      seconds: '{{count}} s',
+      characters: '{{count}} caractères',
+      changeHint:
+        'Modifier les paramètres arrête l’observation et efface les suggestions en attente. Ils s’appliquent à la prochaine dictée. La réinitialisation ne change pas l’activation.',
+      reset: 'Réinitialiser les paramètres',
+      saveError: 'Échec de l’enregistrement. Réessayez.',
+      description:
         'Après insertion, les modifications du champ sont détectées localement pendant 60 secondes maximum. Chaque mot nécessite une confirmation. Le texte observé n’est pas envoyé au modèle. Les champs de mot de passe et les applications sensibles connues sont exclus. Sous Windows et Android, la prise en charge dépend de l’éditeur ; Android nécessite le service d’accessibilité. Désactiver arrête l’observation.',
+    },
+    dataStorage: {
       title: 'Stockage des données',
       desc: 'Historique des conversations et contexte conservés sur cet appareil.',
       cursorContextLabel: 'Contexte du curseur (expérimental)',
@@ -2350,6 +2368,8 @@ export const fr: typeof zhCN = {
     autoSaveHint: 'Les modifications sont enregistrées automatiquement',
     backToAdvanced: 'Retour à Expériences et extensions',
     advancedPages: {
+      vocabularyLearning:
+        'Apprendre des corrections manuelles ; régler l’observation, la confirmation et la longueur.',
       lessComputer:
         'Choisissez un agent et configurez son modèle, ses autorisations et son répertoire de travail.',
       claudeConsole: 'Détectez Claude Code et consultez la sortie des tâches de test.',
@@ -2379,7 +2399,8 @@ export const fr: typeof zhCN = {
       appearance: 'thème sombre clair langue police texte taille disposition carte activité',
       privacy:
         'autorisation microphone accessibilité historique enregistrement stockage confidentialité exporter',
-      advanced: 'Less Computer Claude agent multimodal Omni débogage journaux expérience',
+      advanced:
+        'Less Computer Claude agent multimodal Omni débogage journaux expérience Apprendre des corrections vocabulary learning',
       about: 'version Beta stable mise à jour actualisation',
     },
     sections: {

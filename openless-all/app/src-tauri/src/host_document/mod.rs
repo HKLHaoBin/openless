@@ -63,8 +63,6 @@ const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1200)
 ///
 /// 过了一分钟用户还在动这段文字，多半是在继续写新东西而不是纠我们插错的词，再学下去
 /// 只会收进噪声。同时这也是「观察器绝不泄漏」的最后一道保险。
-#[cfg(target_os = "macos")]
-const EDIT_WATCH_MAX_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// 一次读取的结局。`Ok` 之外的每一种都要能说清「为什么没读到」—— 装机验证时全靠它
 /// 判断某个 app 是「被拦了」还是「AX 根本不支持」。
@@ -351,7 +349,11 @@ impl Drop for EditWatcher {
 ///
 /// `on_edit` 在观察线程上被调用，可能多次。任何失败都返回 `None` —— 学不到东西是可以
 /// 接受的，影响落字不行。
-pub fn watch_for_edits<F>(typed_text: String, on_edit: F) -> Option<EditWatcher>
+pub fn watch_for_edits<F>(
+    typed_text: String,
+    lifetime: std::time::Duration,
+    on_edit: F,
+) -> Option<EditWatcher>
 where
     F: Fn(EditPair) -> bool + Send + Sync + 'static,
 {
@@ -360,21 +362,22 @@ where
         if typed_text.trim().is_empty() {
             return None;
         }
-        let stop = macos::spawn_edit_watcher(typed_text, Box::new(on_edit))?;
+        let stop = macos::spawn_edit_watcher(typed_text, lifetime, Box::new(on_edit))?;
         Some(EditWatcher { stop })
     }
     #[cfg(target_os = "windows")]
     {
-        windows::spawn_edit_watcher(typed_text, Box::new(on_edit)).map(|stop| EditWatcher { stop })
+        windows::spawn_edit_watcher(typed_text, lifetime, Box::new(on_edit))
+            .map(|stop| EditWatcher { stop })
     }
     #[cfg(target_os = "android")]
     {
-        crate::android::edit_observation::arm(typed_text, Box::new(on_edit))
+        crate::android::edit_observation::arm(typed_text, lifetime, Box::new(on_edit))
             .map(|generation| EditWatcher { generation })
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "android")))]
     {
-        let _ = (typed_text, on_edit);
+        let _ = (typed_text, lifetime, on_edit);
         None
     }
 }

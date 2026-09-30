@@ -2122,6 +2122,7 @@ struct HistoryProviderAttribution {
 }
 
 struct CoreEditObservationSink {
+    settings: crate::shared_types::VocabularyLearningSettings,
     expected_generation: u64,
     generation: Arc<AtomicU64>,
     typed_text: String,
@@ -2130,6 +2131,10 @@ struct CoreEditObservationSink {
 }
 
 impl EditObservationSink for CoreEditObservationSink {
+    fn observation_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.settings.observation_seconds as u64)
+    }
+
     fn publish(&self, edit: crate::host_document::EditPair) -> bool {
         // Dropping the native watcher is asynchronous on macOS: a queued AX
         // callback may still arrive after the next session starts. The Core
@@ -2140,7 +2145,10 @@ impl EditObservationSink for CoreEditObservationSink {
         if !crate::host_document::edit_is_within_typed_text(&edit, &self.typed_text) {
             return false;
         }
-        let Some(rule) = crate::host_document::learned_rule(&edit) else {
+        let Some(rule) = crate::host_document::learned_rule_with_max_chars(
+            &edit,
+            self.settings.max_phrase_chars as usize,
+        ) else {
             return false;
         };
         if let Err(error) = queue_pending_correction_state(
@@ -2149,6 +2157,7 @@ impl EditObservationSink for CoreEditObservationSink {
             rule.pattern,
             rule.replacement,
             Some((&self.generation, self.expected_generation)),
+            self.settings.suggestion_seconds,
         ) {
             log::warn!("failed to queue observed correction: {error}");
         }
@@ -2162,6 +2171,7 @@ fn queue_pending_correction_state(
     pattern: String,
     replacement: String,
     generation: Option<(&AtomicU64, u64)>,
+    suggestion_seconds: u32,
 ) -> Result<Option<PendingCorrection>, BackendError> {
     if pattern.trim().is_empty() || replacement.trim().is_empty() {
         return Err(BackendError::new(
@@ -2188,7 +2198,7 @@ fn queue_pending_correction_state(
         }
         let suggestion = PendingCorrection {
             id: uuid::Uuid::new_v4().to_string(),
-            expires_at_ms: now + crate::shared_types::VOCAB_SUGGESTION_TTL_MS as i64,
+            expires_at_ms: now + i64::from(suggestion_seconds.clamp(5, 60)) * 1000,
             pattern,
             replacement,
         };
@@ -4429,6 +4439,8 @@ impl OpenLessBackend {
                 });
             }
         }
+        preferences.vocabulary_learning_settings =
+            preferences.vocabulary_learning_settings.normalized();
         let mut previous = self.preferences.get();
         crate::sync_dictation_hotkey_legacy_fields(&mut previous);
         crate::sync_dictation_hotkey_legacy_fields(&mut preferences);
@@ -4509,7 +4521,9 @@ impl OpenLessBackend {
                 .reset();
         }
 
-        if previous.vocabulary_learning_enabled && !preferences.vocabulary_learning_enabled {
+        if (previous.vocabulary_learning_enabled && !preferences.vocabulary_learning_enabled)
+            || previous.vocabulary_learning_settings != preferences.vocabulary_learning_settings
+        {
             self.disarm_edit_observation();
             self.dismiss_pending_corrections();
         }
@@ -4973,6 +4987,9 @@ impl OpenLessBackend {
             pattern,
             replacement,
             None,
+            self.get_preferences()
+                .vocabulary_learning_settings
+                .suggestion_seconds,
         )
     }
 
@@ -5017,6 +5034,10 @@ impl OpenLessBackend {
         }
         let expected_generation = self.edit_observation_generation.load(Ordering::Acquire);
         let sink = Arc::new(CoreEditObservationSink {
+            settings: self
+                .get_preferences()
+                .vocabulary_learning_settings
+                .normalized(),
             expected_generation,
             generation: Arc::clone(&self.edit_observation_generation),
             typed_text: typed_text.to_string(),
@@ -6710,6 +6731,76 @@ mod tests {
     fn assert_send_sync<T: Send + Sync>() {}
 
     #[test]
+    fn vocabulary_learning_settings_migrate_normalize_and_roundtrip() {
+        let old: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!old.vocabulary_learning_enabled);
+        assert_eq!(old.vocabulary_learning_settings, Default::default());
+        let prefs: UserPreferences = serde_json::from_value(serde_json::json!({
+            "vocabularyLearningSettings": {
+                "observationSeconds": 0, "suggestionSeconds": 999, "maxPhraseChars": 99
+            }
+        }))
+        .unwrap();
+        assert_eq!(prefs.vocabulary_learning_settings.observation_seconds, 10);
+        assert_eq!(prefs.vocabulary_learning_settings.suggestion_seconds, 60);
+        assert_eq!(prefs.vocabulary_learning_settings.max_phrase_chars, 32);
+        let restored: UserPreferences =
+            serde_json::from_value(serde_json::to_value(&prefs).unwrap()).unwrap();
+        assert_eq!(
+            restored.vocabulary_learning_settings,
+            prefs.vocabulary_learning_settings
+        );
+    }
+
+    #[test]
+    fn vocabulary_learning_config_change_invalidates_pending_and_stale_sink() {
+        let (backend, _) = backend();
+        let mut prefs = backend.get_preferences();
+        prefs.vocabulary_learning_enabled = true;
+        prefs.vocabulary_learning_settings.observation_seconds = 20;
+        prefs.vocabulary_learning_settings.suggestion_seconds = 30;
+        prefs.vocabulary_learning_settings.max_phrase_chars = 16;
+        backend.set_preferences(prefs).unwrap();
+        let sink = CoreEditObservationSink {
+            settings: backend.get_preferences().vocabulary_learning_settings,
+            expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
+            generation: Arc::clone(&backend.edit_observation_generation),
+            typed_text: "甲".repeat(13),
+            pending: Arc::clone(&backend.pending_corrections),
+            events: Arc::clone(&backend.events),
+        };
+        assert_eq!(
+            sink.observation_duration(),
+            std::time::Duration::from_secs(20)
+        );
+        let edit = crate::host_document::EditPair {
+            source: "甲".repeat(13),
+            target: "乙".repeat(13),
+            before: String::new(),
+            after: String::new(),
+        };
+        let before = chrono::Utc::now().timestamp_millis();
+        assert!(sink.publish(edit.clone()));
+        let after = chrono::Utc::now().timestamp_millis();
+        let suggestion = backend.pending_corrections().pop().unwrap();
+        assert!((before + 30_000..=after + 30_000).contains(&suggestion.expires_at_ms));
+        let mut prefs = backend.get_preferences();
+        prefs.vocabulary_learning_settings.observation_seconds = 999;
+        backend.set_preferences(prefs).unwrap();
+        assert_eq!(
+            backend
+                .get_preferences()
+                .vocabulary_learning_settings
+                .observation_seconds,
+            60
+        );
+        assert!(backend.pending_corrections().is_empty());
+        assert!(!sink.publish(edit));
+        assert!(backend.pending_corrections().is_empty());
+        assert!(backend.get_preferences().vocabulary_learning_enabled);
+    }
+
+    #[test]
     fn vocabulary_learning_expired_suggestions_cannot_be_accepted() {
         let (backend, _) = backend();
         let suggestion = backend
@@ -6756,7 +6847,8 @@ mod tests {
             &backend.events,
             "错词".into(),
             "Codex".into(),
-            Some((&generation, 1))
+            Some((&generation, 1)),
+            10
         )
         .unwrap()
         .is_none());

@@ -1249,13 +1249,31 @@ export const en: typeof zhCN = {
       useSystemProxyDesc:
         'When on, requests follow the system proxy. When off, all requests connect directly (usually lower latency for domestic services), but overseas services such as GitHub sign-in and updates may fail. Realtime voice streams and Less Computer are unaffected.',
     },
+    vocabularyLearning: {
+      title: 'Learn from corrections',
+      enabled: 'Enable learning from corrections',
+      observationSeconds: 'Observation duration',
+      observationSecondsHint:
+        'Maximum time to observe the current field after dictation: 10–60 seconds.',
+      suggestionSeconds: 'Suggestion duration',
+      suggestionSecondsHint:
+        'Unconfirmed suggestions expire after 5–60 seconds without being added to the vocabulary.',
+      maxPhraseChars: 'Maximum phrase length',
+      maxPhraseCharsHint:
+        'Limit both original and replacement phrases in automatic suggestions to 2–32 characters. Manual additions are unaffected.',
+      seconds: '{{count}} s',
+      characters: '{{count}} characters',
+      changeHint:
+        'Changing parameters stops the current observation and clears pending suggestions. New values apply to the next dictation. Resetting parameters does not change the enable switch.',
+      reset: 'Reset parameters',
+      saveError: 'Could not save. Please try again.',
+      description:
+        'After insertion, observe edits locally for up to 60 seconds and ask before saving a word. Observation text is not sent to a model. Password fields and known sensitive apps are excluded. Windows and Android support depends on the editor; Android requires accessibility. Turning this off stops observation.',
+    },
     dataStorage: {
       title: 'Data storage',
       desc: 'Conversation history and context kept on this device.',
       cursorContextLabel: 'Cursor context (experimental)',
-      vocabularyLearningLabel: 'Learn from corrections (experimental)',
-      vocabularyLearningDesc:
-        'After insertion, observe edits locally for up to 60 seconds and ask before saving a word. Observation text is not sent to a model. Password fields and known sensitive apps are excluded. Windows and Android support depends on the editor; Android requires accessibility. Turning this off stops observation.',
       cursorContextDesc:
         'Send nearby document text with polish requests (macOS only). This switch is separate from local vocabulary learning. Password fields and known sensitive apps are excluded.',
     },
@@ -2273,6 +2291,8 @@ export const en: typeof zhCN = {
     autoSaveHint: 'Changes save automatically',
     backToAdvanced: 'Back to Experiments & extensions',
     advancedPages: {
+      vocabularyLearning:
+        'Learn from manual corrections after dictation; configure observation, confirmation time and phrase length.',
       lessComputer: 'Choose an agent and configure its model, permissions, and working directory.',
       claudeConsole: 'Detect Claude Code and view output from test tasks.',
       multimodal: 'Manage the experimental multimodal recognition switch.',
@@ -2295,7 +2315,8 @@ export const en: typeof zhCN = {
       services: 'ASR LLM API channel model cloud local offline network proxy marketplace',
       appearance: 'theme dark light language font text size layout heatmap',
       privacy: 'permission microphone accessibility history recording storage privacy export',
-      advanced: 'Less Computer Claude Agent multimodal Omni debug logs experiment',
+      advanced:
+        'Less Computer Claude Agent multimodal Omni debug logs experiment Learn from corrections vocabulary learning',
       about: 'version Beta stable update upgrade',
     },
 
