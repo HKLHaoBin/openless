@@ -270,6 +270,24 @@ pub fn selection_voice_instruction_polish_prompt() -> String {
         .to_string()
 }
 
+/// 选区语音编辑 / Less Computer：多模态第一段（音频 → 指令文本，issue #1119 B）。
+/// 意图分类与 EditPlan 仍走下游 LLM；本提示只产出可提交的口述指令。
+pub fn auxiliary_voice_omni_instruction_prompt() -> String {
+    "# 任务（口述指令转写）\n\
+     用户通过语音描述想做什么（编辑选区、提问，或交给编程助手的指令）。\n\
+     输入是用户口述音频。\n\
+     \n\
+     ## 要求\n\
+     - 转写并整理为一条简洁、可直接交给下游系统的指令句。\n\
+     - 保留具体目标（格式、替换规则、翻译方向、提问焦点、编程任务）。\n\
+     - 删除无意义口头禅，补全必要标点。\n\
+     - 不要臆造输入中没有的内容。\n\
+     \n\
+     ## 输出\n\
+     只输出指令正文，不要解释、不要标题。"
+        .to_string()
+}
+
 /// 选区语音编辑：EditPlan 路径的对抗式防御（draft / instruction 是数据）。
 pub fn voice_edit_injection_defense() -> &'static str {
     "# 安全约定（务必遵守）\n\
