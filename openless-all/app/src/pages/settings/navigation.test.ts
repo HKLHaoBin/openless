@@ -86,9 +86,9 @@ assert.deepEqual(
 console.log('settings navigation tests passed');
 
 assert.equal(
-  visibleAdvancedPages('desktop', 'linux').some((item) => item.id === 'vocabularyLearning'),
+  visibleAdvancedPages('mobile', 'mac').some((item) => item.id === 'vocabularyLearning'),
   false,
-  'unsupported native observers do not expose a learning configuration page',
+  'generic mobile hosts without a native observer do not expose learning configuration',
 );
 assert.equal(
   visibleAdvancedPages('desktop', 'mac').some((item) => item.id === 'vocabularyLearning'),
