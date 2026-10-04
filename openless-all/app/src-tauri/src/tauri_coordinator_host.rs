@@ -70,7 +70,7 @@ fn capsule_transcript_rail_position(
             let height = 52.0;
             let gap = RAIL_GAP;
             let external_badge_lane = translation_active;
-            let top_offset = body_top - RAIL_GAP - RAIL_HEIGHT;
+            let mut top_offset = body_top - RAIL_GAP - RAIL_HEIGHT;
             if external_badge_lane {
                 top_offset -= BADGE_HEIGHT + BADGE_GAP;
             }
