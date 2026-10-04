@@ -367,7 +367,9 @@ fn configure_capsule_hit_test<R: tauri::Runtime>(
         )));
     }
     let mut client = RECT::default();
-    GetClientRect(hwnd, &mut client).map_err(|error| tauri::Error::Anyhow(error.into()))?;
+    unsafe {
+        GetClientRect(hwnd, &mut client).map_err(|error| tauri::Error::Anyhow(error.into()))?;
+    }
     let Some(rect) = capsule_control_hit_rect(
         style,
         transcript_visible,
@@ -406,7 +408,9 @@ fn configure_card_hit_test<R: tauri::Runtime>(
         )));
     }
     let mut client = RECT::default();
-    GetClientRect(hwnd, &mut client).map_err(|error| tauri::Error::Anyhow(error.into()))?;
+    unsafe {
+        GetClientRect(hwnd, &mut client).map_err(|error| tauri::Error::Anyhow(error.into()))?;
+    }
     let rect = capsule_card_hit_rect(client.right - client.left, client.bottom - client.top);
     clear_capsule_input_region(hwnd);
     install_capsule_hit_test_proc(hwnd, rect)
