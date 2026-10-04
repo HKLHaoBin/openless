@@ -8,16 +8,18 @@ use std::sync::Arc;
 
 use openless_core::{
     DictationOutputTarget, DictationResult, DictationSession, DictationStartOptions,
-    HistoryInsertStatus, HistorySource, InsertStatus, PolishMode, SessionId, TextSelection,
-    VoiceEditError, VoiceEditPhase, VoiceEditSession, VoiceEditSnapshot,
+    HistoryInsertStatus, HistorySource, PolishMode, SessionId, TextSelection, VoiceEditError,
+    VoiceEditPhase, VoiceEditSession, VoiceEditSnapshot,
 };
 
 use super::Inner;
+#[cfg(not(target_os = "android"))]
 use crate::selection::{
     reactivate_selection_insertion_target, resolve_selection_workspace_capture,
     selection_insertion_target_is_captured, validate_selection_insertion_target,
     SelectionInsertionTarget, SelectionInsertionTargetValidation,
 };
+use crate::types::InsertStatus;
 
 #[derive(Default)]
 pub(crate) struct VoiceEditHostState {
@@ -30,9 +32,9 @@ pub(crate) struct VoiceEditHostState {
 
 #[derive(Clone)]
 pub(crate) enum VoiceEditNativeTarget {
-    Android {
-        generation: i64,
-    },
+    #[cfg(target_os = "android")]
+    Android { generation: i64 },
+    #[cfg(not(target_os = "android"))]
     Desktop {
         target: SelectionInsertionTarget,
         expected_selection: String,
@@ -132,10 +134,11 @@ pub(crate) async fn finish_dictation(inner: &Arc<Inner>) -> Result<VoiceEditSnap
     session
         .finish_dictation(dictated)
         .map_err(|error| error.to_string())?;
+    let snapshot = session.snapshot();
     host.dictation_session_id = None;
     host.initial_raw_text = result.raw_text;
     host.duration_ms = result.duration_ms;
-    Ok(session.snapshot())
+    Ok(snapshot)
 }
 
 pub(crate) async fn start_instruction(inner: &Arc<Inner>) -> Result<VoiceEditSnapshot, String> {
@@ -200,9 +203,9 @@ pub(crate) async fn finish_instruction(inner: &Arc<Inner>) -> Result<VoiceEditSn
         let context = snapshot
             .context
             .ok_or_else(|| "voiceEditDraftUnavailable".to_string())?;
-        host.dictation_session_id = None;
         (snapshot.session_id, context.field_text, context.preview)
     };
+    inner.voice_edit_host.lock().dictation_session_id = None;
     let raw = non_empty_or_fallback(&result.raw_text, &result.polished_text);
     let polished = non_empty_or_fallback(&result.polished_text, &result.raw_text);
     let generated = match inner
@@ -232,11 +235,9 @@ pub(crate) async fn finish_instruction(inner: &Arc<Inner>) -> Result<VoiceEditSn
     if session.session_id() != session_id {
         return Err("voiceEditSessionChanged".to_string());
     }
-    if let Err(error) = session.apply_instruction(
-        raw,
-        generated.instruction_polished,
-        generated.plan,
-    ) {
+    if let Err(error) =
+        session.apply_instruction(raw, generated.instruction_polished, generated.plan)
+    {
         let message = error.to_string();
         let _ = session.recover_applying();
         return Err(message);
@@ -273,16 +274,22 @@ pub(crate) async fn commit(inner: &Arc<Inner>) -> Result<VoiceEditSnapshot, Stri
                 .ok_or_else(|| "voiceEditTargetUnavailable".to_string())?,
         )
     };
-    apply_native_target(inner, target, &text)?;
+    apply_native_target(inner, &target, &text)?;
 
     let mut host = inner.voice_edit_host.lock();
-    let session = host
-        .session
-        .as_mut()
-        .ok_or_else(|| "voiceEditSessionUnavailable".to_string())?;
-    let commit = session.commit().map_err(|error| error.to_string())?;
-    persist_history(&inner.backend, &host, &commit);
-    Ok(session.snapshot())
+    let initial_raw_text = host.initial_raw_text.clone();
+    let duration_ms = host.duration_ms;
+    let (commit, snapshot) = {
+        let session = host
+            .session
+            .as_mut()
+            .ok_or_else(|| "voiceEditSessionUnavailable".to_string())?;
+        let commit = session.commit().map_err(|error| error.to_string())?;
+        let snapshot = session.snapshot();
+        (commit, snapshot)
+    };
+    persist_history(&inner.backend, &initial_raw_text, duration_ms, &commit);
+    Ok(snapshot)
 }
 
 pub(crate) async fn cancel(inner: &Arc<Inner>) -> Result<Option<VoiceEditSnapshot>, String> {
@@ -295,8 +302,9 @@ pub(crate) async fn cancel(inner: &Arc<Inner>) -> Result<Option<VoiceEditSnapsho
         return Ok(None);
     };
     session.cancel().map_err(|error| error.to_string())?;
+    let snapshot = session.snapshot();
     host.target = None;
-    Ok(Some(session.snapshot()))
+    Ok(Some(snapshot))
 }
 
 pub(crate) fn snapshot(inner: &Arc<Inner>) -> Option<VoiceEditSnapshot> {
@@ -372,8 +380,14 @@ fn parse_android_target(raw: &str) -> Result<(i64, String, u32, u32), String> {
         .and_then(|value| value.parse::<i64>().ok())
         .filter(|value| *value > 0)
         .ok_or_else(|| "voiceEditTargetProtocolError".to_string())?;
-    let _package = parts.next().filter(|value| !value.is_empty());
-    let _window = parts.next().and_then(|value| value.parse::<i32>().ok());
+    let _package = parts
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "voiceEditTargetProtocolError".to_string())?;
+    let _window = parts
+        .next()
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| "voiceEditTargetProtocolError".to_string())?;
     let start = parts
         .next()
         .and_then(|value| value.parse::<usize>().ok())
@@ -386,9 +400,31 @@ fn parse_android_target(raw: &str) -> Result<(i64, String, u32, u32), String> {
         .next()
         .ok_or_else(|| "voiceEditTargetProtocolError".to_string())?
         .to_string();
-    let start = openless_core::host_document::utf16_offset_to_char_offset(&text, start) as u32;
-    let end = openless_core::host_document::utf16_offset_to_char_offset(&text, end) as u32;
+    let start = android_utf16_offset_to_char_offset(&text, start)
+        .ok_or_else(|| "voiceEditTargetProtocolError".to_string())?;
+    let end = android_utf16_offset_to_char_offset(&text, end)
+        .ok_or_else(|| "voiceEditTargetProtocolError".to_string())?;
     Ok((generation, text, start, end))
+}
+
+/// Android accessibility reports selection offsets in UTF-16 code units while
+/// the core session contract uses Unicode scalar-value offsets. Convert only at
+/// code-point boundaries and fail closed for malformed/surrogate-split input;
+/// never index a UTF-8 `str` with an Android `usize` offset.
+fn android_utf16_offset_to_char_offset(text: &str, utf16_offset: usize) -> Option<u32> {
+    let mut units = 0usize;
+    for (char_offset, character) in text.chars().enumerate() {
+        if units == utf16_offset {
+            return u32::try_from(char_offset).ok();
+        }
+        units = units.checked_add(character.len_utf16())?;
+        if units > utf16_offset {
+            return None;
+        }
+    }
+    (units == utf16_offset)
+        .then(|| u32::try_from(text.chars().count()).ok())
+        .flatten()
 }
 
 fn apply_native_target(
@@ -397,6 +433,7 @@ fn apply_native_target(
     text: &str,
 ) -> Result<(), String> {
     match target {
+        #[cfg(target_os = "android")]
         VoiceEditNativeTarget::Android { generation } => {
             let result = crate::android::replace_voice_edit_target(*generation, text)
                 .map_err(|error| format!("voiceEditReplaceFailed:{error}"))?;
@@ -406,6 +443,7 @@ fn apply_native_target(
                 Err(format!("voiceEditReplaceFailed:{result}"))
             }
         }
+        #[cfg(not(target_os = "android"))]
         VoiceEditNativeTarget::Desktop {
             target,
             expected_selection,
@@ -438,7 +476,8 @@ fn apply_native_target(
 
 fn persist_history(
     backend: &openless_core::OpenLessBackend,
-    host: &VoiceEditHostState,
+    initial_raw_text: &str,
+    duration_ms: u64,
     commit: &openless_core::VoiceEditCommit,
 ) {
     let preferences = backend.get_preferences();
@@ -449,11 +488,11 @@ fn persist_history(
         .collect::<Vec<_>>()
         .join("；");
     let raw = if turns.is_empty() {
-        host.initial_raw_text.clone()
-    } else if host.initial_raw_text.is_empty() {
+        initial_raw_text.to_string()
+    } else if initial_raw_text.is_empty() {
         turns
     } else {
-        format!("{}；{}", host.initial_raw_text, turns)
+        format!("{}；{}", initial_raw_text, turns)
     };
     let session = DictationSession {
         id: commit.session_id.to_string(),
@@ -470,7 +509,7 @@ fn persist_history(
         app_name: None,
         insert_status: HistoryInsertStatus::Inserted,
         error_code: None,
-        duration_ms: Some(host.duration_ms),
+        duration_ms: Some(duration_ms),
         dictionary_entry_count: None,
         has_audio_recording: None,
         asr_provider: None,
@@ -512,11 +551,20 @@ fn slice_chars(text: &str, selection: TextSelection) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::non_empty_or_fallback;
+    use super::{android_utf16_offset_to_char_offset, non_empty_or_fallback};
 
     #[test]
     fn dictation_text_falls_back_to_raw_when_polish_is_empty() {
         assert_eq!(non_empty_or_fallback("  ", " raw "), "raw");
         assert_eq!(non_empty_or_fallback(" polished ", "raw"), "polished");
+    }
+
+    #[test]
+    fn android_utf16_offsets_convert_without_utf8_indexing() {
+        assert_eq!(android_utf16_offset_to_char_offset("a😀中", 0), Some(0));
+        assert_eq!(android_utf16_offset_to_char_offset("a😀中", 1), Some(1));
+        assert_eq!(android_utf16_offset_to_char_offset("a😀中", 3), Some(2));
+        assert_eq!(android_utf16_offset_to_char_offset("a😀中", 4), Some(3));
+        assert_eq!(android_utf16_offset_to_char_offset("a😀中", 2), None);
     }
 }
