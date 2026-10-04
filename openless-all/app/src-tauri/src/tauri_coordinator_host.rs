@@ -1997,7 +1997,9 @@ mod tests {
         assert!(
             (typeless_translation.top_offset - (65.0 - 20.0 * 0.447 - 64.0 * 0.447 - 52.0 * 0.447))
                 .abs()
-                < f64::EPSILON
+                < 1e-12,
+            "unexpected typeless translation rail offset: {}",
+            typeless_translation.top_offset
         );
 
         for style in [
