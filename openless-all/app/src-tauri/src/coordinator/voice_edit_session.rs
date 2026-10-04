@@ -472,7 +472,9 @@ fn apply_native_target(
             ) {
                 InsertStatus::Inserted | InsertStatus::PasteSent => Ok(()),
                 InsertStatus::CopiedFallback => Err("voiceEditInsertFallback".to_string()),
-                InsertStatus::Failed => Err("voiceEditInsertFailed".to_string()),
+                InsertStatus::Failed | InsertStatus::NotRequested => {
+                    Err("voiceEditInsertFailed".to_string())
+                }
             }
         }
     }
