@@ -185,6 +185,19 @@ export {
   revertSelectionVoicePreview,
 } from './selection-voice-preview';
 
+export {
+  startVoiceEditSession,
+  openVoiceEditWindow,
+  closeVoiceEditWindow,
+  finalizeVoiceEditDictation,
+  startVoiceEditInstruction,
+  finalizeVoiceEditInstruction,
+  commitVoiceEditSession,
+  cancelVoiceEditSession,
+  getVoiceEditState,
+} from './voice-edit-session';
+export type { VoiceEditSnapshot, VoiceEditStartArgs } from './voice-edit-session';
+
 // less-computer
 export {
   lessComputerWindowDismiss,

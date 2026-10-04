@@ -7,10 +7,9 @@ import type {
 } from '../../lib/types';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { detectOS } from '../../components/WindowChrome';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { defaultSelectionPolishShortcut, getHotkeyStartStopLabel } from '../../lib/hotkey';
-import { setSelectionPolishHotkey } from '../../lib/ipc';
+import { openVoiceEditWindow, setSelectionPolishHotkey } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';
@@ -37,13 +36,17 @@ export function SelectionWorkspaceSection() {
   const { t } = useTranslation();
   const { prefs, capability, refresh, updatePrefs } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
-  const os = detectOS();
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
 
-  if (!prefs || !capability || !platformCaps?.supportsDesktopHotkey) return null;
+  if (
+    !prefs ||
+    !capability ||
+    (!platformCaps?.supportsDesktopHotkey && !platformCaps?.supportsVoiceEdit)
+  )
+    return null;
 
   const recordingLabel = getHotkeyStartStopLabel(
     prefs.hotkey,
@@ -52,7 +55,8 @@ export function SelectionWorkspaceSection() {
   );
   const autoIntent = prefs.selectionVoiceIntentMode === 'auto';
   const keywordsText = prefs.selectionVoiceEditKeywords.join('\n');
-  const showVoice = os === 'win';
+  const showDesktop = platformCaps.supportsDesktopHotkey;
+  const showVoice = platformCaps.supportsVoiceEdit;
   const voiceEnabled = prefs.selectionVoiceEnabled;
   const editPlanFormat = prefs.selectionVoiceEditPlanFormat ?? 'xml';
   const editSystemPrompt = prefs.selectionVoiceEditSystemPrompt ?? '';
@@ -63,27 +67,61 @@ export function SelectionWorkspaceSection() {
         {t('settings.selectionWorkspace.title')}
       </SectionTitle>
 
-      <SettingRow
-        label={t('settings.selectionWorkspace.polishHotkey')}
-        desc={t('settings.selectionWorkspace.polishHotkeyDesc')}
-      >
-        <ShortcutRecorder
-          value={prefs.selectionPolishHotkey}
-          onSave={async (binding) => {
-            await setSelectionPolishHotkey(binding);
-            await refresh();
-          }}
-          onDisable={async () => {
-            await setSelectionPolishHotkey(null);
-            await refresh();
-          }}
-          onReset={async () => {
-            await setSelectionPolishHotkey(defaultSelectionPolishShortcut());
-            await refresh();
-          }}
-        />
-      </SettingRow>
-      {!voiceEnabled && (
+      {showVoice && (
+        <SettingRow
+          label="语音编辑会话"
+          desc="先口述草稿，再用多轮语音指令编辑，确认后写回输入框。"
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Toggle
+              on={prefs.voiceEditEnabled}
+              onToggle={(next) =>
+                void updatePrefs((current) => ({ ...current, voiceEditEnabled: next }))
+              }
+            />
+            <button
+              type="button"
+              disabled={!prefs.voiceEditEnabled}
+              onClick={() => void openVoiceEditWindow()}
+              style={{
+                ...chipSelectedStyle(false),
+                border: '0.5px solid var(--ol-line)',
+                borderRadius: 6,
+                padding: '6px 10px',
+                fontFamily: 'inherit',
+                fontSize: 12,
+                cursor: prefs.voiceEditEnabled ? 'pointer' : 'not-allowed',
+                opacity: prefs.voiceEditEnabled ? 1 : 0.5,
+              }}
+            >
+              打开面板
+            </button>
+          </div>
+        </SettingRow>
+      )}
+      {showDesktop && (
+        <SettingRow
+          label={t('settings.selectionWorkspace.polishHotkey')}
+          desc={t('settings.selectionWorkspace.polishHotkeyDesc')}
+        >
+          <ShortcutRecorder
+            value={prefs.selectionPolishHotkey}
+            onSave={async (binding) => {
+              await setSelectionPolishHotkey(binding);
+              await refresh();
+            }}
+            onDisable={async () => {
+              await setSelectionPolishHotkey(null);
+              await refresh();
+            }}
+            onReset={async () => {
+              await setSelectionPolishHotkey(defaultSelectionPolishShortcut());
+              await refresh();
+            }}
+          />
+        </SettingRow>
+      )}
+      {showDesktop && !voiceEnabled && (
         <SettingRow label={t('settings.selectionWorkspace.polishDelivery')}>
           <div style={{ ...segmentedTrackStyle, flexWrap: 'wrap', gap: 4 }}>
             {outputOptions.map((option) => {

@@ -159,6 +159,8 @@ static LESS_COMPUTER_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
 static QA_PANEL_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LESS_COMPUTER_PANEL_EPOCH: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+static VOICE_EDIT_PANEL_EPOCH: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 #[cfg(not(mobile))]
 static TRAY_MICROPHONE_WATCHER_STOPPING: AtomicBool = AtomicBool::new(false);
 #[cfg(not(mobile))]
@@ -309,6 +311,17 @@ macro_rules! app_invoke_handler_desktop {
             commands::start_dictation,
             commands::stop_dictation,
             commands::cancel_dictation,
+            commands::start_voice_edit_session,
+            commands::finalize_voice_edit_dictation,
+            commands::start_voice_edit_instruction,
+            commands::finalize_voice_edit_instruction,
+            commands::stop_voice_edit_instruction,
+            commands::commit_voice_edit_session,
+            commands::commit_voice_edit,
+            commands::cancel_voice_edit_session,
+            commands::get_voice_edit_state,
+            commands::voice_edit_window_open,
+            commands::voice_edit_window_close,
             coding_agent::commands::coding_agent_detect,
             coding_agent::commands::coding_agent_detect_opencode,
             coding_agent::commands::coding_agent_detect_cli,
@@ -589,6 +602,17 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::start_dictation,
             $crate::commands::stop_dictation,
             $crate::commands::cancel_dictation,
+            $crate::commands::start_voice_edit_session,
+            $crate::commands::finalize_voice_edit_dictation,
+            $crate::commands::start_voice_edit_instruction,
+            $crate::commands::finalize_voice_edit_instruction,
+            $crate::commands::stop_voice_edit_instruction,
+            $crate::commands::commit_voice_edit_session,
+            $crate::commands::commit_voice_edit,
+            $crate::commands::cancel_voice_edit_session,
+            $crate::commands::get_voice_edit_state,
+            $crate::commands::voice_edit_window_open,
+            $crate::commands::voice_edit_window_close,
             $crate::commands::qa_window_dismiss,
             $crate::commands::qa_window_set_expanded,
             $crate::commands::qa_get_snapshot,
@@ -2960,6 +2984,111 @@ pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
     let _ = app;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_HIDE, ());
+}
+
+const VOICE_EDIT_WINDOW_WIDTH: f64 = 480.0;
+const VOICE_EDIT_WINDOW_HEIGHT: f64 = 620.0;
+
+/// Voice Edit uses a non-activating desktop panel so starting the first
+/// recording can still capture the editor that was frontmost before the panel
+/// appeared. Android embeds the same React panel in the main WebView instead.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn ensure_voice_edit_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(window) = app.get_webview_window("voice-edit") {
+        return Some(window);
+    }
+    match WebviewWindowBuilder::new(
+        app,
+        "voice-edit",
+        WebviewUrl::App("index.html?window=voice-edit".into()),
+    )
+    .title("OpenLess 语音编辑")
+    .inner_size(VOICE_EDIT_WINDOW_WIDTH, VOICE_EDIT_WINDOW_HEIGHT)
+    .min_inner_size(380.0, 420.0)
+    .decorations(false)
+    .transparent(true)
+    .shadow(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(true)
+    .focused(false)
+    .visible(false)
+    .accept_first_mouse(true)
+    .build()
+    {
+        Ok(window) => {
+            #[cfg(target_os = "macos")]
+            {
+                let window_clone = window.clone();
+                let _ = app.run_on_main_thread(move || {
+                    make_chat_window_panel_macos(&window_clone, "voice-edit");
+                    make_chat_window_draggable_macos(&window_clone, "voice-edit");
+                });
+            }
+            Some(window)
+        }
+        Err(error) => {
+            log::warn!("[voice-edit] create panel failed: {error}");
+            None
+        }
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn ensure_voice_edit_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
+    app.get_webview_window("voice-edit")
+}
+
+pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = app.emit_to("main", "voice-edit:show", serde_json::json!({}));
+        return;
+    }
+
+    let Some(window) = ensure_voice_edit_window(app) else {
+        return;
+    };
+    #[cfg(target_os = "macos")]
+    {
+        let window_clone = window.clone();
+        let _ = app.run_on_main_thread(move || {
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            match window_clone.ns_window() {
+                Ok(handle) if !handle.is_null() => unsafe {
+                    let ns = handle as *mut AnyObject;
+                    let _: () = msg_send![ns, orderFrontRegardless];
+                },
+                _ => {
+                    let _ = window_clone.show();
+                }
+            }
+        });
+    }
+    #[cfg(target_os = "windows")]
+    if !show_qa_window_no_activate(&window) {
+        let _ = window.show();
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let _ = window.show();
+    VOICE_EDIT_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
+    let _ = app.emit_to("voice-edit", "voice-edit:shown", serde_json::json!({}));
+}
+
+pub(crate) fn hide_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = app.emit_to("main", "voice-edit:dismiss", serde_json::json!({}));
+        return;
+    }
+    if let Some(window) = app.get_webview_window("voice-edit") {
+        let _ = window.hide();
+    }
 }
 
 /// Selection voice: after speaking, the user chooses to ask a question or edit.

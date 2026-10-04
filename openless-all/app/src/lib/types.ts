@@ -35,7 +35,12 @@ export type PipelineMode = 'traditional' | 'multimodal';
 
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed' | 'notRequested';
 
-export type HistorySource = 'voice' | 'quick_note' | 'selection_polish' | 'selection_voice_edit';
+export type HistorySource =
+  | 'voice'
+  | 'quick_note'
+  | 'selection_polish'
+  | 'selection_voice_edit'
+  | 'voice_edit';
 
 /** Per-day count for the Overview yearly activity heatmap (date = local date YYYY-MM-DD). */
 export interface ActivityDay {
@@ -416,6 +421,8 @@ export interface UserPreferences {
   selectionPolishOutputMode: SelectionPolishOutputMode;
   /** Selection voice edit (issue #987 Windows MVP). Off by default. */
   selectionVoiceEnabled: boolean;
+  /** Standalone Voice Edit Session (issue #900). Off by default. */
+  voiceEditEnabled: boolean;
   /** Selection voice intent routing: auto / manual / keyword heuristic. */
   selectionVoiceIntentMode: SelectionVoiceIntentMode;
   /** Fixed intent in manual mode. */
@@ -781,4 +788,5 @@ export interface PlatformCapabilities {
   supportsLocalQwen3Mlx: boolean;
   supportsInAppDictation: boolean;
   supportsAutoUpdate: boolean;
+  supportsVoiceEdit: boolean;
 }
