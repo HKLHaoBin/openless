@@ -80,21 +80,23 @@ pub(crate) async fn start(
         .await
         .map_err(|error| error.to_string())?;
 
-    let mut host = inner.voice_edit_host.lock();
-    let conflict = host.session.as_ref().is_some_and(|current| {
-        !matches!(
-            current.snapshot().phase,
-            VoiceEditPhase::Completed | VoiceEditPhase::Cancelled
-        )
-    });
+    let conflict = {
+        let host = inner.voice_edit_host.lock();
+        host.session.as_ref().is_some_and(|current| {
+            !matches!(
+                current.snapshot().phase,
+                VoiceEditPhase::Completed | VoiceEditPhase::Cancelled
+            )
+        })
+    };
     if conflict {
-        drop(host);
         let _ = inner
             .backend
             .cancel_dictation(Some(dictation_session_id))
             .await;
         return Err("voiceEditSessionBusy".to_string());
     }
+    let mut host = inner.voice_edit_host.lock();
     host.session = Some(session);
     host.dictation_session_id = Some(dictation_session_id);
     host.target = Some(target);
@@ -160,17 +162,19 @@ pub(crate) async fn start_instruction(inner: &Arc<Inner>) -> Result<VoiceEditSna
         })
         .await
         .map_err(|error| error.to_string())?;
-    let mut host = inner.voice_edit_host.lock();
-    let conflict = host.session.as_ref().map(VoiceEditSession::session_id) != Some(session_id)
-        || host.dictation_session_id.is_some();
+    let conflict = {
+        let host = inner.voice_edit_host.lock();
+        host.session.as_ref().map(VoiceEditSession::session_id) != Some(session_id)
+            || host.dictation_session_id.is_some()
+    };
     if conflict {
-        drop(host);
         let _ = inner
             .backend
             .cancel_dictation(Some(dictation_session_id))
             .await;
         return Err("voiceEditSessionChanged".to_string());
     }
+    let mut host = inner.voice_edit_host.lock();
     host.dictation_session_id = Some(dictation_session_id);
     Ok(host
         .session
@@ -546,7 +550,9 @@ fn slice_chars(text: &str, selection: TextSelection) -> Option<&str> {
         .map(|(offset, _)| offset)
         .collect::<Vec<_>>();
     offsets.push(text.len());
-    Some(text.get(*offsets.get(start)?, *offsets.get(end)?)?)
+    let start_offset = *offsets.get(start)?;
+    let end_offset = *offsets.get(end)?;
+    text.get(start_offset..end_offset)
 }
 
 #[cfg(test)]
