@@ -2068,6 +2068,7 @@ fn openai_chat_reasoning_effort(model: &str, thinking_enabled: bool) -> Option<&
         || normalized.starts_with("o3")
         || normalized.starts_with("o4")
         || normalized.starts_with("gpt-5")
+        || normalized.starts_with("gpt-6")
     {
         Some(if thinking_enabled { "medium" } else { "low" })
     } else {
@@ -3396,21 +3397,32 @@ mod tests {
     }
 
     #[test]
-    fn openai_chat_body_adds_reasoning_effort_for_openai_reasoning_model() {
-        let provider = OpenAICompatibleLLMProvider::new(
-            OpenAICompatibleConfig::new(
-                "openai",
-                "OpenAI",
-                "https://api.openai.com/v1",
-                "k",
-                "gpt-5-mini",
-            )
-            .with_thinking_enabled(true),
-        );
+    fn openai_chat_body_maps_reasoning_effort_for_openai_reasoning_models() {
+        for model in [
+            "gpt-5-mini",
+            "gpt-5.6-sol",
+            "gpt-6-luna",
+            "gpt-6.1-sol",
+            "openai/gpt-6.1-sol",
+        ] {
+            for (thinking_enabled, expected) in [(false, "low"), (true, "medium")] {
+                let provider = OpenAICompatibleLLMProvider::new(
+                    OpenAICompatibleConfig::new(
+                        "openai",
+                        "OpenAI",
+                        "https://api.openai.com/v1",
+                        "k",
+                        model,
+                    )
+                    .with_thinking_enabled(thinking_enabled),
+                );
 
-        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+                let body =
+                    provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
-        assert_eq!(body["reasoning_effort"], "medium");
+                assert_eq!(body["reasoning_effort"], expected, "{model}");
+            }
+        }
     }
 
     #[test]
@@ -3515,7 +3527,9 @@ mod tests {
             "gpt-6-astra",
             "gpt-6-sol",
             "gpt-6-luna",
+            "gpt-6.1-sol",
             "openai/gpt-6-astra",
+            "openai/gpt-6.1-sol",
         ] {
             let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
                 "openai",

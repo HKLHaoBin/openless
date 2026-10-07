@@ -588,6 +588,21 @@ mod tests {
     }
 
     #[test]
+    fn omni_body_maps_reasoning_effort_for_openai_gpt6_api_ids() {
+        for model in ["gpt-6-luna", "gpt-6.1-sol"] {
+            for (thinking_enabled, expected) in [(false, "low"), (true, "medium")] {
+                let mut omni = config();
+                omni.model = model.into();
+                omni.thinking_enabled = thinking_enabled;
+                let provider = OpenAICompatibleOmni::new(omni);
+                let body = provider.omni_body(false, vec![json!({"role": "user", "content": "x"})]);
+
+                assert_eq!(body["reasoning_effort"], expected, "{model}");
+            }
+        }
+    }
+
+    #[test]
     fn omni_gemini_routing_uses_provider_id_or_base_url() {
         assert!(!config().is_gemini());
         let mut gemini = config();
