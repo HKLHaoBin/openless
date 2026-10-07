@@ -337,10 +337,6 @@ class OpenLessAccessibilityService : AccessibilityService() {
             return AccessibilityPasteResult.TARGET_CHANGED
         }
         val capturedNode = capturedSelectionNode
-        if (capturedNode == null || !capturedNode.refresh()) {
-            invalidateSelectionTarget()
-            return AccessibilityPasteResult.TARGET_CHANGED
-        }
         val root = rootInActiveWindow ?: return AccessibilityPasteResult.NO_FOCUSED_EDITOR
         val target = try {
             // The main panel temporarily owns focus until its task moves to the background.
@@ -356,6 +352,10 @@ class OpenLessAccessibilityService : AccessibilityService() {
             return AccessibilityPasteResult.TARGET_CHANGED
         }
         return try {
+            if (capturedNode == null || !capturedNode.refresh()) {
+                invalidateSelectionTarget()
+                return AccessibilityPasteResult.TARGET_CHANGED
+            }
             val currentText = nodeText(target)
             val start = target.textSelectionStart
             val end = target.textSelectionEnd
