@@ -33,16 +33,11 @@ export interface VoiceEditSnapshot {
   target: { kind: 'selection'; start: number; end: number } | { kind: 'full_field' };
 }
 
-export interface VoiceEditStartArgs {
-  fieldContext?: string;
-  selection?: { start: number; end: number };
-}
-
 const mockSnapshot = (phase: VoiceEditPhase = 'dictating'): VoiceEditSnapshot => ({
   sessionId: 'voice-edit-demo',
   phase,
   context: {
-    fieldText: '这是待编辑的草稿。',
+    fieldText: '',
     selection: null,
     dictatedSegment: '',
     draft: '',
@@ -52,42 +47,44 @@ const mockSnapshot = (phase: VoiceEditPhase = 'dictating'): VoiceEditSnapshot =>
   target: { kind: 'full_field' },
 });
 
-export function startVoiceEditSession(
-  args?: VoiceEditStartArgs,
-): Promise<VoiceEditSnapshot> {
-  return invokeOrMock('start_voice_edit_session', { args }, () => mockSnapshot());
+export function startVoiceEditSession(): Promise<VoiceEditSnapshot> {
+  return invokeOrMock('start_voice_edit_session', undefined, () => mockSnapshot());
 }
 
 export function openVoiceEditWindow(): Promise<void> {
   return invokeOrMock('voice_edit_window_open', undefined, () => undefined);
 }
 
-export function closeVoiceEditWindow(): Promise<void> {
-  return invokeOrMock('voice_edit_window_close', undefined, () => undefined);
+export function closeVoiceEditWindow(sessionId?: string): Promise<void> {
+  return invokeOrMock('voice_edit_window_close', { sessionId }, () => undefined);
 }
 
-export function finalizeVoiceEditDictation(): Promise<VoiceEditSnapshot> {
-  return invokeOrMock('finalize_voice_edit_dictation', undefined, () =>
+export function finalizeVoiceEditDictation(sessionId: string): Promise<VoiceEditSnapshot> {
+  return invokeOrMock('finalize_voice_edit_dictation', { sessionId }, () =>
     mockSnapshot('draft_ready'),
   );
 }
 
-export function startVoiceEditInstruction(): Promise<VoiceEditSnapshot> {
-  return invokeOrMock('start_voice_edit_instruction', undefined, () => mockSnapshot('editing'));
+export function startVoiceEditInstruction(sessionId: string): Promise<VoiceEditSnapshot> {
+  return invokeOrMock('start_voice_edit_instruction', { sessionId }, () => mockSnapshot('editing'));
 }
 
-export function finalizeVoiceEditInstruction(): Promise<VoiceEditSnapshot> {
-  return invokeOrMock('stop_voice_edit_instruction', undefined, () =>
-    mockSnapshot('preview'),
-  );
+export function finalizeVoiceEditInstruction(sessionId: string): Promise<VoiceEditSnapshot> {
+  return invokeOrMock('stop_voice_edit_instruction', { sessionId }, () => mockSnapshot('preview'));
 }
 
-export function commitVoiceEditSession(): Promise<VoiceEditSnapshot> {
-  return invokeOrMock('commit_voice_edit', undefined, () => mockSnapshot('completed'));
+export function commitVoiceEditSession(sessionId: string): Promise<VoiceEditSnapshot> {
+  return invokeOrMock('commit_voice_edit', { sessionId }, () => mockSnapshot('completed'));
 }
 
-export function cancelVoiceEditSession(): Promise<VoiceEditSnapshot | null> {
-  return invokeOrMock('cancel_voice_edit_session', undefined, () => null);
+export function cancelVoiceEditSession(sessionId?: string): Promise<VoiceEditSnapshot | null> {
+  return invokeOrMock('cancel_voice_edit_session', { sessionId }, () => null);
+}
+
+export async function cancelAndCloseVoiceEditSession(sessionId?: string): Promise<void> {
+  const currentId = sessionId ?? (await getVoiceEditState())?.sessionId;
+  await cancelVoiceEditSession(currentId);
+  await closeVoiceEditWindow(currentId);
 }
 
 export function getVoiceEditState(): Promise<VoiceEditSnapshot | null> {

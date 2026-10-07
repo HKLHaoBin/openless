@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, Mic, RotateCcw, Square, X } from 'lucide-react';
 import {
   cancelVoiceEditSession,
-  closeVoiceEditWindow,
   commitVoiceEditSession,
   finalizeVoiceEditDictation,
   finalizeVoiceEditInstruction,
@@ -11,120 +11,184 @@ import {
   startVoiceEditSession,
   type VoiceEditSnapshot,
 } from '../lib/ipc';
+import { cancelAndCloseVoiceEditSession } from '../lib/ipc/voice-edit-session';
 import { ToolWindowHeader } from '../components/ui/ToolWindowHeader';
 import './voice-edit-panel.css';
 
 const isTerminal = (phase: VoiceEditSnapshot['phase']) =>
   phase === 'completed' || phase === 'cancelled';
+const errorDetail = (reason: unknown) =>
+  reason instanceof Error ? reason.message : String(reason);
 
 interface VoiceEditPanelProps {
   embedded?: boolean;
+  active?: boolean;
+  closeError?: string;
   onRequestClose?: () => void;
 }
 
-export function VoiceEditPanel({ embedded = false, onRequestClose }: VoiceEditPanelProps) {
+export function VoiceEditPanel({
+  embedded = false,
+  active = true,
+  closeError = '',
+  onRequestClose,
+}: VoiceEditPanelProps) {
+  const { t } = useTranslation();
   const [snapshot, setSnapshot] = useState<VoiceEditSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [error, setError] = useState('');
+  const generation = useRef(0);
+  const closingRef = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (closingRef.current) return;
+    const request = generation.current;
     try {
-      setSnapshot(await getVoiceEditState());
+      const next = await getVoiceEditState();
+      if (request === generation.current) setSnapshot(next);
     } catch (reason) {
-      setError(String(reason));
+      if (request === generation.current) setError(errorDetail(reason));
     }
   }, []);
 
   useEffect(() => {
+    setBusy(false);
+    if (!active) return;
     void refresh();
     const timer = window.setInterval(() => void refresh(), 500);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+    return () => {
+      generation.current += 1;
+      window.clearInterval(timer);
+    };
+  }, [active, refresh]);
 
-  const run = async (action: () => Promise<VoiceEditSnapshot | VoiceEditSnapshot | null>) => {
+  useEffect(() => {
+    if (closeError) setError(closeError);
+  }, [closeError]);
+
+  const run = async (action: () => Promise<VoiceEditSnapshot | null>) => {
+    const request = ++generation.current;
     setBusy(true);
     setError('');
     try {
       const next = await action();
+      if (request !== generation.current) return;
       if (next) setSnapshot(next);
       else await refresh();
     } catch (reason) {
-      setError(String(reason));
+      if (request === generation.current) {
+        setError(errorDetail(reason));
+        await refresh();
+      }
     } finally {
-      setBusy(false);
+      if (request === generation.current) setBusy(false);
     }
+  };
+
+  const runSession = (action: (sessionId: string) => Promise<VoiceEditSnapshot | null>) => {
+    if (snapshot) return run(() => action(snapshot.sessionId));
   };
 
   const phase = snapshot?.phase;
   const context = snapshot?.context;
-  const canCancel = Boolean(snapshot && !isTerminal(snapshot.phase) && !busy);
-  const closePanel = async () => {
-    if (canCancel) {
-      await run(async () => {
-        const next = await cancelVoiceEditSession();
-        await closeVoiceEditWindow();
-        onRequestClose?.();
-        return next;
-      });
-      return;
+  const canCancel = Boolean(snapshot && !isTerminal(snapshot.phase) && !closing);
+  const closePanel = useCallback(async () => {
+    if (closingRef.current) return false;
+    closingRef.current = true;
+    generation.current += 1;
+    setClosing(true);
+    setError('');
+    try {
+      await cancelAndCloseVoiceEditSession(
+        snapshot && !isTerminal(snapshot.phase) ? snapshot.sessionId : undefined,
+      );
+      onRequestClose?.();
+      return true;
+    } catch (reason) {
+      setError(errorDetail(reason));
+      return false;
+    } finally {
+      closingRef.current = false;
+      setClosing(false);
+      setBusy(false);
     }
-    await closeVoiceEditWindow();
-    onRequestClose?.();
-  };
+  }, [onRequestClose, snapshot]);
+
+  useEffect(() => {
+    if (!embedded || !active) return;
+    const onPopState = () => {
+      void closePanel().then((closed) => {
+        if (!closed) {
+          window.history.pushState({ openlessVoiceEdit: true }, '', window.location.href);
+        }
+      });
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [active, closePanel, embedded]);
 
   return (
     <main className="ol-tool-window ol-voice-edit-window">
       <ToolWindowHeader
         icon={<Mic />}
-        title="语音编辑会话"
-        description="先口述草稿，再用多轮语音指令修改，确认后才写回字段。"
+        title={t('voiceEdit.title')}
+        description={t('voiceEdit.description')}
         onClose={() => {
           void closePanel();
         }}
-        closeLabel="取消"
-        closeDisabled={!canCancel}
+        closeLabel={t('common.close')}
+        closeDisabled={closing}
       />
       <section className={`ol-voice-edit-content${embedded ? ' is-embedded' : ''}`}>
         {!snapshot || isTerminal(snapshot.phase) ? (
           <div className="ol-voice-edit-empty">
-            <p>请先把光标放入目标输入框，或选中需要编辑的文本。</p>
+            <p>{t('voiceEdit.targetHint')}</p>
             <button
               className="ol-tool-button is-primary"
-              disabled={busy}
+              disabled={busy || closing}
               onClick={() => void run(() => startVoiceEditSession())}
             >
               <Mic size={18} />
-              开始口述草稿
+              {t('voiceEdit.startDraft')}
             </button>
           </div>
         ) : (
           <>
             <div className="ol-voice-edit-status">
-              <span aria-live="polite">状态：{phaseLabel(snapshot.phase)}</span>
-              <span>回合：{context?.turns.length ?? 0}</span>
+              <span aria-live="polite">
+                {t('voiceEdit.status', { phase: t(`voiceEdit.phase.${snapshot.phase}`) })}
+              </span>
+              <span>{t('voiceEdit.turns', { count: context?.turns.length ?? 0 })}</span>
             </div>
             {context?.draft ? (
               <div className="ol-voice-edit-card">
-                <span className="ol-voice-edit-label">草稿</span>
+                <span className="ol-voice-edit-label">{t('voiceEdit.draft')}</span>
                 <div>{context.draft}</div>
               </div>
             ) : null}
             {context?.preview && context.preview !== context.draft ? (
               <div className="ol-voice-edit-card is-preview">
-                <span className="ol-voice-edit-label">当前预览</span>
+                <span className="ol-voice-edit-label">{t('voiceEdit.preview')}</span>
                 <div>{context.preview}</div>
               </div>
             ) : null}
             {context?.turns.length ? (
               <div className="ol-voice-edit-history">
-                <span className="ol-voice-edit-label">指令历史</span>
+                <span className="ol-voice-edit-label">{t('voiceEdit.history')}</span>
                 {context.turns.map((turn, index) => (
                   <div className="ol-voice-edit-turn" key={`${snapshot.sessionId}-${index}`}>
-                    <div><b>第 {index + 1} 轮</b>：{turn.instructionRaw}</div>
+                    <div>
+                      <b>{t('voiceEdit.turn', { count: index + 1 })}</b>: {turn.instructionRaw}
+                    </div>
                     {turn.instructionPolished !== turn.instructionRaw ? (
-                      <div className="ol-voice-edit-turn-polished">润色后：{turn.instructionPolished}</div>
+                      <div className="ol-voice-edit-turn-polished">
+                        {t('voiceEdit.polishedInstruction', { text: turn.instructionPolished })}
+                      </div>
                     ) : null}
-                    <div className="ol-voice-edit-turn-preview">预览：{turn.previewAfter}</div>
+                    <div className="ol-voice-edit-turn-preview">
+                      {t('voiceEdit.turnPreview', { text: turn.previewAfter })}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -133,78 +197,72 @@ export function VoiceEditPanel({ embedded = false, onRequestClose }: VoiceEditPa
               {phase === 'dictating' ? (
                 <button
                   className="ol-tool-button is-primary"
-                  disabled={busy}
-                  onClick={() => void run(finalizeVoiceEditDictation)}
+                  disabled={busy || closing}
+                  onClick={() => void runSession(finalizeVoiceEditDictation)}
                 >
                   <Square size={16} />
-                  完成草稿
+                  {t('voiceEdit.finishDraft')}
                 </button>
               ) : null}
               {phase === 'draft_ready' || phase === 'preview' ? (
                 <button
                   className="ol-tool-button"
-                  disabled={busy}
-                  onClick={() => void run(startVoiceEditInstruction)}
+                  disabled={busy || closing}
+                  onClick={() => void runSession(startVoiceEditInstruction)}
                 >
                   <Mic size={16} />
-                  录下一条语音指令
+                  {t('voiceEdit.nextInstruction')}
                 </button>
               ) : null}
               {phase === 'editing' ? (
                 <button
                   className="ol-tool-button is-primary"
-                  disabled={busy}
-                  onClick={() => void run(finalizeVoiceEditInstruction)}
+                  disabled={busy || closing}
+                  onClick={() => void runSession(finalizeVoiceEditInstruction)}
                 >
                   <Square size={16} />
-                  完成语音指令
+                  {t('voiceEdit.finishInstruction')}
                 </button>
               ) : null}
-              {phase === 'preview' ? (
+              {phase === 'draft_ready' || phase === 'preview' ? (
                 <button
                   className="ol-tool-button is-primary"
-                  disabled={busy}
-                  onClick={() => void run(commitVoiceEditSession)}
+                  disabled={busy || closing}
+                  onClick={() => void runSession(commitVoiceEditSession)}
                 >
                   <Check size={16} />
-                  确认并写回
+                  {t('voiceEdit.commit')}
                 </button>
               ) : null}
               {canCancel ? (
                 <button
                   className="ol-tool-button ol-voice-edit-cancel"
-                  disabled={busy}
-                  onClick={() => void run(cancelVoiceEditSession)}
+                  disabled={closing}
+                  onClick={() => void runSession(cancelVoiceEditSession)}
                 >
                   <X size={16} />
-                  取消
+                  {t('common.cancel')}
                 </button>
               ) : null}
             </div>
           </>
         )}
-        {error ? <div className="ol-tool-error" role="alert">{error}</div> : null}
+        {error ? (
+          <div className="ol-tool-error" role="alert">
+            {t(`voiceEdit.errors.${error.split(':')[0]}`, { defaultValue: error })}
+          </div>
+        ) : null}
         {snapshot && isTerminal(snapshot.phase) ? (
-          <button className="ol-tool-button" disabled={busy} onClick={() => void run(() => startVoiceEditSession())}>
+          <button
+            className="ol-tool-button"
+            disabled={busy || closing}
+            onClick={() => void run(() => startVoiceEditSession())}
+          >
             <RotateCcw size={16} />
-            再来一次
+            {t('voiceEdit.restart')}
           </button>
         ) : null}
       </section>
     </main>
   );
-}
-
-function phaseLabel(phase: VoiceEditSnapshot['phase']): string {
-  switch (phase) {
-    case 'dictating': return '口述草稿';
-    case 'draft_ready': return '草稿就绪';
-    case 'editing': return '录制指令';
-    case 'applying': return '应用编辑计划';
-    case 'preview': return '等待确认';
-    case 'committing': return '写回输入框';
-    case 'completed': return '已写回';
-    case 'cancelled': return '已取消';
-    default: return phase;
-  }
 }

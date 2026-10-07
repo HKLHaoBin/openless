@@ -96,6 +96,8 @@ export {
   startDictation,
   stopDictation,
   cancelDictation,
+  getCapsuleSnapshot,
+  setCapsuleTranscriptVisible,
   handleWindowHotkeyEvent,
 } from './dictation';
 
@@ -196,7 +198,7 @@ export {
   cancelVoiceEditSession,
   getVoiceEditState,
 } from './voice-edit-session';
-export type { VoiceEditSnapshot, VoiceEditStartArgs } from './voice-edit-session';
+export type { VoiceEditSnapshot } from './voice-edit-session';
 
 // less-computer
 export {

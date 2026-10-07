@@ -68,10 +68,7 @@ export function SelectionWorkspaceSection() {
       </SectionTitle>
 
       {showVoice && (
-        <SettingRow
-          label="语音编辑会话"
-          desc="先口述草稿，再用多轮语音指令编辑，确认后写回输入框。"
-        >
+        <SettingRow label={t('voiceEdit.title')} desc={t('voiceEdit.description')}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Toggle
               on={prefs.voiceEditEnabled}
@@ -94,7 +91,7 @@ export function SelectionWorkspaceSection() {
                 opacity: prefs.voiceEditEnabled ? 1 : 0.5,
               }}
             >
-              打开面板
+              {t('voiceEdit.openPanel')}
             </button>
           </div>
         </SettingRow>

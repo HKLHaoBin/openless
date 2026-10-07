@@ -1,30 +1,22 @@
 //! Host adapter for the core Voice Edit Session state machine (Issue #900).
-//!
-//! Core owns the draft, turns and deterministic EditPlan application. This
-//! module only owns asynchronous dictation IDs and the platform target that
-//! was captured before model work began.
-
-use std::sync::Arc;
-
-use openless_core::{
-    DictationOutputTarget, DictationResult, DictationSession, DictationStartOptions,
-    HistoryInsertStatus, HistorySource, PolishMode, SessionId, TextSelection, VoiceEditError,
-    VoiceEditPhase, VoiceEditSession, VoiceEditSnapshot,
-};
+//! Core owns drafts and phases; Host binds every asynchronous operation to its
+//! originating session and keeps native writes behind the commit reservation.
 
 use super::Inner;
-#[cfg(not(target_os = "android"))]
-use crate::selection::{
-    reactivate_selection_insertion_target, resolve_selection_workspace_capture,
-    selection_insertion_target_is_captured, validate_selection_insertion_target,
-    SelectionInsertionTarget, SelectionInsertionTargetValidation,
-};
 use crate::types::InsertStatus;
+use openless_core::{
+    DictationOutputTarget, DictationSession, DictationStartOptions, HistoryInsertStatus,
+    HistorySource, PolishMode, SessionId, TextSelection, VoiceEditPhase, VoiceEditSession,
+    VoiceEditSnapshot,
+};
+use std::sync::Arc;
 
 #[derive(Default)]
 pub(crate) struct VoiceEditHostState {
     pub(crate) session: Option<VoiceEditSession>,
+    pub(crate) pending_start_id: Option<SessionId>,
     pub(crate) dictation_session_id: Option<SessionId>,
+    pub(crate) finishing_initial_dictation: bool,
     pub(crate) target: Option<VoiceEditNativeTarget>,
     pub(crate) initial_raw_text: String,
     pub(crate) duration_ms: u64,
@@ -36,124 +28,165 @@ pub(crate) enum VoiceEditNativeTarget {
     Android { generation: i64 },
     #[cfg(not(target_os = "android"))]
     Desktop {
-        target: SelectionInsertionTarget,
-        expected_selection: String,
+        target: crate::host_document::NativeVoiceEditTarget,
     },
 }
 
-pub(crate) async fn start(
-    inner: &Arc<Inner>,
-    field_context: Option<String>,
-    selection: Option<TextSelection>,
-) -> Result<VoiceEditSnapshot, String> {
+fn current_session(
+    host: &mut VoiceEditHostState,
+    id: SessionId,
+) -> Result<&mut VoiceEditSession, String> {
+    let session = host
+        .session
+        .as_mut()
+        .ok_or_else(|| "voiceEditSessionUnavailable".to_string())?;
+    if session.session_id() != id {
+        return Err("voiceEditSessionChanged".into());
+    }
+    Ok(session)
+}
+
+pub(super) async fn start(inner: &Arc<Inner>) -> Result<VoiceEditSnapshot, String> {
     if !inner.backend.get_preferences().voice_edit_enabled {
-        return Err("voiceEditDisabled".to_string());
+        return Err("voiceEditDisabled".into());
+    }
+    let start_id = SessionId::new();
+    {
+        let mut host = inner.voice_edit_host.lock();
+        if host.pending_start_id.is_some()
+            || host.dictation_session_id.is_some()
+            || host.session.as_ref().is_some_and(|s| {
+                !matches!(
+                    s.snapshot().phase,
+                    VoiceEditPhase::Completed | VoiceEditPhase::Cancelled
+                )
+            })
+        {
+            return Err("voiceEditSessionBusy".into());
+        }
+        host.pending_start_id = Some(start_id);
+    }
+    let capture = tokio::time::timeout(
+        std::time::Duration::from_millis(1500),
+        tokio::task::spawn_blocking(capture_target),
+    )
+    .await
+    .map_err(|_| "voiceEditTargetUnavailable".to_string())
+    .and_then(|result| result.map_err(|error| format!("voiceEditTargetCaptureFailed:{error}")))
+    .and_then(|result| result);
+    let session_id = {
+        let mut host = inner.voice_edit_host.lock();
+        if host.pending_start_id != Some(start_id) {
+            return Err("voiceEditSessionChanged".into());
+        }
+        host.pending_start_id = None;
+        let (text, selection, target) = capture?;
+        let session = VoiceEditSession::start(text, selection).map_err(|e| e.to_string())?;
+        let id = session.session_id();
+        host.session = Some(session);
+        host.target = Some(target);
+        host.dictation_session_id = None;
+        host.finishing_initial_dictation = false;
+        host.initial_raw_text.clear();
+        host.duration_ms = 0;
+        id
+    };
+    if let Err(error) = inner.backend.start().await {
+        let _ = cancel(inner, Some(session_id)).await;
+        return Err(error.to_string());
     }
     {
-        let host = inner.voice_edit_host.lock();
-        if host.session.as_ref().is_some_and(|session| {
-            !matches!(
-                session.snapshot().phase,
-                VoiceEditPhase::Completed | VoiceEditPhase::Cancelled
-            )
-        }) {
-            return Err("voiceEditSessionBusy".to_string());
+        let mut host = inner.voice_edit_host.lock();
+        if current_session(&mut host, session_id)?.snapshot().phase != VoiceEditPhase::Dictating {
+            return Err("voiceEditSessionChanged".into());
         }
     }
-
-    let (field_text, selection, target) = capture_target(field_context, selection)?;
-    let session =
-        VoiceEditSession::start(field_text, selection).map_err(|error| error.to_string())?;
-    let session_id = session.session_id();
-    inner
-        .backend
-        .start()
-        .await
-        .map_err(|error| error.to_string())?;
-    let dictation_session_id = inner
+    let recording = inner
         .backend
         .start_dictation_with_options(DictationStartOptions {
             insert_text: false,
             output_target: DictationOutputTarget::ForegroundApp,
             ..DictationStartOptions::default()
         })
-        .await
-        .map_err(|error| error.to_string())?;
-
-    let conflict = {
-        let host = inner.voice_edit_host.lock();
-        host.session.as_ref().is_some_and(|current| {
-            !matches!(
-                current.snapshot().phase,
-                VoiceEditPhase::Completed | VoiceEditPhase::Cancelled
-            )
-        })
+        .await;
+    let recording_id = match recording {
+        Ok(id) => id,
+        Err(error) => {
+            let _ = cancel(inner, Some(session_id)).await;
+            return Err(error.to_string());
+        }
     };
-    if conflict {
-        let _ = inner
-            .backend
-            .cancel_dictation(Some(dictation_session_id))
-            .await;
-        return Err("voiceEditSessionBusy".to_string());
-    }
-    let mut host = inner.voice_edit_host.lock();
-    host.session = Some(session);
-    host.dictation_session_id = Some(dictation_session_id);
-    host.target = Some(target);
-    host.initial_raw_text.clear();
-    host.duration_ms = 0;
-    Ok(host
-        .session
-        .as_ref()
-        .expect("voice edit session inserted")
-        .snapshot())
+    let snapshot = {
+        let mut host = inner.voice_edit_host.lock();
+        match current_session(&mut host, session_id) {
+            Ok(session) if session.snapshot().phase == VoiceEditPhase::Dictating => {
+                let snapshot = session.snapshot();
+                host.dictation_session_id = Some(recording_id);
+                inner.host.set_voice_edit_interactive(true);
+                Some(snapshot)
+            }
+            _ => None,
+        }
+    };
+    let Some(snapshot) = snapshot else {
+        let _ = inner.backend.cancel_dictation(Some(recording_id)).await;
+        return Err("voiceEditSessionChanged".into());
+    };
+    Ok(snapshot)
 }
 
-pub(crate) async fn finish_dictation(inner: &Arc<Inner>) -> Result<VoiceEditSnapshot, String> {
-    let dictation_session_id = {
-        let host = inner.voice_edit_host.lock();
-        let session = host
-            .session
-            .as_ref()
-            .ok_or_else(|| "voiceEditSessionUnavailable".to_string())?;
-        if session.snapshot().phase != VoiceEditPhase::Dictating {
-            return Err("voiceEditInitialDictationUnavailable".to_string());
+pub(super) async fn finish_dictation(
+    inner: &Arc<Inner>,
+    id: SessionId,
+) -> Result<VoiceEditSnapshot, String> {
+    let recording_id = {
+        let mut host = inner.voice_edit_host.lock();
+        if current_session(&mut host, id)?.snapshot().phase != VoiceEditPhase::Dictating {
+            return Err("voiceEditInitialDictationUnavailable".into());
         }
-        host.dictation_session_id
-            .ok_or_else(|| "voiceEditDictationUnavailable".to_string())?
+        if host.finishing_initial_dictation {
+            return Err("voiceEditSessionBusy".into());
+        }
+        let recording_id = host
+            .dictation_session_id
+            .ok_or_else(|| "voiceEditDictationUnavailable".to_string())?;
+        host.finishing_initial_dictation = true;
+        recording_id
     };
-    let result = inner
-        .backend
-        .stop_dictation_session(dictation_session_id)
-        .await
-        .map_err(|error| error.to_string())?;
+    let result = inner.backend.stop_dictation_session(recording_id).await;
+    release_recording(inner, id, recording_id);
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = cancel(inner, Some(id)).await;
+            return Err(error.to_string());
+        }
+    };
     let mut host = inner.voice_edit_host.lock();
-    let session = host
-        .session
-        .as_mut()
-        .ok_or_else(|| "voiceEditSessionUnavailable".to_string())?;
-    let dictated = non_empty_or_fallback(&result.polished_text, &result.raw_text);
+    let session = current_session(&mut host, id)?;
     session
-        .finish_dictation(dictated)
-        .map_err(|error| error.to_string())?;
+        .finish_dictation(non_empty_or_fallback(
+            &result.polished_text,
+            &result.raw_text,
+        ))
+        .map_err(|e| e.to_string())?;
     let snapshot = session.snapshot();
-    host.dictation_session_id = None;
     host.initial_raw_text = result.raw_text;
     host.duration_ms = result.duration_ms;
     Ok(snapshot)
 }
 
-pub(crate) async fn start_instruction(inner: &Arc<Inner>) -> Result<VoiceEditSnapshot, String> {
-    let session_id = {
+pub(super) async fn start_instruction(
+    inner: &Arc<Inner>,
+    id: SessionId,
+) -> Result<VoiceEditSnapshot, String> {
+    {
         let mut host = inner.voice_edit_host.lock();
-        let session = host
-            .session
-            .as_mut()
-            .ok_or_else(|| "voiceEditSessionUnavailable".to_string())?;
-        session.enter_editing().map_err(|error| error.to_string())?;
-        session.session_id()
-    };
-    let dictation_session_id = inner
+        current_session(&mut host, id)?
+            .enter_editing()
+            .map_err(|e| e.to_string())?;
+    }
+    let recording_id = match inner
         .backend
         .start_dictation_with_options(DictationStartOptions {
             insert_text: false,
@@ -161,55 +194,68 @@ pub(crate) async fn start_instruction(inner: &Arc<Inner>) -> Result<VoiceEditSna
             ..DictationStartOptions::default()
         })
         .await
-        .map_err(|error| error.to_string())?;
-    let conflict = {
-        let host = inner.voice_edit_host.lock();
-        host.session.as_ref().map(VoiceEditSession::session_id) != Some(session_id)
-            || host.dictation_session_id.is_some()
+    {
+        Ok(id) => id,
+        Err(error) => {
+            recover_after_instruction_error(inner, id);
+            return Err(error.to_string());
+        }
     };
-    if conflict {
-        let _ = inner
-            .backend
-            .cancel_dictation(Some(dictation_session_id))
-            .await;
-        return Err("voiceEditSessionChanged".to_string());
+    let snapshot = {
+        let mut host = inner.voice_edit_host.lock();
+        match current_session(&mut host, id) {
+            Ok(session) if session.snapshot().phase == VoiceEditPhase::Editing => {
+                let snapshot = session.snapshot();
+                host.dictation_session_id = Some(recording_id);
+                Some(snapshot)
+            }
+            _ => None,
+        }
+    };
+    match snapshot {
+        Some(snapshot) => Ok(snapshot),
+        None => {
+            let _ = inner.backend.cancel_dictation(Some(recording_id)).await;
+            Err("voiceEditSessionChanged".into())
+        }
     }
-    let mut host = inner.voice_edit_host.lock();
-    host.dictation_session_id = Some(dictation_session_id);
-    Ok(host
-        .session
-        .as_ref()
-        .expect("voice edit session exists")
-        .snapshot())
 }
 
-pub(crate) async fn finish_instruction(inner: &Arc<Inner>) -> Result<VoiceEditSnapshot, String> {
-    let dictation_session_id = {
-        let host = inner.voice_edit_host.lock();
-        host.dictation_session_id
-            .ok_or_else(|| "voiceEditInstructionUnavailable".to_string())?
-    };
-    let result = inner
-        .backend
-        .stop_dictation_session(dictation_session_id)
-        .await
-        .map_err(|error| error.to_string())?;
-    let (session_id, field_context, draft) = {
+pub(super) async fn finish_instruction(
+    inner: &Arc<Inner>,
+    id: SessionId,
+) -> Result<VoiceEditSnapshot, String> {
+    let recording_id = {
         let mut host = inner.voice_edit_host.lock();
-        let session = host
-            .session
-            .as_mut()
-            .ok_or_else(|| "voiceEditSessionUnavailable".to_string())?;
-        session
+        let recording_id = host
+            .dictation_session_id
+            .ok_or_else(|| "voiceEditInstructionUnavailable".to_string())?;
+        current_session(&mut host, id)?
             .begin_applying()
-            .map_err(|error| error.to_string())?;
-        let snapshot = session.snapshot();
-        let context = snapshot
+            .map_err(|e| e.to_string())?;
+        recording_id
+    };
+    let result = inner.backend.stop_dictation_session(recording_id).await;
+    release_recording(inner, id, recording_id);
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            recover_after_instruction_error(inner, id);
+            return Err(error.to_string());
+        }
+    };
+    let (field_context, draft) = {
+        let mut host = inner.voice_edit_host.lock();
+        let session = current_session(&mut host, id)?;
+        if session.snapshot().phase != VoiceEditPhase::Applying {
+            return Err("voiceEditSessionChanged".into());
+        }
+        let context = session
+            .snapshot()
             .context
             .ok_or_else(|| "voiceEditDraftUnavailable".to_string())?;
-        (snapshot.session_id, context.field_text, context.preview)
+        (context.field_text, context.preview)
     };
-    inner.voice_edit_host.lock().dictation_session_id = None;
     let raw = non_empty_or_fallback(&result.raw_text, &result.polished_text);
     let polished = non_empty_or_fallback(&result.polished_text, &result.raw_text);
     let generated = match inner
@@ -217,7 +263,7 @@ pub(crate) async fn finish_instruction(inner: &Arc<Inner>) -> Result<VoiceEditSn
         .services()
         .selection_voice
         .voice_edit_plan(openless_core::domains::VoiceEditPlanRequest {
-            session_id,
+            session_id: id,
             field_context,
             draft,
             instruction_raw: raw.clone(),
@@ -227,91 +273,133 @@ pub(crate) async fn finish_instruction(inner: &Arc<Inner>) -> Result<VoiceEditSn
     {
         Ok(generated) => generated,
         Err(error) => {
-            recover_after_instruction_error(inner, session_id);
+            recover_after_instruction_error(inner, id);
             return Err(error.to_string());
         }
     };
     let mut host = inner.voice_edit_host.lock();
-    let session = host
-        .session
-        .as_mut()
-        .ok_or_else(|| "voiceEditSessionUnavailable".to_string())?;
-    if session.session_id() != session_id {
-        return Err("voiceEditSessionChanged".to_string());
-    }
+    let session = current_session(&mut host, id)?;
     if let Err(error) =
         session.apply_instruction(raw, generated.instruction_polished, generated.plan)
     {
-        let message = error.to_string();
-        let _ = session.recover_applying();
-        return Err(message);
+        let _ = session.recover_instruction();
+        return Err(error.to_string());
     }
     Ok(session.snapshot())
 }
 
-fn recover_after_instruction_error(inner: &Arc<Inner>, session_id: SessionId) {
+fn recover_after_instruction_error(inner: &Arc<Inner>, id: SessionId) {
     let mut host = inner.voice_edit_host.lock();
-    if let Some(session) = host.session.as_mut() {
-        if session.session_id() == session_id {
-            let _ = session.recover_applying();
-        }
+    if let Ok(session) = current_session(&mut host, id) {
+        let _ = session.recover_instruction();
     }
 }
 
-pub(crate) async fn commit(inner: &Arc<Inner>) -> Result<VoiceEditSnapshot, String> {
-    let (text, target) = {
-        let host = inner.voice_edit_host.lock();
-        let session = host
-            .session
-            .as_ref()
-            .ok_or_else(|| "voiceEditSessionUnavailable".to_string())?;
-        let snapshot = session.snapshot();
-        let text = snapshot
-            .context
-            .as_ref()
-            .map(|context| context.preview.clone())
-            .ok_or_else(|| "voiceEditDraftUnavailable".to_string())?;
+fn release_recording(inner: &Arc<Inner>, id: SessionId, recording_id: SessionId) {
+    let mut host = inner.voice_edit_host.lock();
+    if host.session.as_ref().map(VoiceEditSession::session_id) == Some(id)
+        && host.dictation_session_id == Some(recording_id)
+    {
+        host.dictation_session_id = None;
+        host.finishing_initial_dictation = false;
+    }
+}
+
+pub(super) async fn commit(inner: &Arc<Inner>, id: SessionId) -> Result<VoiceEditSnapshot, String> {
+    let (ticket, target, raw, duration) = {
+        let mut host = inner.voice_edit_host.lock();
+        let target = host
+            .target
+            .clone()
+            .ok_or_else(|| "voiceEditTargetUnavailable".to_string())?;
+        let ticket = current_session(&mut host, id)?
+            .begin_commit()
+            .map_err(|e| e.to_string())?;
         (
-            text,
-            host.target
-                .clone()
-                .ok_or_else(|| "voiceEditTargetUnavailable".to_string())?,
+            ticket,
+            target,
+            host.initial_raw_text.clone(),
+            host.duration_ms,
         )
     };
-    apply_native_target(inner, &target, &text)?;
-
+    let writer = Arc::clone(inner);
+    let text = ticket.text.clone();
+    let outcome = tokio::task::spawn_blocking(move || apply_native_target(&writer, &target, &text))
+        .await
+        .map_err(|error| format!("voiceEditReplaceFailed:{error}"))
+        .and_then(|result| result);
     let mut host = inner.voice_edit_host.lock();
-    let initial_raw_text = host.initial_raw_text.clone();
-    let duration_ms = host.duration_ms;
-    let (commit, snapshot) = {
-        let session = host
-            .session
-            .as_mut()
-            .ok_or_else(|| "voiceEditSessionUnavailable".to_string())?;
-        let commit = session.commit().map_err(|error| error.to_string())?;
-        let snapshot = session.snapshot();
-        (commit, snapshot)
-    };
-    persist_history(&inner.backend, &initial_raw_text, duration_ms, &commit);
+    let session = current_session(&mut host, id)?;
+    if let Err(error) = outcome {
+        let _ = session.recover_commit();
+        return Err(error);
+    }
+    session.complete_commit().map_err(|e| e.to_string())?;
+    let snapshot = session.snapshot();
+    inner.host.set_voice_edit_interactive(false);
+    drop(host);
+    persist_history(&inner.backend, &raw, duration, &ticket);
     Ok(snapshot)
 }
 
-pub(crate) async fn cancel(inner: &Arc<Inner>) -> Result<Option<VoiceEditSnapshot>, String> {
-    let dictation_session_id = inner.voice_edit_host.lock().dictation_session_id.take();
-    if let Some(session_id) = dictation_session_id {
-        let _ = inner.backend.cancel_dictation(Some(session_id)).await;
-    }
-    let mut host = inner.voice_edit_host.lock();
-    let Some(session) = host.session.as_mut() else {
-        return Ok(None);
+pub(super) async fn cancel(
+    inner: &Arc<Inner>,
+    id: Option<SessionId>,
+) -> Result<Option<VoiceEditSnapshot>, String> {
+    let (recording_id, snapshot) = {
+        let mut host = inner.voice_edit_host.lock();
+        if let Some(id) = id {
+            let _ = current_session(&mut host, id)?;
+        }
+        if let Some(session) = host.session.as_mut() {
+            if !matches!(
+                session.snapshot().phase,
+                VoiceEditPhase::Completed | VoiceEditPhase::Cancelled
+            ) {
+                session.cancel().map_err(|e| e.to_string())?;
+            }
+        }
+        host.pending_start_id = None;
+        let snapshot = host.session.as_ref().map(VoiceEditSession::snapshot);
+        host.target = None;
+        inner.host.set_voice_edit_interactive(false);
+        (host.dictation_session_id, snapshot)
     };
-    session.cancel().map_err(|error| error.to_string())?;
-    let snapshot = session.snapshot();
-    host.target = None;
-    Ok(Some(snapshot))
+    if let Some(recording_id) = recording_id {
+        let result = inner.backend.cancel_dictation(Some(recording_id)).await;
+        // Core can release ownership before adapter cleanup reports an error.
+        // Keep a retry handle only while this exact backend session is still live.
+        let still_owned = inner.backend.snapshot().dictation.session_id == Some(recording_id);
+        let mut host = inner.voice_edit_host.lock();
+        if !still_owned && host.dictation_session_id == Some(recording_id) {
+            host.dictation_session_id = None;
+            host.finishing_initial_dictation = false;
+        }
+        result.map_err(|e| e.to_string())?;
+    }
+    Ok(snapshot)
 }
 
-pub(crate) fn snapshot(inner: &Arc<Inner>) -> Option<VoiceEditSnapshot> {
+pub(super) fn can_close(inner: &Arc<Inner>, id: Option<SessionId>) -> Result<(), String> {
+    let mut host = inner.voice_edit_host.lock();
+    if let Some(id) = id {
+        let _ = current_session(&mut host, id)?;
+    }
+    if host.pending_start_id.is_some()
+        || host.dictation_session_id.is_some()
+        || host.session.as_ref().is_some_and(|s| {
+            !matches!(
+                s.snapshot().phase,
+                VoiceEditPhase::Completed | VoiceEditPhase::Cancelled
+            )
+        })
+    {
+        return Err("voiceEditSessionBusy".into());
+    }
+    Ok(())
+}
+
+pub(super) fn snapshot(inner: &Arc<Inner>) -> Option<VoiceEditSnapshot> {
     inner
         .voice_edit_host
         .lock()
@@ -320,59 +408,23 @@ pub(crate) fn snapshot(inner: &Arc<Inner>) -> Option<VoiceEditSnapshot> {
         .map(VoiceEditSession::snapshot)
 }
 
-fn capture_target(
-    field_context: Option<String>,
-    selection: Option<TextSelection>,
-) -> Result<(String, Option<TextSelection>, VoiceEditNativeTarget), String> {
+fn capture_target() -> Result<(String, Option<TextSelection>, VoiceEditNativeTarget), String> {
     #[cfg(target_os = "android")]
     {
         let raw = crate::android::capture_voice_edit_target()
-            .map_err(|error| format!("voiceEditTargetCaptureFailed:{error}"))?
+            .map_err(|e| format!("voiceEditTargetCaptureFailed:{e}"))?
             .ok_or_else(|| "voiceEditTargetUnavailable".to_string())?;
         let (generation, text, start, end) = parse_android_target(&raw)?;
-        let selection = (start != end).then_some(TextSelection { start, end });
         return Ok((
             text,
-            selection,
+            (start != end).then_some(TextSelection { start, end }),
             VoiceEditNativeTarget::Android { generation },
         ));
     }
-
     #[cfg(not(target_os = "android"))]
     {
-        let (captured_selection, target) = resolve_selection_workspace_capture();
-        let (text, selection, expected_selection) = match field_context {
-            Some(text) => {
-                let expected = selection
-                    .and_then(|range| slice_chars(&text, range).map(str::to_string))
-                    .unwrap_or_else(|| text.clone());
-                (text, selection, expected)
-            }
-            None => {
-                let selection = captured_selection
-                    .ok_or_else(|| "voiceEditSelectionUnavailable".to_string())?;
-                let chars = selection.text.chars().count() as u32;
-                (
-                    selection.text.clone(),
-                    Some(TextSelection {
-                        start: 0,
-                        end: chars,
-                    }),
-                    selection.text,
-                )
-            }
-        };
-        if !selection_insertion_target_is_captured(&target) {
-            return Err("voiceEditTargetUnavailable".to_string());
-        }
-        return Ok((
-            text,
-            selection,
-            VoiceEditNativeTarget::Desktop {
-                target,
-                expected_selection,
-            },
-        ));
+        let (text, selection, target) = crate::host_document::capture_voice_edit_target()?;
+        Ok((text, selection, VoiceEditNativeTarget::Desktop { target }))
     }
 }
 
@@ -448,34 +500,21 @@ fn apply_native_target(
             }
         }
         #[cfg(not(target_os = "android"))]
-        VoiceEditNativeTarget::Desktop {
-            target,
-            expected_selection,
-        } => {
-            if !reactivate_selection_insertion_target(target) {
-                return Err("voiceEditTargetChanged".to_string());
-            }
-            match validate_selection_insertion_target(target, expected_selection) {
-                SelectionInsertionTargetValidation::Valid => {}
-                invalid => {
-                    return Err(invalid
-                        .error_code()
-                        .unwrap_or("voiceEditTargetChanged")
-                        .to_string())
+        VoiceEditNativeTarget::Desktop { target } => {
+            crate::host_document::apply_voice_edit_target(target, text, |text| {
+                let preferences = inner.backend.get_preferences();
+                match inner.inserter.insert(
+                    text,
+                    preferences.restore_clipboard_after_paste,
+                    preferences.paste_shortcut,
+                ) {
+                    InsertStatus::Inserted | InsertStatus::PasteSent => Ok(()),
+                    InsertStatus::CopiedFallback => Err("voiceEditInsertFallback".into()),
+                    InsertStatus::Failed | InsertStatus::NotRequested => {
+                        Err("voiceEditInsertFailed".into())
+                    }
                 }
-            }
-            let preferences = inner.backend.get_preferences();
-            match inner.inserter.insert(
-                text,
-                preferences.restore_clipboard_after_paste,
-                preferences.paste_shortcut,
-            ) {
-                InsertStatus::Inserted | InsertStatus::PasteSent => Ok(()),
-                InsertStatus::CopiedFallback => Err("voiceEditInsertFallback".to_string()),
-                InsertStatus::Failed | InsertStatus::NotRequested => {
-                    Err("voiceEditInsertFailed".to_string())
-                }
-            }
+            })
         }
     }
 }
@@ -541,20 +580,6 @@ fn non_empty_or_fallback(primary: &str, fallback: &str) -> String {
     } else {
         primary.trim().to_string()
     }
-}
-
-fn slice_chars(text: &str, selection: TextSelection) -> Option<&str> {
-    let (start, end) = selection.normalized();
-    let start = usize::try_from(start).ok()?;
-    let end = usize::try_from(end).ok()?;
-    let mut offsets = text
-        .char_indices()
-        .map(|(offset, _)| offset)
-        .collect::<Vec<_>>();
-    offsets.push(text.len());
-    let start_offset = *offsets.get(start)?;
-    let end_offset = *offsets.get(end)?;
-    text.get(start_offset..end_offset)
 }
 
 #[cfg(test)]

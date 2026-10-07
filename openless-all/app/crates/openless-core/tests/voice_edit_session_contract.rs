@@ -69,28 +69,86 @@ fn multiple_instruction_turns_are_applied_to_preview_and_commit_only_happens_onc
         "今天晴天"
     );
 
-    let commit = session.commit().unwrap();
+    let commit = session.begin_commit().unwrap();
     assert_eq!(commit.text, "今日晴天");
+    assert_eq!(session.snapshot().phase, VoiceEditPhase::Committing);
+    assert!(matches!(
+        session.begin_commit(),
+        Err(VoiceEditError::InvalidPhase { .. })
+    ));
+    assert!(matches!(
+        session.cancel(),
+        Err(VoiceEditError::InvalidPhase { .. })
+    ));
+    session.complete_commit().unwrap();
     assert_eq!(session.snapshot().phase, VoiceEditPhase::Completed);
     assert!(matches!(
-        session.commit(),
+        session.begin_commit(),
         Err(VoiceEditError::InvalidPhase { .. })
     ));
 }
 
 #[test]
-fn applying_phase_is_visible_and_recoverable_without_insertion() {
+fn instruction_errors_restore_a_retryable_draft_or_preview() {
+    for edited in [false, true] {
+        for applying in [false, true] {
+            let mut session = VoiceEditSession::start("草稿", None).unwrap();
+            session.finish_dictation("").unwrap();
+            if edited {
+                session
+                    .apply_instruction("改成预览", "改成预览", literal("草稿", "预览"))
+                    .unwrap();
+            }
+            let before = session.snapshot();
+            session.enter_editing().unwrap();
+            if applying {
+                session.begin_applying().unwrap();
+                assert_eq!(session.snapshot().phase, VoiceEditPhase::Applying);
+            }
+            session.recover_instruction().unwrap();
+            assert_eq!(session.snapshot(), before);
+            session.enter_editing().unwrap();
+        }
+    }
+}
+
+#[test]
+fn commits_are_rejected_before_the_draft_is_ready() {
     let mut session = VoiceEditSession::start("草稿", None).unwrap();
+    assert!(session.begin_commit().is_err());
+    assert!(session.complete_commit().is_err());
+    assert!(session.recover_commit().is_err());
+    assert_eq!(session.snapshot().phase, VoiceEditPhase::Dictating);
+
     session.finish_dictation("").unwrap();
     session.enter_editing().unwrap();
-    session.begin_applying().unwrap();
-    assert_eq!(session.snapshot().phase, VoiceEditPhase::Applying);
-    session.recover_applying().unwrap();
+    assert!(session.begin_commit().is_err());
     assert_eq!(session.snapshot().phase, VoiceEditPhase::Editing);
-    assert!(matches!(
-        session.commit(),
-        Err(VoiceEditError::InvalidPhase { .. })
-    ));
+    session.begin_applying().unwrap();
+    assert!(session.begin_commit().is_err());
+    assert_eq!(session.snapshot().phase, VoiceEditPhase::Applying);
+}
+
+#[test]
+fn failed_target_writes_restore_the_previous_draft_and_allow_retry() {
+    for edited in [false, true] {
+        let mut session = VoiceEditSession::start("草稿", None).unwrap();
+        session.finish_dictation("").unwrap();
+        if edited {
+            session
+                .apply_instruction("改成预览", "改成预览", literal("草稿", "预览"))
+                .unwrap();
+        }
+        let before = session.snapshot();
+        let first_commit = session.begin_commit().unwrap();
+        session.recover_commit().unwrap();
+        assert_eq!(session.snapshot(), before);
+        assert_eq!(session.begin_commit().unwrap(), first_commit);
+        session.complete_commit().unwrap();
+        assert_eq!(session.snapshot().phase, VoiceEditPhase::Completed);
+        assert!(session.recover_commit().is_err());
+        assert!(session.complete_commit().is_err());
+    }
 }
 
 #[test]
@@ -102,7 +160,7 @@ fn cancellation_clears_the_pending_commit_and_never_returns_text() {
     assert_eq!(session.snapshot().phase, VoiceEditPhase::Cancelled);
     assert!(session.snapshot().context.is_none());
     assert!(matches!(
-        session.commit(),
+        session.begin_commit(),
         Err(VoiceEditError::InvalidPhase { .. })
     ));
 }

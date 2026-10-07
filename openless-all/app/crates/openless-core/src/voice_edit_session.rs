@@ -232,15 +232,17 @@ impl VoiceEditSession {
         Ok(())
     }
 
-    /// Return an interrupted provider turn to the editable preview state.
-    /// This keeps a transient provider failure retryable without discarding
+    /// Return an interrupted recording or provider turn to the ready draft.
+    /// This keeps a transient instruction failure retryable without discarding
     /// the session or inserting anything into the target field.
-    pub fn recover_applying(&mut self) -> Result<(), VoiceEditError> {
-        if self.phase != VoiceEditPhase::Applying {
+    pub fn recover_instruction(&mut self) -> Result<(), VoiceEditError> {
+        if !matches!(
+            self.phase,
+            VoiceEditPhase::Editing | VoiceEditPhase::Applying
+        ) {
             return Err(VoiceEditError::InvalidPhase { phase: self.phase });
         }
-        self.phase = VoiceEditPhase::Editing;
-        Ok(())
+        self.restore_ready_phase()
     }
 
     /// Apply one already-polished instruction and its validated EditPlan.
@@ -294,8 +296,8 @@ impl VoiceEditSession {
         Ok(())
     }
 
-    /// Commit returns the only text that a host may send to an external field.
-    pub fn commit(&mut self) -> Result<VoiceEditCommit, VoiceEditError> {
+    /// Reserve the commit before the host writes the returned text externally.
+    pub fn begin_commit(&mut self) -> Result<VoiceEditCommit, VoiceEditError> {
         if !matches!(
             self.phase,
             VoiceEditPhase::DraftReady | VoiceEditPhase::Preview
@@ -310,25 +312,49 @@ impl VoiceEditSession {
             return Err(VoiceEditError::EmptyDraft);
         }
         self.phase = VoiceEditPhase::Committing;
-        let commit = VoiceEditCommit {
+        Ok(VoiceEditCommit {
             session_id: self.session_id,
             text: context.preview.clone(),
             target: self.target,
             turns: context.turns.clone(),
-        };
+        })
+    }
+
+    /// Finish only after the host has successfully written to the target field.
+    pub fn complete_commit(&mut self) -> Result<(), VoiceEditError> {
+        self.require_phase(VoiceEditPhase::Committing)?;
         self.phase = VoiceEditPhase::Completed;
-        Ok(commit)
+        Ok(())
+    }
+
+    /// Keep the preview retryable when the host could not write to the target.
+    pub fn recover_commit(&mut self) -> Result<(), VoiceEditError> {
+        self.require_phase(VoiceEditPhase::Committing)?;
+        self.restore_ready_phase()
     }
 
     pub fn cancel(&mut self) -> Result<(), VoiceEditError> {
         if matches!(
             self.phase,
-            VoiceEditPhase::Completed | VoiceEditPhase::Cancelled
+            VoiceEditPhase::Committing | VoiceEditPhase::Completed | VoiceEditPhase::Cancelled
         ) {
             return Err(VoiceEditError::InvalidPhase { phase: self.phase });
         }
         self.context = None;
         self.phase = VoiceEditPhase::Cancelled;
+        Ok(())
+    }
+
+    fn restore_ready_phase(&mut self) -> Result<(), VoiceEditError> {
+        let context = self
+            .context
+            .as_ref()
+            .ok_or(VoiceEditError::InvalidPhase { phase: self.phase })?;
+        self.phase = if context.turns.is_empty() {
+            VoiceEditPhase::DraftReady
+        } else {
+            VoiceEditPhase::Preview
+        };
         Ok(())
     }
 

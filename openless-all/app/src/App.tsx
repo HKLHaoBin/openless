@@ -1,12 +1,12 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Capsule } from './components/Capsule';
+import { CapsuleTranscriptOverlay } from './components/LiveTranscriptPill';
 import { CoreStartupScreen } from './components/CoreStartupScreen';
 import { GlobalDownloadProgress } from './components/GlobalDownloadProgress';
 import { detectOS, type OS } from './components/WindowChrome';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
-  closeVoiceEditWindow,
   getHotkeyStatus,
   getStartupSnapshot,
   getSettings,
@@ -15,6 +15,7 @@ import {
   isTauri,
   qaWindowDismiss,
 } from './lib/ipc';
+import { cancelAndCloseVoiceEditSession } from './lib/ipc/voice-edit-session';
 import type { PlatformCapabilities } from './lib/types';
 import { isWindowHotkeyKeyboardCandidate, windowMouseHotkeyCode } from './lib/windowHotkeyFallback';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
@@ -56,6 +57,7 @@ const LessComputerGlow = LESS_COMPUTER_BUNDLED
 
 interface AppProps {
   isCapsule: boolean;
+  isCapsuleRail: boolean;
   isQa: boolean;
   isSelectionVoiceIntent: boolean;
   isVoiceEdit: boolean;
@@ -101,6 +103,7 @@ export function App(props: AppProps) {
 
 function ReadyApp({
   isCapsule,
+  isCapsuleRail,
   isQa,
   isSelectionVoiceIntent,
   isVoiceEdit,
@@ -108,6 +111,9 @@ function ReadyApp({
   isLessComputerGlow,
   forcedOs,
 }: AppProps) {
+  if (isCapsuleRail) {
+    return <CapsuleTranscriptOverlay />;
+  }
   if (isCapsule) {
     return <Capsule os={forcedOs} />;
   }
@@ -154,6 +160,7 @@ function ReadyApp({
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [mobileQaOpen, setMobileQaOpen] = useState(false);
   const [mobileVoiceEditOpen, setMobileVoiceEditOpen] = useState(false);
+  const [mobileVoiceEditCloseError, setMobileVoiceEditCloseError] = useState('');
   const completeOnboarding = () => {
     if (platformCaps?.platform === 'android') {
       localStorage.setItem(ANDROID_SETUP_WIZARD_COMPLETE_KEY, '1');
@@ -183,10 +190,19 @@ function ReadyApp({
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        const stateHandle = await listen('qa:state', () => {
+        const stateHandle = await listen('qa:state', async () => {
           console.info('[qa] android qa:state received; opening embedded panel');
-          setMobileVoiceEditOpen(false);
-          setMobileQaOpen(true);
+          setMobileVoiceEditCloseError('');
+          try {
+            await cancelAndCloseVoiceEditSession();
+            if (cancelled) return;
+            setMobileVoiceEditOpen(false);
+            setMobileQaOpen(true);
+          } catch (error) {
+            if (cancelled) return;
+            setMobileVoiceEditCloseError(error instanceof Error ? error.message : String(error));
+            setMobileVoiceEditOpen(true);
+          }
         });
         const dismissHandle = await listen('qa:dismiss', () => {
           console.info('[qa] android qa:dismiss received; closing embedded panel');
@@ -194,6 +210,7 @@ function ReadyApp({
         });
         const voiceEditShowHandle = await listen('voice-edit:show', () => {
           console.info('[voice-edit] android show requested; opening embedded panel');
+          setMobileVoiceEditCloseError('');
           setMobileQaOpen(false);
           setMobileVoiceEditOpen(true);
         });
@@ -243,14 +260,6 @@ function ReadyApp({
   useEffect(() => {
     if (!mobileVoiceEditOpen || platformCaps?.platform !== 'android') return;
     window.history.pushState({ openlessVoiceEdit: true }, '', window.location.href);
-    const onPopState = () => {
-      setMobileVoiceEditOpen(false);
-      void closeVoiceEditWindow().catch((error) =>
-        console.warn('[voice-edit] mobile back dismiss failed', error),
-      );
-    };
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
   }, [mobileVoiceEditOpen, platformCaps?.platform]);
 
   useEffect(() => {
@@ -433,6 +442,8 @@ function ReadyApp({
           <div style={{ display: mobileVoiceEditOpen ? 'block' : 'none', height: '100%' }}>
             <VoiceEditPanel
               embedded
+              active={mobileVoiceEditOpen}
+              closeError={mobileVoiceEditCloseError}
               onRequestClose={() => {
                 setMobileVoiceEditOpen(false);
                 if (window.history.state?.openlessVoiceEdit === true) {
@@ -442,7 +453,8 @@ function ReadyApp({
             />
           </div>
         )}
-        {!mobileQaOpen && !mobileVoiceEditOpen &&
+        {!mobileQaOpen &&
+          !mobileVoiceEditOpen &&
           (gate === 'onboarding' ? (
             <Onboarding onComplete={completeOnboarding} />
           ) : (
