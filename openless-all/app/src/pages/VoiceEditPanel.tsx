@@ -143,15 +143,17 @@ export function VoiceEditPanel({
       <section className={`ol-voice-edit-content${embedded ? ' is-embedded' : ''}`}>
         {!snapshot || isTerminal(snapshot.phase) ? (
           <div className="ol-voice-edit-empty">
-            <p>{t('voiceEdit.targetHint')}</p>
-            <button
-              className="ol-tool-button is-primary"
-              disabled={busy || closing}
-              onClick={() => void run(() => startVoiceEditSession())}
-            >
-              <Mic size={18} />
-              {t('voiceEdit.startDraft')}
-            </button>
+            <p>{t(embedded ? 'voiceEdit.androidTargetHint' : 'voiceEdit.targetHint')}</p>
+            {!embedded && (
+              <button
+                className="ol-tool-button is-primary"
+                disabled={busy || closing}
+                onClick={() => void run(() => startVoiceEditSession())}
+              >
+                <Mic size={18} />
+                {t('voiceEdit.startDraft')}
+              </button>
+            )}
           </div>
         ) : (
           <>
@@ -252,7 +254,7 @@ export function VoiceEditPanel({
             {t(`voiceEdit.errors.${error.split(':')[0]}`, { defaultValue: error })}
           </div>
         ) : null}
-        {snapshot && isTerminal(snapshot.phase) ? (
+        {!embedded && snapshot && isTerminal(snapshot.phase) ? (
           <button
             className="ol-tool-button"
             disabled={busy || closing}

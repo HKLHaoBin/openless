@@ -6,6 +6,7 @@ export const zhTW: typeof zhCN = {
     title: '語音編輯工作階段',
     description: '口述草稿或讀取目標文字，再以多輪語音指令修改，確認後寫回輸入欄位。',
     targetHint: '請先將游標放入目標輸入欄位，或選取需要編輯的文字。',
+    androidTargetHint: '請將一個懸浮窗滑動動作設為「語音編輯」。在目標應用錄音後滑動進入預覽，確認後寫回原輸入欄位。',
     startDraft: '開始口述草稿',
     status: '狀態：{{phase}}',
     turns: '回合：{{count}}',
@@ -1986,6 +1987,7 @@ export const zhTW: typeof zhCN = {
         right: '右',
       },
       androidOverlayGestureAction: {
+        voice_edit: '語音編輯',
         none: '無動作',
         quick_note: '速記',
         translation: '翻譯',

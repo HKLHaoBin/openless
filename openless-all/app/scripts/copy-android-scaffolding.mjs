@@ -87,6 +87,7 @@ const KOTLIN_TEST_FILES = [
   'OpenLessShizukuBridgeTest.kt',
   'OpenLessAccessibilityResultTest.kt',
   'OpenLessAccessibilitySelectionTest.kt',
+  'OpenLessOverlayStateTest.kt',
   'OpenLessAccessibilityTargetTest.kt',
   'OpenLessPasteVerificationTest.kt',
   'OpenLessAccessibilityComponentIdsTest.kt',

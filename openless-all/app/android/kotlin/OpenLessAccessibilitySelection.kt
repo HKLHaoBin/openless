@@ -26,13 +26,14 @@ internal data class OpenLessAccessibilitySelection(
         isFieldUsable() && normalizedEnd > normalizedStart
 
     fun matches(
+        sameNode: Boolean,
         packageName: String?,
         windowId: Int,
         currentText: String?,
         currentSelectionStart: Int,
         currentSelectionEnd: Int,
     ): Boolean {
-        if (!isFieldUsable() || packageName != this.packageName || windowId != this.windowId) {
+        if (!sameNode || !isFieldUsable() || packageName != this.packageName || windowId != this.windowId) {
             return false
         }
         val text = currentText ?: return false

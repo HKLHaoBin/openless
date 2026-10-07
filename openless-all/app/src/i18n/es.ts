@@ -6,6 +6,7 @@ export const es: typeof zhCN = {
     description:
       'Dicte un borrador o cargue el texto de destino, edítelo con instrucciones de voz y confirme para insertarlo.',
     targetHint: 'Coloque el cursor en el campo de destino o seleccione el texto que desea editar.',
+    androidTargetHint: 'Asigna la edición por voz a un gesto de la superposición. Graba en la aplicación de destino y desliza para ver la vista previa. Al confirmar, se actualiza el campo original.',
     startDraft: 'Dictar un borrador',
     status: 'Estado: {{phase}}',
     turns: 'Instrucciones: {{count}}',
@@ -2144,6 +2145,7 @@ export const es: typeof zhCN = {
         right: 'Derecha',
       },
       androidOverlayGestureAction: {
+        voice_edit: 'Edición por voz',
         none: 'Sin acción',
         quick_note: 'Nota rápida',
         translation: 'Traducción',

@@ -6,6 +6,7 @@ export const fr: typeof zhCN = {
     description:
       'Dictez un brouillon ou chargez le texte cible, modifiez-le par instructions vocales, puis confirmez son insertion.',
     targetHint: 'Placez le curseur dans le champ cible ou sélectionnez le texte à modifier.',
+    androidTargetHint: "Attribuez l’édition vocale à un geste de la superposition. Enregistrez dans l’application cible, puis balayez pour ouvrir l’aperçu. La confirmation met à jour le champ d’origine.",
     startDraft: 'Dicter un brouillon',
     status: 'État : {{phase}}',
     turns: 'Instructions : {{count}}',
@@ -2172,6 +2173,7 @@ export const fr: typeof zhCN = {
         right: 'Droite',
       },
       androidOverlayGestureAction: {
+        voice_edit: 'Édition vocale',
         none: 'Aucune action',
         quick_note: 'Note rapide',
         translation: 'Traduction',

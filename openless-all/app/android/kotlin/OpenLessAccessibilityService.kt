@@ -26,6 +26,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
     private var lastEditableFocus: AccessibilityNodeInfo? = null
     private var selectionGeneration = 0L
     private var capturedSelection: OpenLessAccessibilitySelection? = null
+    private var capturedSelectionNode: AccessibilityNodeInfo? = null
     private var vocabularyGeneration = 0L
     private var vocabularyNode: AccessibilityNodeInfo? = null
     private var vocabularyDeadline = 0L
@@ -256,12 +257,16 @@ class OpenLessAccessibilityService : AccessibilityService() {
         }
     }
 
-    override fun onInterrupt() { invalidateVocabularyLifecycle() }
+    override fun onInterrupt() {
+        invalidateVocabularyLifecycle()
+        invalidateSelectionTarget()
+    }
 
     override fun onDestroy() {
         invalidateVocabularyLifecycle()
         mainHandler.removeCallbacks(keyboardRefreshRunnable)
         invalidateEditableCache()
+        invalidateSelectionTarget()
         if (instance === this) {
             instance = null
         }
@@ -331,24 +336,38 @@ class OpenLessAccessibilityService : AccessibilityService() {
         if (captured == null || generation == 0L || generation != selectionGeneration) {
             return AccessibilityPasteResult.TARGET_CHANGED
         }
+        val capturedNode = capturedSelectionNode
+        if (capturedNode == null || !capturedNode.refresh()) {
+            invalidateSelectionTarget()
+            return AccessibilityPasteResult.TARGET_CHANGED
+        }
         val root = rootInActiveWindow ?: return AccessibilityPasteResult.NO_FOCUSED_EDITOR
         val target = try {
+            // The main panel temporarily owns focus until its task moves to the background.
+            if (root.packageName?.toString() == this.packageName) {
+                return AccessibilityPasteResult.NO_FOCUSED_EDITOR
+            }
             root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                 ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
         } finally {
             root.recycle()
-        } ?: return AccessibilityPasteResult.NO_FOCUSED_EDITOR
+        } ?: run {
+            invalidateSelectionTarget()
+            return AccessibilityPasteResult.TARGET_CHANGED
+        }
         return try {
             val currentText = nodeText(target)
             val start = target.textSelectionStart
             val end = target.textSelectionEnd
             val packageName = target.packageName?.toString()
             if (target.isPassword ||
+                packageName == this.packageName ||
                 !OpenLessAccessibilityTarget.isPasteTarget(target) ||
                 !target.isFocused ||
                 !OpenLessAccessibilityTarget.isFieldTargetValid(currentText, start, end) ||
-                !captured.matches(packageName, target.windowId, currentText, start, end)
+                !captured.matches(target == capturedNode, packageName, target.windowId, currentText, start, end)
             ) {
+                invalidateSelectionTarget()
                 AccessibilityPasteResult.TARGET_CHANGED
             } else {
                 val replaced = captured.replaceTarget(currentText, replacementText)
@@ -364,6 +383,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
                 } else {
                     sleepQuietly(PASTE_VERIFY_DELAY_MS)
                     if (target.refresh() && nodeText(target) == replaced) {
+                        invalidateSelectionTarget()
                         AccessibilityPasteResult.SUCCESS
                     } else {
                         AccessibilityPasteResult.PASTE_REJECTED
@@ -375,7 +395,14 @@ class OpenLessAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun invalidateSelectionTarget() {
+        capturedSelectionNode?.recycle()
+        capturedSelectionNode = null
+        capturedSelection = null
+    }
+
     private fun captureSelectionTargetInternal(): String {
+        invalidateSelectionTarget()
         val root = rootInActiveWindow ?: return ""
         val target = try {
             root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
@@ -389,6 +416,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
             val end = target.textSelectionEnd
             val packageName = target.packageName?.toString().orEmpty()
             if (target.isPassword ||
+                packageName == this.packageName ||
                 !OpenLessAccessibilityTarget.isPasteTarget(target) ||
                 !target.isFocused ||
                 !OpenLessAccessibilityTarget.isFieldTargetValid(text, start, end)
@@ -398,6 +426,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
             } else {
                 val nextGeneration = selectionGeneration + 1L
                 selectionGeneration = if (nextGeneration == 0L) 1L else nextGeneration
+                capturedSelectionNode = AccessibilityNodeInfo.obtain(target)
                 capturedSelection = OpenLessAccessibilitySelection(
                     packageName = packageName,
                     windowId = target.windowId,

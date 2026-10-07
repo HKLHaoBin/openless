@@ -67,6 +67,7 @@ mod voice_edit_session;
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static WRITES: AtomicUsize = AtomicUsize::new(0);
 static CAPTURE_GATE: Mutex<Option<Arc<CaptureGate>>> = Mutex::new(None);
+static CAPTURE_TEXT: Mutex<Option<String>> = Mutex::new(None);
 
 struct CaptureGate {
     entered: Semaphore,
@@ -119,7 +120,12 @@ mod host_document {
         if let Some(gate) = gate {
             gate.capture();
         }
-        Ok(("original".into(), None, NativeVoiceEditTarget))
+        let text = CAPTURE_TEXT
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap_or_else(|| "original".into());
+        Ok((text, None, NativeVoiceEditTarget))
     }
 
     pub(crate) fn apply_voice_edit_target(
@@ -204,6 +210,10 @@ impl DictationEngine for GatedEngine {
 }
 
 fn fixture() -> (tempfile::TempDir, Arc<Inner>, Arc<GatedEngine>) {
+    fixture_with_transcript("spoken")
+}
+
+fn fixture_with_transcript(transcript: &str) -> (tempfile::TempDir, Arc<Inner>, Arc<GatedEngine>) {
     let directory = tempfile::tempdir().unwrap();
     let mut preferences = openless_core::shared_types::UserPreferences::default();
     preferences.voice_edit_enabled = true;
@@ -212,7 +222,7 @@ fn fixture() -> (tempfile::TempDir, Arc<Inner>, Arc<GatedEngine>) {
         .set(preferences)
         .unwrap();
     let engine = Arc::new(GatedEngine {
-        fixture: FixtureDictationEngine::successful("spoken", "spoken"),
+        fixture: FixtureDictationEngine::successful(transcript, transcript),
         start_gate: Mutex::new(None),
         finish_gate: Mutex::new(None),
     });
@@ -273,6 +283,72 @@ async fn invalid_commit_never_writes_and_completed_commit_only_writes_once() {
     );
     assert!(voice_edit_session::commit(&inner, id).await.is_err());
     assert_eq!(WRITES.load(Ordering::SeqCst), 1);
+    inner.backend.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn empty_initial_draft_releases_the_host_for_another_overlay_recording() {
+    let _serial = SERIAL.lock().await;
+    let (_directory, inner, _) = fixture_with_transcript("");
+    inner.backend.start().await.unwrap();
+    *CAPTURE_TEXT.lock().unwrap() = Some(String::new());
+    inner
+        .backend
+        .start_dictation_with_options(openless_core::DictationStartOptions {
+            output_target: openless_core::DictationOutputTarget::Undecided,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(voice_edit_session::from_overlay(&inner).await.is_err());
+    assert_eq!(
+        voice_edit_session::snapshot(&inner).unwrap().phase,
+        VoiceEditPhase::Cancelled
+    );
+    assert!(inner.voice_edit_host.lock().dictation_session_id.is_none());
+    let next = voice_edit_session::start(&inner).await.unwrap();
+    voice_edit_session::cancel(&inner, Some(next.session_id))
+        .await
+        .unwrap();
+    inner.backend.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn overlay_handoff_reuses_recording_and_preserves_audio_without_native_insertion() {
+    let _serial = SERIAL.lock().await;
+    WRITES.store(0, Ordering::SeqCst);
+    let (_directory, inner, engine) = fixture();
+    inner.backend.start().await.unwrap();
+    let recording = inner
+        .backend
+        .start_dictation_with_options(openless_core::DictationStartOptions {
+            output_target: openless_core::DictationOutputTarget::Undecided,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let draft = voice_edit_session::from_overlay(&inner).await.unwrap();
+    assert_eq!(draft.phase, VoiceEditPhase::DraftReady);
+    assert_eq!(draft.context.unwrap().preview, "originalspoken");
+    assert_eq!(
+        engine
+            .fixture
+            .actions()
+            .iter()
+            .filter(|action| { matches!(action, FixtureEngineAction::Start(_)) })
+            .count(),
+        1
+    );
+    assert!(engine
+        .fixture
+        .actions()
+        .contains(&FixtureEngineAction::Finish(recording)));
+    assert!(inner.backend.list_history().unwrap().is_empty());
+    assert_eq!(WRITES.load(Ordering::SeqCst), 0);
+    assert!(inner.voice_edit_host.lock().dictation_session_id.is_none());
+    voice_edit_session::cancel(&inner, Some(draft.session_id))
+        .await
+        .unwrap();
     inner.backend.shutdown().await.unwrap();
 }
 

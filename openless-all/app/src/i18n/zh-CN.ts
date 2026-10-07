@@ -6,6 +6,7 @@ export const zhCN = {
     title: '语音编辑会话',
     description: '口述草稿或读取目标文本，再用多轮语音指令修改，确认后写回输入框。',
     targetHint: '请先把光标放入目标输入框，或选中需要编辑的文本。',
+    androidTargetHint: '请将一个悬浮窗滑动动作设为「语音编辑」。在目标应用录音后滑动进入预览，确认后写回原输入框。',
     startDraft: '开始口述草稿',
     status: '状态：{{phase}}',
     turns: '回合：{{count}}',
@@ -1985,6 +1986,7 @@ export const zhCN = {
         right: '右',
       },
       androidOverlayGestureAction: {
+        voice_edit: '语音编辑',
         none: '无动作',
         quick_note: '速记',
         translation: '翻译',

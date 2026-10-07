@@ -9,6 +9,7 @@ export const en: typeof zhCN = {
     description:
       'Dictate a draft or load the target text, edit it with voice instructions, then confirm to write it back.',
     targetHint: 'Place the cursor in the target input field, or select the text to edit.',
+    androidTargetHint: 'Assign Voice editing to an overlay swipe. Record in the target app, then swipe to preview. Confirmation writes back to the original field.',
     startDraft: 'Start dictating a draft',
     status: 'Status: {{phase}}',
     turns: 'Turns: {{count}}',
@@ -2103,6 +2104,7 @@ export const en: typeof zhCN = {
         right: 'Right',
       },
       androidOverlayGestureAction: {
+        voice_edit: 'Voice editing',
         none: 'No action',
         quick_note: 'Quick note',
         translation: 'Translation',

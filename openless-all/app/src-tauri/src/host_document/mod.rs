@@ -122,6 +122,20 @@ pub(crate) fn apply_voice_edit_target(
     }
 }
 
+/// Restore only the selection we changed when a native write fails. Platform
+/// callbacks must revalidate the original control and unchanged text first.
+#[cfg(any(test, target_os = "windows", target_os = "macos"))]
+fn write_with_selection_recovery(
+    write: impl FnOnce() -> Result<(), String>,
+    recover: impl FnOnce(),
+) -> Result<(), String> {
+    let result = write();
+    if result.is_err() {
+        recover();
+    }
+    result
+}
+
 /// Timeout for a single AX message. 200ms is far above a normal AX round-trip (single-digit
 /// ms); it only catches hung apps.
 #[cfg(target_os = "macos")]
@@ -496,6 +510,26 @@ mod tests {
             bundle_id: bundle.map(str::to_string),
             role: role.map(str::to_string),
             subrole: subrole.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn failed_native_write_restores_selection_before_retry() {
+        let caret = std::cell::Cell::new((3, 3));
+        for result in [Err("clipboard unavailable".to_string()), Ok(())] {
+            let original = caret.get();
+            let outcome = write_with_selection_recovery(
+                || {
+                    caret.set((0, 6));
+                    result.clone()
+                },
+                || caret.set(original),
+            );
+            assert_eq!(outcome, result);
+            assert_eq!(
+                caret.get(),
+                if outcome.is_err() { original } else { (0, 6) }
+            );
         }
     }
 

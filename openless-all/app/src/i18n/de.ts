@@ -7,6 +7,7 @@ export const de: typeof zhCN = {
       'Diktieren Sie einen Entwurf oder laden Sie den Zieltext, bearbeiten Sie ihn per Sprache und bestätigen Sie die Übernahme.',
     targetHint:
       'Setzen Sie den Cursor in das Zielfeld oder markieren Sie den zu bearbeitenden Text.',
+    androidTargetHint: 'Weisen Sie einer Overlay-Wischgeste die Sprachbearbeitung zu. Nehmen Sie in der Ziel-App auf und wischen Sie zur Vorschau. Nach der Bestätigung wird das ursprüngliche Feld aktualisiert.',
     startDraft: 'Entwurf diktieren',
     status: 'Status: {{phase}}',
     turns: 'Anweisungen: {{count}}',
@@ -2160,6 +2161,7 @@ export const de: typeof zhCN = {
         right: 'Nach rechts',
       },
       androidOverlayGestureAction: {
+        voice_edit: 'Sprachbearbeitung',
         none: 'Keine Aktion',
         quick_note: 'Schnellnotiz',
         translation: 'Übersetzung',

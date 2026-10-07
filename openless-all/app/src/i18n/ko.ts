@@ -11,6 +11,7 @@ export const ko: typeof zhCN = {
     description:
       '초안을 음성으로 입력하거나 대상 텍스트를 불러온 뒤 음성 지시로 편집하고 확인하여 입력란에 반영합니다.',
     targetHint: '대상 입력란에 커서를 놓거나 편집할 텍스트를 선택하세요.',
+    androidTargetHint: '오버레이 스와이프 동작에 음성 편집을 지정하세요. 대상 앱에서 녹음한 뒤 스와이프하면 미리보기가 열리며, 확인하면 원래 입력란에 반영됩니다.',
     startDraft: '초안 음성 입력 시작',
     status: '상태: {{phase}}',
     turns: '지시 횟수: {{count}}',
@@ -2058,6 +2059,7 @@ export const ko: typeof zhCN = {
         right: '오른쪽',
       },
       androidOverlayGestureAction: {
+        voice_edit: '음성 편집',
         none: '동작 없음',
         quick_note: '속기',
         translation: '번역',

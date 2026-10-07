@@ -135,6 +135,35 @@ assert.doesNotMatch(
   'voice edit replacement must never fall back to append/paste',
 );
 
+const captureTargetInternal = kotlinFunctionBody(
+  serviceSource,
+  'private fun captureSelectionTargetInternal(): String',
+);
+assert.match(
+  captureTargetInternal,
+  /capturedSelectionNode = AccessibilityNodeInfo\.obtain\(target\)/,
+  'target capture must retain the native node identity rather than only its text/window',
+);
+assert.match(
+  captureTargetInternal,
+  /packageName == this\.packageName/,
+  'voice edit must never capture a field in OpenLess itself',
+);
+const replaceTargetInternal = kotlinFunctionBody(
+  serviceSource,
+  'private fun performSelectionReplaceInternal(generation: Long, replacementText: String,): AccessibilityPasteResult',
+);
+assert.match(
+  replaceTargetInternal,
+  /captured\.matches\(target == capturedNode,/,
+  'writeback must compare the focused node against the retained native node identity',
+);
+assert.doesNotMatch(
+  replaceTargetInternal,
+  /ACTION_FOCUS/,
+  'writeback must reject another focused field rather than force focus back to a stale capture',
+);
+
 const receiverTargetBody = kotlinFunctionBody(receiverSource, 'ACTION_CAPTURE_SELECTION_TARGET ->');
 assert.match(
   receiverTargetBody,

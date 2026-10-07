@@ -11,6 +11,7 @@ export const ja: typeof zhCN = {
     description:
       '下書きを音声入力するか対象のテキストを読み込み、音声指示で編集してから確認して入力欄に反映します。',
     targetHint: '対象の入力欄にカーソルを置くか、編集するテキストを選択してください。',
+    androidTargetHint: 'オーバーレイのスワイプ操作に「音声編集」を設定してください。対象アプリで録音後にスワイプしてプレビューを開き、確認すると元の入力欄へ書き戻します。',
     startDraft: '下書きの音声入力を開始',
     status: '状態：{{phase}}',
     turns: '指示回数：{{count}}',
@@ -2073,6 +2074,7 @@ export const ja: typeof zhCN = {
         right: '右',
       },
       androidOverlayGestureAction: {
+        voice_edit: '音声編集',
         none: '操作なし',
         quick_note: '速記',
         translation: '翻訳',

@@ -212,26 +212,49 @@ pub(super) fn apply_voice_edit_target(
             } else {
                 pattern.DocumentRange().map_err(unavailable)?
             };
-            range.Select().map_err(unavailable)?;
-            if !uia
-                .CompareElements(&element, &uia.GetFocusedElement().map_err(unavailable)?)
-                .map_err(unavailable)?
-                .as_bool()
-            {
-                return Err("voiceEditTargetChanged".into());
-            }
-            if read_text(&element).map_err(unavailable)? != target.text {
-                return Err("voiceEditFieldChanged".into());
-            }
-            let selected = voice_edit_selection(&element, &target.text).map_err(unavailable)?;
+            let original_selection = pattern
+                .GetSelection()
+                .and_then(|ranges| ranges.GetElement(0))
+                .and_then(|range| range.Clone())
+                .map_err(unavailable)?;
             let expected = target
                 .selection_utf16
                 .filter(|(start, end)| start != end)
                 .unwrap_or((0, target.text.encode_utf16().count()));
-            if selected != Some(expected) && !(target.text.is_empty() && selected.is_none()) {
-                return Err("voiceEditTargetUnavailable".into());
-            }
-            insert(text)
+            super::write_with_selection_recovery(
+                || {
+                    range.Select().map_err(unavailable)?;
+                    if !uia
+                        .CompareElements(&element, &uia.GetFocusedElement().map_err(unavailable)?)
+                        .map_err(unavailable)?
+                        .as_bool()
+                    {
+                        return Err("voiceEditTargetChanged".into());
+                    }
+                    if read_text(&element).map_err(unavailable)? != target.text {
+                        return Err("voiceEditFieldChanged".into());
+                    }
+                    let selected =
+                        voice_edit_selection(&element, &target.text).map_err(unavailable)?;
+                    if selected != Some(expected) && !(target.text.is_empty() && selected.is_none())
+                    {
+                        return Err("voiceEditTargetUnavailable".into());
+                    }
+                    insert(text)
+                },
+                || {
+                    let current = uia
+                        .GetFocusedElement()
+                        .and_then(|focused| voice_edit_snapshot(&focused));
+                    let mut selected_target = target.clone();
+                    selected_target.selection_utf16 = Some(expected);
+                    if current.is_ok_and(|current| {
+                        voice_edit_target_matches(&selected_target, &current).is_ok()
+                    }) {
+                        let _ = original_selection.Select();
+                    }
+                },
+            )
         } else {
             let value = element
                 .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)

@@ -9,6 +9,7 @@ import {
   checkMicrophonePermission,
   getHotkeyStatus,
   getStartupSnapshot,
+  getVoiceEditState,
   getSettings,
   getPlatformCapabilities,
   handleWindowHotkeyEvent,
@@ -228,6 +229,16 @@ function ReadyApp({
           unlistenDismiss = dismissHandle;
           unlistenVoiceEditShow = voiceEditShowHandle;
           unlistenVoiceEditDismiss = voiceEditDismissHandle;
+          const current = await getVoiceEditState();
+          if (
+            !cancelled &&
+            current &&
+            current.phase !== 'completed' &&
+            current.phase !== 'cancelled'
+          ) {
+            setMobileQaOpen(false);
+            setMobileVoiceEditOpen(true);
+          }
         }
       } catch (error) {
         console.warn('[qa] mobile route listener setup failed', error);

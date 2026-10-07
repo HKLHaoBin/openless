@@ -892,6 +892,11 @@ impl Coordinator {
     ) -> Result<openless_core::VoiceEditSnapshot, String> {
         voice_edit_session::start(&self.inner).await
     }
+    pub(crate) async fn finalize_voice_edit_from_overlay(&self) -> Result<(), String> {
+        voice_edit_session::from_overlay(&self.inner).await?;
+        self.inner.host.show_voice_edit();
+        Ok(())
+    }
     pub(crate) async fn finish_voice_edit_dictation(
         &self,
         id: openless_core::SessionId,

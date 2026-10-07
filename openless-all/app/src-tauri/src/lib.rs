@@ -3044,6 +3044,12 @@ fn ensure_voice_edit_window<R: tauri::Runtime>(
 }
 
 pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    #[cfg(target_os = "android")]
+    if let Err(error) = crate::android::jni::android::with_android_env(|env, context| {
+        crate::android::jni::android::open_qa_host(env, context)
+    }) {
+        log::warn!("[voice-edit] failed to foreground WarmupActivity: {error}");
+    }
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let _ = app.emit_to("main", "voice-edit:show", serde_json::json!({}));

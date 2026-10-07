@@ -47,6 +47,29 @@ fn current_session(
 }
 
 pub(super) async fn start(inner: &Arc<Inner>) -> Result<VoiceEditSnapshot, String> {
+    start_with_recording(inner, None).await
+}
+
+pub(super) async fn from_overlay(inner: &Arc<Inner>) -> Result<VoiceEditSnapshot, String> {
+    let recording = inner.backend.snapshot().dictation;
+    if !matches!(
+        recording.phase,
+        openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording
+    ) || inner.backend.dictation_output_target() != Some(DictationOutputTarget::Undecided)
+    {
+        return Err("voiceEditInitialDictationUnavailable".into());
+    }
+    let recording_id = recording
+        .session_id
+        .ok_or_else(|| "voiceEditDictationUnavailable".to_string())?;
+    let snapshot = start_with_recording(inner, Some(recording_id)).await?;
+    finish_dictation(inner, snapshot.session_id).await
+}
+
+async fn start_with_recording(
+    inner: &Arc<Inner>,
+    existing_recording: Option<SessionId>,
+) -> Result<VoiceEditSnapshot, String> {
     if !inner.backend.get_preferences().voice_edit_enabled {
         return Err("voiceEditDisabled".into());
     }
@@ -101,14 +124,19 @@ pub(super) async fn start(inner: &Arc<Inner>) -> Result<VoiceEditSnapshot, Strin
             return Err("voiceEditSessionChanged".into());
         }
     }
-    let recording = inner
-        .backend
-        .start_dictation_with_options(DictationStartOptions {
-            insert_text: false,
-            output_target: DictationOutputTarget::ForegroundApp,
-            ..DictationStartOptions::default()
-        })
-        .await;
+    let recording = match existing_recording {
+        Some(id) => Ok(id),
+        None => {
+            inner
+                .backend
+                .start_dictation_with_options(DictationStartOptions {
+                    insert_text: false,
+                    output_target: DictationOutputTarget::VoiceEdit,
+                    ..DictationStartOptions::default()
+                })
+                .await
+        }
+    };
     let recording_id = match recording {
         Ok(id) => id,
         Err(error) => {
@@ -153,7 +181,14 @@ pub(super) async fn finish_dictation(
         host.finishing_initial_dictation = true;
         recording_id
     };
-    let result = inner.backend.stop_dictation_session(recording_id).await;
+    let result = inner
+        .backend
+        .stop_dictation_session_with_options(
+            Some(recording_id),
+            openless_core::DictationStopOptions::default(),
+            Some(DictationOutputTarget::VoiceEdit),
+        )
+        .await;
     release_recording(inner, id, recording_id);
     let result = match result {
         Ok(result) => result,
@@ -162,18 +197,26 @@ pub(super) async fn finish_dictation(
             return Err(error.to_string());
         }
     };
-    let mut host = inner.voice_edit_host.lock();
-    let session = current_session(&mut host, id)?;
-    session
-        .finish_dictation(non_empty_or_fallback(
+    let draft = {
+        let mut host = inner.voice_edit_host.lock();
+        let session = current_session(&mut host, id)?;
+        match session.finish_dictation(non_empty_or_fallback(
             &result.polished_text,
             &result.raw_text,
-        ))
-        .map_err(|e| e.to_string())?;
-    let snapshot = session.snapshot();
-    host.initial_raw_text = result.raw_text;
-    host.duration_ms = result.duration_ms;
-    Ok(snapshot)
+        )) {
+            Ok(()) => {
+                let snapshot = session.snapshot();
+                host.initial_raw_text = result.raw_text;
+                host.duration_ms = result.duration_ms;
+                Ok(snapshot)
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    };
+    if draft.is_err() {
+        let _ = cancel(inner, Some(id)).await;
+    }
+    draft
 }
 
 pub(super) async fn start_instruction(
@@ -190,7 +233,7 @@ pub(super) async fn start_instruction(
         .backend
         .start_dictation_with_options(DictationStartOptions {
             insert_text: false,
-            output_target: DictationOutputTarget::ForegroundApp,
+            output_target: DictationOutputTarget::VoiceEdit,
             ..DictationStartOptions::default()
         })
         .await
@@ -332,6 +375,8 @@ pub(super) async fn commit(inner: &Arc<Inner>, id: SessionId) -> Result<VoiceEdi
     let session = current_session(&mut host, id)?;
     if let Err(error) = outcome {
         let _ = session.recover_commit();
+        #[cfg(target_os = "android")]
+        inner.host.show_voice_edit();
         return Err(error);
     }
     session.complete_commit().map_err(|e| e.to_string())?;
@@ -491,12 +536,26 @@ fn apply_native_target(
     match target {
         #[cfg(target_os = "android")]
         VoiceEditNativeTarget::Android { generation } => {
-            let result = crate::android::replace_voice_edit_target(*generation, text)
-                .map_err(|error| format!("voiceEditReplaceFailed:{error}"))?;
-            if result == crate::android::accessibility::PASTE_RESULT_SUCCESS {
-                Ok(())
-            } else {
-                Err(format!("voiceEditReplaceFailed:{result}"))
+            let backgrounded = crate::android::jni::android::with_android_env(|env, context| {
+                crate::android::jni::android::background_voice_edit_host(env, context)
+            })
+            .map_err(|error| format!("voiceEditReplaceFailed:{error}"))?;
+            if !backgrounded {
+                return Err("voiceEditTargetUnavailable".into());
+            }
+            // Each accessibility request already has a 500 ms IPC timeout.
+            let retry_deadline = std::time::Instant::now() + std::time::Duration::from_millis(1000);
+            loop {
+                let result = crate::android::replace_voice_edit_target(*generation, text)
+                    .map_err(|error| format!("voiceEditReplaceFailed:{error}"))?;
+                if result == crate::android::accessibility::PASTE_RESULT_SUCCESS {
+                    return Ok(());
+                }
+                // Only temporary panel focus is retryable; rejected writes are never repeated.
+                if result != "NO_FOCUSED_EDITOR" || std::time::Instant::now() >= retry_deadline {
+                    return Err(format!("voiceEditReplaceFailed:{result}"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
         #[cfg(not(target_os = "android"))]

@@ -23,11 +23,18 @@ class OpenLessAccessibilitySelectionTest {
 
     @Test
     fun matchingRequiresSameTargetTextWindowAndRange() {
-        assertTrue(captured.matches("com.example.editor", 7, "hello world", 11, 6))
-        assertFalse(captured.matches("com.other.editor", 7, "hello world", 6, 11))
-        assertFalse(captured.matches("com.example.editor", 8, "hello world", 6, 11))
-        assertFalse(captured.matches("com.example.editor", 7, "hello other", 6, 11))
-        assertFalse(captured.matches("com.example.editor", 7, "hello world", 5, 11))
+        assertTrue(captured.matches(true, "com.example.editor", 7, "hello world", 11, 6))
+        assertFalse(captured.matches(true, "com.other.editor", 7, "hello world", 6, 11))
+        assertFalse(captured.matches(true, "com.example.editor", 8, "hello world", 6, 11))
+        assertFalse(captured.matches(true, "com.example.editor", 7, "hello other", 6, 11))
+        assertFalse(captured.matches(true, "com.example.editor", 7, "hello world", 5, 11))
+    }
+
+    @Test
+    fun identicalFieldsInTheSameWindowRequireTheCapturedNode() {
+        val emptyField = captured.copy(sourceText = "", selectionStart = 0, selectionEnd = 0)
+        assertTrue(emptyField.matches(true, "com.example.editor", 7, "", 0, 0))
+        assertFalse(emptyField.matches(false, "com.example.editor", 7, "", 0, 0))
     }
 
     @Test

@@ -454,6 +454,26 @@ pub(super) fn capture_voice_edit_target() -> Result<
     }
 }
 
+unsafe fn set_voice_edit_selection(element: AxUiElementRef, range: CFRange) -> Result<(), String> {
+    let attribute = cfstring_from_static(b"AXSelectedTextRange\0")
+        .ok_or_else(|| "voiceEditTargetUnavailable".to_string())?;
+    let value = AXValueCreate(
+        K_AX_VALUE_CF_RANGE_TYPE,
+        &range as *const _ as *const c_void,
+    );
+    if value.is_null() {
+        CFRelease(attribute);
+        return Err("voiceEditTargetUnavailable".into());
+    }
+    let selected = AXUIElementSetAttributeValue(element, attribute, value) == AX_ERROR_SUCCESS;
+    CFRelease(attribute);
+    CFRelease(value);
+    if !selected || copy_selected_range(element) != Some(range) {
+        return Err("voiceEditTargetUnavailable".into());
+    }
+    Ok(())
+}
+
 pub(super) fn apply_voice_edit_target(
     target: &VoiceEditTarget,
     text: &str,
@@ -483,35 +503,40 @@ pub(super) fn apply_voice_edit_target(
                 length: target.text.encode_utf16().count() as isize,
             }
         };
-        let attribute = cfstring_from_static(b"AXSelectedTextRange\0")
-            .ok_or_else(|| "voiceEditTargetUnavailable".to_string())?;
-        let value = AXValueCreate(
-            K_AX_VALUE_CF_RANGE_TYPE,
-            &range as *const _ as *const c_void,
-        );
-        if value.is_null() {
-            CFRelease(attribute);
-            return Err("voiceEditTargetUnavailable".into());
-        }
-        let selected = AXUIElementSetAttributeValue(element, attribute, value) == AX_ERROR_SUCCESS;
-        CFRelease(attribute);
-        CFRelease(value);
-        if !selected || copy_selected_range(element) != Some(range) {
-            return Err("voiceEditTargetUnavailable".into());
-        }
-        let GatedElement::Ready(current) = focused_element_passing_the_gate(voice_edit_gate())
-        else {
-            return Err("voiceEditTargetChanged".into());
-        };
-        let same = CFEqual(current as CFTypeRef, element as CFTypeRef) != 0;
-        CFRelease(current as CFTypeRef);
-        if !same {
-            return Err("voiceEditTargetChanged".into());
-        }
-        if voice_edit_text(element).as_deref() != Some(target.text.as_str()) {
-            return Err("voiceEditFieldChanged".into());
-        }
-        insert(text)
+        super::write_with_selection_recovery(
+            || {
+                set_voice_edit_selection(element, range)?;
+                let GatedElement::Ready(current) =
+                    focused_element_passing_the_gate(voice_edit_gate())
+                else {
+                    return Err("voiceEditTargetChanged".into());
+                };
+                let same = CFEqual(current as CFTypeRef, element as CFTypeRef) != 0;
+                CFRelease(current as CFTypeRef);
+                if !same {
+                    return Err("voiceEditTargetChanged".into());
+                }
+                if voice_edit_text(element).as_deref() != Some(target.text.as_str()) {
+                    return Err("voiceEditFieldChanged".into());
+                }
+                insert(text)
+            },
+            || {
+                let GatedElement::Ready(current) =
+                    focused_element_passing_the_gate(voice_edit_gate())
+                else {
+                    return;
+                };
+                let same = CFEqual(current as CFTypeRef, element as CFTypeRef) != 0;
+                CFRelease(current as CFTypeRef);
+                if same
+                    && voice_edit_text(element).as_deref() == Some(target.text.as_str())
+                    && copy_selected_range(element) == Some(range)
+                {
+                    let _ = set_voice_edit_selection(element, target.selection_utf16);
+                }
+            },
+        )
     }
 }
 

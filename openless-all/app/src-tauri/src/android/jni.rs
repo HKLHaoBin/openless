@@ -842,7 +842,7 @@ pub mod android {
     }
 
     /// Bring the single tracked Tauri host (WarmupActivity) to the front for
-    /// the embedded mobile QA panel. Never starts bare MainActivity.
+    /// embedded mobile panels. Never starts bare MainActivity.
     pub fn open_qa_host<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
@@ -853,6 +853,20 @@ pub mod android {
             "com.openless.app.OpenLessBackendWarmupActivity",
             "openForQa",
             "(Landroid/content/Context;)V",
+            &[JValue::Object(context)],
+        )
+    }
+
+    pub fn background_voice_edit_host<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<bool, String> {
+        call_static_bool_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessBackendWarmupActivity",
+            "backgroundForVoiceEdit",
+            "(Landroid/content/Context;)Z",
             &[JValue::Object(context)],
         )
     }

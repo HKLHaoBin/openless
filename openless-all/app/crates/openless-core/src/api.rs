@@ -6432,6 +6432,7 @@ impl OpenLessBackend {
         engine_result: &crate::ports::EngineResult,
     ) {
         if context.output_target == DictationOutputTarget::Qa
+            || context.output_target == DictationOutputTarget::VoiceEdit
             || context.output_target == DictationOutputTarget::CloudNote
             || self.is_cloud_note(result.session_id)
         {
@@ -11050,6 +11051,65 @@ mod tests {
         assert_eq!(context.output_target, DictationOutputTarget::Qa);
         assert!(!context.insertion.enabled);
         assert!(!context.uses_llm_polisher());
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn voice_edit_handoff_keeps_polish_without_inserting_or_recording_intermediate_history() {
+        let data_dir = TestDataDir::new("voice-edit-dictation-handoff");
+        let engine =
+            crate::testing::FixtureDictationEngine::successful("raw draft", "polished draft");
+        let backend =
+            backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine.clone()));
+        let mut preferences = backend.get_preferences();
+        preferences.streaming_insert = true;
+        backend.set_preferences(preferences).unwrap();
+        backend.start().await.unwrap();
+        let session = backend
+            .start_dictation_with_options(DictationStartOptions {
+                output_target: DictationOutputTarget::Undecided,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let result = backend
+            .stop_dictation_session_with_options(
+                Some(session),
+                DictationStopOptions::default(),
+                Some(DictationOutputTarget::VoiceEdit),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.raw_text, "raw draft");
+        assert_eq!(result.polished_text, "polished draft");
+        assert_eq!(result.inserted, crate::types::InsertStatus::NotRequested);
+        assert!(backend.list_history().unwrap().is_empty());
+        let contexts = engine.contexts();
+        let context = contexts.last().unwrap();
+        assert_eq!(context.output_target, DictationOutputTarget::VoiceEdit);
+        assert!(!context.insertion.enabled);
+        assert!(!context.insertion.streaming);
+        assert!(context.uses_llm_polisher());
+        // Later instructions use the same output contract without another foreground handoff.
+        let instruction = backend
+            .start_dictation_with_options(DictationStartOptions {
+                insert_text: false,
+                output_target: DictationOutputTarget::VoiceEdit,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            backend
+                .stop_dictation_session(instruction)
+                .await
+                .unwrap()
+                .inserted,
+            crate::types::InsertStatus::NotRequested
+        );
+        let contexts = engine.contexts();
+        assert!(!contexts.last().unwrap().insertion.streaming);
+        assert!(backend.list_history().unwrap().is_empty());
         backend.shutdown().await.unwrap();
     }
 
