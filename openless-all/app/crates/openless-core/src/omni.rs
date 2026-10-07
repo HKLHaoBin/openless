@@ -588,9 +588,14 @@ mod tests {
     }
 
     #[test]
-    fn omni_body_maps_reasoning_effort_for_openai_gpt6_api_ids() {
-        for model in ["gpt-6-luna", "gpt-6.1-sol"] {
-            for (thinking_enabled, expected) in [(false, "low"), (true, "medium")] {
+    fn omni_body_maps_reasoning_effort_for_openai_model_effort_tiers() {
+        for (model, disabled_expected) in [
+            ("gpt-5.6-sol", "none"),
+            ("gpt-6-luna", "none"),
+            ("gpt-6-astra", "low"),
+            ("gpt-6.1-sol", "low"),
+        ] {
+            for (thinking_enabled, expected) in [(false, disabled_expected), (true, "medium")] {
                 let mut omni = config();
                 omni.model = model.into();
                 omni.thinking_enabled = thinking_enabled;

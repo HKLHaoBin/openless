@@ -2057,11 +2057,44 @@ pub(crate) fn openai_model_omits_custom_temperature(model: &str) -> bool {
     openai_model_is_gpt5_family(model) || normalize_openai_model_id(model).starts_with("gpt-6")
 }
 
+fn openai_model_matches_family(model: &str, family: &str) -> bool {
+    model == family
+        || model
+            .strip_prefix(family)
+            .is_some_and(|suffix| suffix.starts_with('-'))
+}
+
+fn openai_model_supports_none_reasoning_effort(model: &str) -> bool {
+    if model.contains("-pro") {
+        return false;
+    }
+
+    if model == "gpt-5.6" {
+        return true;
+    }
+
+    [
+        "gpt-5.4",
+        "gpt-5.5",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-6-sol",
+        "gpt-6-luna",
+    ]
+    .iter()
+    .any(|family| openai_model_matches_family(model, family))
+}
+
 fn openai_chat_reasoning_effort(model: &str, thinking_enabled: bool) -> Option<&'static str> {
     let normalized = normalize_openai_model_id(model);
 
     if normalized.starts_with("gpt-5-pro") {
         return Some("high");
+    }
+
+    if !thinking_enabled && openai_model_supports_none_reasoning_effort(&normalized) {
+        return Some("none");
     }
 
     if normalized.starts_with("o1")
@@ -3399,29 +3432,67 @@ mod tests {
     #[test]
     fn openai_chat_body_maps_reasoning_effort_for_openai_reasoning_models() {
         for model in [
-            "gpt-5-mini",
+            "gpt-5.4",
+            "gpt-5.5",
+            "gpt-5.6",
             "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-6-sol",
             "gpt-6-luna",
+            "gpt-6-astra",
             "gpt-6.1-sol",
-            "openai/gpt-6.1-sol",
+            "gpt-5-mini",
+            "openai/gpt-6-luna",
         ] {
-            for (thinking_enabled, expected) in [(false, "low"), (true, "medium")] {
-                let provider = OpenAICompatibleLLMProvider::new(
-                    OpenAICompatibleConfig::new(
-                        "openai",
-                        "OpenAI",
-                        "https://api.openai.com/v1",
-                        "k",
-                        model,
-                    )
-                    .with_thinking_enabled(thinking_enabled),
-                );
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "openai",
+                    "OpenAI",
+                    "https://api.openai.com/v1",
+                    "k",
+                    model,
+                )
+                .with_thinking_enabled(true),
+            );
 
-                let body =
-                    provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
-                assert_eq!(body["reasoning_effort"], expected, "{model}");
-            }
+            assert_eq!(body["reasoning_effort"], "medium", "{model}");
+        }
+
+        for (model, expected) in [
+            ("gpt-5.4", "none"),
+            ("gpt-5.5", "none"),
+            ("gpt-5.6", "none"),
+            ("gpt-5.6-sol", "none"),
+            ("gpt-5.6-terra", "none"),
+            ("gpt-5.6-luna", "none"),
+            ("gpt-6-sol", "none"),
+            ("gpt-6-luna", "none"),
+            ("openai/gpt-6-luna", "none"),
+            ("gpt-5-mini", "low"),
+            ("gpt-5.6-pro", "low"),
+            ("gpt-5.60-sol", "low"),
+            ("gpt-5.6-cyber", "low"),
+            ("gpt-6-astra", "low"),
+            ("gpt-6.1-sol", "low"),
+            ("gpt-6-solar", "low"),
+        ] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "openai",
+                    "OpenAI",
+                    "https://api.openai.com/v1",
+                    "k",
+                    model,
+                )
+                .with_thinking_enabled(false),
+            );
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["reasoning_effort"], expected, "{model}");
         }
     }
 
