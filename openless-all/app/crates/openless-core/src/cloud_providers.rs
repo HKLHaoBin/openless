@@ -1831,14 +1831,12 @@ impl DictationEngine for SharedOmniDictationEngine {
             let mut capture = Some(capture);
             let duplicate_pending = {
                 let mut pending = pending_captures.lock();
-                if pending.contains_key(&session_id) {
-                    true
-                } else {
-                    pending.insert(
-                        session_id,
-                        capture.take().expect("Omni capture was not consumed"),
-                    );
+                if let std::collections::hash_map::Entry::Vacant(entry) = pending.entry(session_id)
+                {
+                    entry.insert(capture.take().expect("Omni capture was not consumed"));
                     false
+                } else {
+                    true
                 }
             };
             if duplicate_pending {
