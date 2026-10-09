@@ -42,7 +42,10 @@ function refreshTauriReadiness(): void {
   resetPlatformCapabilitiesCache();
 }
 
-if (globalThis.window !== undefined) {
+if (
+  globalThis.window !== undefined &&
+  typeof globalThis.window.addEventListener === 'function'
+) {
   globalThis.window.addEventListener(TAURI_READY_EVENT, refreshTauriReadiness);
 }
 
