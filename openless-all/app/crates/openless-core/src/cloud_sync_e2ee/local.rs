@@ -947,6 +947,21 @@ fn exclusive_create(path: &Path, bytes: &[u8]) -> SyncResult<bool> {
     }
 }
 
+fn log_local_failure(stage: &'static str, failure: &crate::BackendError) {
+    let code = match failure
+        .details
+        .as_ref()
+        .and_then(|details| details.get("reason"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("secure_storage_denied") => "secure_storage_denied",
+        Some("recovery_required") => "recovery_required",
+        Some("secure_random_unavailable") => "secure_random_unavailable",
+        _ => "local_storage_unavailable",
+    };
+    log::warn!("[e2ee-local] stage={stage} code={code}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1007,19 +1022,4 @@ mod tests {
         assert!(!root.join(".origin-migration-v1").exists());
         let _ = fs::remove_dir_all(root);
     }
-}
-
-fn log_local_failure(stage: &'static str, failure: &crate::BackendError) {
-    let code = match failure
-        .details
-        .as_ref()
-        .and_then(|details| details.get("reason"))
-        .and_then(serde_json::Value::as_str)
-    {
-        Some("secure_storage_denied") => "secure_storage_denied",
-        Some("recovery_required") => "recovery_required",
-        Some("secure_random_unavailable") => "secure_random_unavailable",
-        _ => "local_storage_unavailable",
-    };
-    log::warn!("[e2ee-local] stage={stage} code={code}");
 }

@@ -208,6 +208,7 @@ impl Drop for SignOutGuard<'_> {
 pub(crate) struct EncryptedSyncService(Arc<Shared>);
 
 impl EncryptedSyncService {
+    #[cfg(test)]
     pub(crate) fn new(
         config: SyncServiceConfig,
         marketplace: Arc<MarketplaceService>,
