@@ -984,6 +984,8 @@ struct CredsLlmEntry {
     maxTokens: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinkingBudget: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    serviceTier: Option<String>,
 }
 
 impl CredsLlmEntry {
@@ -994,6 +996,7 @@ impl CredsLlmEntry {
             MESSAGES_THINKING_ACCOUNT => Ok(&mut self.messagesThinking),
             MAX_TOKENS_ACCOUNT => Ok(&mut self.maxTokens),
             THINKING_BUDGET_ACCOUNT => Ok(&mut self.thinkingBudget),
+            SERVICE_TIER_ACCOUNT => Ok(&mut self.serviceTier),
             _ => anyhow::bail!("unsupported LLM protocol option"),
         }
     }
@@ -1019,6 +1022,7 @@ impl CredsLlmEntry {
             && self.messagesThinking.is_none()
             && self.maxTokens.is_none()
             && self.thinkingBudget.is_none()
+            && self.serviceTier.is_none()
             && self
                 .extraHeaders
                 .as_ref()
@@ -3164,7 +3168,8 @@ fn export_sync_credentials_root(
         ));
         let mut values = accounts!(entry, "ark.api_key"=>apiKey, "ark.endpoint"=>baseURL, "ark.model_id"=>model,
             "ark.request_format"=>requestFormat, "ark.messages_thinking"=>messagesThinking,
-            "ark.max_tokens"=>maxTokens, "ark.thinking_budget"=>thinkingBudget);
+            "ark.max_tokens"=>maxTokens, "ark.thinking_budget"=>thinkingBudget,
+            "ark.service_tier"=>serviceTier);
         if let Some(value) = entry.temperature {
             values.insert("ark.temperature".into(), value.to_string());
         }
@@ -3433,6 +3438,7 @@ fn apply_sync_credentials_root(
                     "ark.messages_thinking",
                     "ark.max_tokens",
                     "ark.thinking_budget",
+                    "ark.service_tier",
                 ] {
                     if let Some(value) = values.get(key) {
                         protocol.apply(key, value)?;
@@ -3465,6 +3471,7 @@ fn apply_sync_credentials_root(
                         messagesThinking: value("ark.messages_thinking"),
                         maxTokens: value("ark.max_tokens"),
                         thinkingBudget: value("ark.thinking_budget"),
+                        serviceTier: value("ark.service_tier"),
                     },
                 );
                 if channel.active {
@@ -4349,7 +4356,7 @@ mod tests {
         use openless_core::llm_protocol::*;
         let mut root = CredsRoot::default();
         let entry = root.providers.llm.entry("channel-b".into()).or_default();
-        let values = ["messages", "budget", "8192", "2048"];
+        let values = ["messages", "budget", "8192", "2048", "fast"];
         for (account, value) in CONFIG_ACCOUNTS.into_iter().zip(values) {
             *entry.protocol_option(account).unwrap() = Some(value.into());
         }
@@ -5721,6 +5728,7 @@ mod encrypted_sync_tests {
                 messagesThinking: Some("adaptive".into()),
                 maxTokens: Some("4096".into()),
                 thinkingBudget: None,
+                serviceTier: Some("fast".into()),
             },
         );
         root.omni.active = "custom".into();

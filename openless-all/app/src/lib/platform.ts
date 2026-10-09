@@ -41,6 +41,7 @@ const MOBILE_UNAVAILABLE: PlatformCapabilities = {
   supportsLocalQwen3Mlx: false,
   supportsInAppDictation: false,
   supportsAutoUpdate: false,
+  supportsVoiceEdit: false,
 };
 
 export function isAndroid(): boolean {
@@ -72,6 +73,7 @@ export function inferPlatformCapabilities(): PlatformCapabilities {
       supportsLocalQwen3Mlx: false,
       supportsInAppDictation: true,
       supportsAutoUpdate: true,
+      supportsVoiceEdit: true,
     };
   }
 
@@ -92,6 +94,7 @@ export function inferPlatformCapabilities(): PlatformCapabilities {
     supportsLocalQwen3Mlx: os === 'mac',
     supportsInAppDictation: false,
     supportsAutoUpdate: true,
+    supportsVoiceEdit: true,
   };
 }
 
