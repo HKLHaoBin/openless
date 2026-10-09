@@ -5764,7 +5764,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     paint.color = if (accent == null) {
                         color
                     } else {
-                        Color.argb(processingDotAlphas[index], Color.red(accent), Color.green(accent), Color.blue(accent))
+                        Color.argb(
+                            processingDotAlphas[index % processingDotAlphas.size],
+                            Color.red(accent),
+                            Color.green(accent),
+                            Color.blue(accent),
+                        )
                     }
                     canvas.drawCircle(x, y, dotRadius, paint)
                 }

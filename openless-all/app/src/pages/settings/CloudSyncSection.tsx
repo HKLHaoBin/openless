@@ -6,8 +6,8 @@ import { Modal } from '../../components/ui/Modal';
 import { Btn, Card } from '../_atoms';
 import { Toggle } from './shared';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
-import { marketplaceAuthStatus, readCredential, setCredential } from '../../lib/ipc';
-import { isTauri } from '../../lib/ipc/shared';
+import { marketplaceAuthStatus } from '../../lib/ipc';
+import { isTauriNow } from '../../lib/ipc/shared';
 import {
   CLOUD_SYNC_E2EE_CONSENT_VERSION as CONSENT_VERSION,
   cloudSyncE2eeStatus,
@@ -24,6 +24,8 @@ import {
   cloudSyncE2eeDeleteRemote,
   cloudSyncE2eeSignOut,
   cloudSyncE2eeSignInWithToken,
+  cloudSyncE2eeGetCustomServerConfig,
+  cloudSyncE2eeSetCustomServerConfig,
   mirrorEncryptedSyncUiPreferences,
   encryptedSyncScope,
   encryptedSyncErrorKey,
@@ -38,9 +40,6 @@ import {
   type EncryptedSyncRestoreEvent,
   type SyncConflictChoice,
 } from '../../lib/ipc/cloud-sync-e2ee';
-
-// Must match CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT in src-tauri/src/commands/credentials.rs.
-const CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT = 'cloud_sync.custom_token';
 
 type Intent = 'enable' | 'unlock' | 'restore';
 type Dialog =
@@ -150,16 +149,6 @@ export function CloudSyncSection() {
   const loginHint = prefs?.marketplaceDevLogin?.trim() ?? '';
   const [customServerOrigin, setCustomServerOrigin] = useState('');
   const [customServerToken, setCustomServerToken] = useState('');
-  useEffect(() => {
-    setCustomServerOrigin(prefs?.syncCustomServerOrigin ?? '');
-  }, [prefs?.syncCustomServerOrigin]);
-  useEffect(() => {
-    // The token lives in the OS secure-credential store (same tier as the
-    // GitHub token), not in plain preferences — load it separately.
-    readCredential(CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT)
-      .then((value) => setCustomServerToken(value ?? ''))
-      .catch(() => setCustomServerToken(''));
-  }, []);
   const customServerInputStyle = {
     width: '100%',
     boxSizing: 'border-box' as const,
@@ -194,6 +183,19 @@ export function CloudSyncSection() {
       if (!alive.current || request !== loadSequence.current) return;
       setAuthSignedIn(auth.signedIn);
       acceptStatus(next);
+      if (!isTauriNow()) {
+        setCustomServerOrigin('');
+        setCustomServerToken('');
+        return;
+      }
+      try {
+        const customConfig = await cloudSyncE2eeGetCustomServerConfig();
+        if (!alive.current || request !== loadSequence.current) return;
+        setCustomServerOrigin(customConfig?.origin ?? '');
+        setCustomServerToken('');
+      } catch (error) {
+        if (alive.current && request === loadSequence.current) showError(error);
+      }
     } catch (error) {
       if (alive.current && request === loadSequence.current) showError(error);
     } finally {
@@ -274,7 +276,7 @@ export function CloudSyncSection() {
     window.addEventListener('openless:sync-ui-persistence-failed', uiPersistenceFailed);
     void (async () => {
       try {
-        if (isTauri) {
+        if (isTauriNow()) {
           const { listen } = await import('@tauri-apps/api/event');
           for (const [name, kind] of [
             ['cloud-sync-e2ee:state', 'state'],
@@ -401,7 +403,11 @@ export function CloudSyncSection() {
       const next = await request();
       if (!valid() || !acceptStatus(next)) return;
       if (signOut) {
-        setAuthSignedIn(false);
+        const auth = await marketplaceAuthStatus();
+        if (!valid()) return;
+        setAuthSignedIn(auth.signedIn);
+        setCustomServerOrigin('');
+        setCustomServerToken('');
         await refresh();
       }
       if (next.syncState === 'conflict') {
@@ -498,6 +504,7 @@ export function CloudSyncSection() {
     status?.authState !== 'expired' &&
     status?.syncState !== 'sign_in_required' &&
     (status?.authState === 'signed_in' || authSignedIn);
+  const syncSignedIn = status?.authState === 'signed_in';
   const working = busy || status?.syncState === 'syncing';
   const unlocked = status?.keyState === 'unlocked';
   const available = status !== null;
@@ -579,13 +586,13 @@ export function CloudSyncSection() {
           <Btn
             variant="primary"
             icon="user"
-            disabled={!isTauri || !available || working}
+            disabled={!isTauriNow() || !available || working}
             onClick={() => setShowLogin(true)}
           >
             {t('cloudSyncE2ee.signIn')}
           </Btn>
         )}
-        {!loading && !signedIn && (
+        {!loading && !syncSignedIn && (
           <div
             className="ol-cloud-sync-account"
             style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}
@@ -618,18 +625,18 @@ export function CloudSyncSection() {
               variant="blue"
               disabled={working}
               onClick={() => {
+                const origin = customServerOrigin.trim();
                 const token = customServerToken.trim();
+                setNotice(null);
                 setBusy(true);
                 void (async () => {
-                  await Promise.all([
-                    updatePrefs((value) => ({
-                      ...value,
-                      syncCustomServerOrigin: customServerOrigin.trim() || null,
-                    })),
-                    setCredential(CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT, token),
-                    refresh(),
-                  ]);
-                  if (token) {
+                  const saved = await cloudSyncE2eeSetCustomServerConfig(
+                    token ? { origin, token } : { origin },
+                  );
+                  if (!alive.current) return;
+                  setCustomServerOrigin(saved?.origin ?? '');
+                  setCustomServerToken('');
+                  if (saved) {
                     acceptStatus(await cloudSyncE2eeSignInWithToken());
                   } else {
                     await load();

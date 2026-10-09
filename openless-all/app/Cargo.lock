@@ -3690,6 +3690,7 @@ dependencies = [
  "unicode-normalization",
  "url",
  "uuid",
+ "windows",
  "zeroize",
  "zip",
 ]

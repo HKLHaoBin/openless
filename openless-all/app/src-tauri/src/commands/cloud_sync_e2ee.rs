@@ -201,6 +201,27 @@ pub async fn cloud_sync_e2ee_sign_in_with_token(
 }
 
 #[tauri::command]
+pub async fn cloud_sync_e2ee_get_custom_server_config(
+    window: tauri::WebviewWindow,
+    core: CoreState<'_>,
+) -> Result<Option<EncryptedSyncCustomServerConfig>, BackendError> {
+    require_settings_window(&window)?;
+    core.cloud_sync_e2ee_get_custom_server_config().await
+}
+
+#[tauri::command]
+pub async fn cloud_sync_e2ee_set_custom_server_config(
+    window: tauri::WebviewWindow,
+    core: CoreState<'_>,
+    origin: String,
+    token: Option<String>,
+) -> Result<Option<EncryptedSyncCustomServerConfig>, BackendError> {
+    require_settings_window(&window)?;
+    core.cloud_sync_e2ee_set_custom_server_config(origin, token)
+        .await
+}
+
+#[tauri::command]
 pub async fn cloud_sync_e2ee_begin_sign_in(
     window: tauri::WebviewWindow,
     core: CoreState<'_>,

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CloudIcon, XIcon } from 'lucide-react';
-import { isTauri } from '../lib/ipc/shared';
+import { isTauriNow, TAURI_READY_EVENT } from '../lib/ipc/shared';
 import { cloudSyncE2eeClaimSetupPrompt } from '../lib/ipc/cloud-sync-e2ee';
 import { CloudSyncSection } from '../pages/settings/CloudSyncSection';
 import { Modal, PresenceModal } from './ui/Modal';
@@ -20,6 +20,19 @@ const PROMPT_EVENTS = new Set([
   'permission_changed',
 ]);
 
+function useTauriReady() {
+  const [ready, setReady] = useState(isTauriNow());
+
+  useEffect(() => {
+    const update = () => setReady(isTauriNow());
+    update();
+    window.addEventListener(TAURI_READY_EVENT, update);
+    return () => window.removeEventListener(TAURI_READY_EVENT, update);
+  }, []);
+
+  return ready;
+}
+
 /** Core owns eligibility and the durable once-per-installation claim. */
 export function CloudSyncSetupPrompt({
   blocked,
@@ -29,12 +42,13 @@ export function CloudSyncSetupPrompt({
   onSetup: () => void;
 }) {
   const { t } = useTranslation();
+  const nativeReady = useTauriReady();
   const [open, setOpen] = useState(false);
   const checkRef = useRef(0);
   const focusRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (!isTauri || blocked) return;
+    if (!nativeReady || blocked) return;
     let cancelled = false;
     let inFlight = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -99,7 +113,7 @@ export function CloudSyncSetupPrompt({
       window.removeEventListener('blur', invalidate);
       document.removeEventListener('visibilitychange', eligibilityChanged);
     };
-  }, [blocked]);
+  }, [blocked, nativeReady]);
 
   useEffect(() => {
     if (!open || blocked) return;
@@ -182,13 +196,14 @@ export function CloudSyncSetupPrompt({
 /** Available before API-key setup. Opening this never enables sync or uploads. */
 export function CloudSyncWelcome() {
   const { t } = useTranslation();
+  const nativeReady = useTauriReady();
   const [open, setOpen] = useState(false);
   return (
     <>
       <button
         type="button"
         className="ol-tool-button"
-        disabled={!isTauri}
+        disabled={!nativeReady}
         onClick={() => setOpen(true)}
         style={{ position: 'fixed', top: 18, right: 18, zIndex: 10 }}
       >

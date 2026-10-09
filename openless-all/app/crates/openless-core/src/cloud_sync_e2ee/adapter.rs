@@ -29,20 +29,35 @@ pub(crate) fn build(
     events: crate::events::BackendEventPublisher,
     tasks: Arc<dyn crate::TaskSpawner>,
 ) -> SyncResult<(super::EncryptedSyncService, Arc<CoreSyncStore>)> {
-    let origin = url::Url::parse(&config.service_origin)
-        .map_err(|_| super::error("unsupported_protocol"))?;
-    if origin.scheme() != "https"
-        || !origin.username().is_empty()
-        || origin.password().is_some()
-        || origin.path() != "/"
-        || origin.query().is_some()
-        || origin.fragment().is_some()
-        || data_dir.as_os_str().is_empty()
-    {
+    let origin =
+        crate::cloud_sync_e2ee_protocol::transport::canonicalize_origin(&config.service_origin)
+            .map_err(|_| super::error("unsupported_protocol"))?;
+    if data_dir.as_os_str().is_empty() {
         return Err(super::error("unsupported_protocol"));
     }
-    let origin = origin.origin().ascii_serialization();
     let root = data_dir.join("encrypted-sync");
+    let configured_legacy_origin = repositories
+        .preferences
+        .get()
+        .sync_custom_server_origin
+        .and_then(|legacy| {
+            crate::cloud_sync_e2ee_protocol::transport::canonicalize_origin(&legacy).ok()
+        })
+        .filter(|legacy| legacy != &origin);
+    // Before the stable local identity was introduced, the local origin was fixed
+    // at construction while the custom-server preference could change at runtime.
+    // Probe both candidates during startup; the ciphertext, not the mutable
+    // preference, identifies which origin protected the existing records.
+    let legacy_origins = configured_legacy_origin
+        .clone()
+        .map(|legacy| {
+            let mut origins = vec![legacy];
+            if origins[0] != origin {
+                origins.push(origin.clone());
+            }
+            origins
+        })
+        .unwrap_or_default();
     log::error!(
         "[e2ee-adapter] build start data_dir={} root={}",
         data_dir.display(),
@@ -73,12 +88,42 @@ pub(crate) fn build(
         arch: std::env::consts::ARCH.into(),
         app_version: config.app_version,
     };
+    let local_root = root.join("protected");
     let local = LocalStorage::new(
-        root.join("protected"),
+        local_root.clone(),
         origin.clone(),
-        device_id,
+        device_id.clone(),
         credentials.clone(),
     );
+    let mut legacy_local = legacy_origins
+        .iter()
+        .cloned()
+        .map(|legacy_origin| {
+            LocalStorage::new(
+                local_root.clone(),
+                legacy_origin,
+                device_id.clone(),
+                credentials.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    if has_legacy_root_ciphertext(&root)? {
+        let mut legacy_root_origins = legacy_origins;
+        if !legacy_root_origins
+            .iter()
+            .any(|candidate| candidate == &origin)
+        {
+            legacy_root_origins.push(origin.clone());
+        }
+        legacy_local.extend(legacy_root_origins.into_iter().map(|legacy_origin| {
+            LocalStorage::new(
+                root.clone(),
+                legacy_origin,
+                device_id.clone(),
+                credentials.clone(),
+            )
+        }));
+    }
     log::error!("[e2ee-adapter] stage=store_new");
     let credential_store_for_service = credentials.clone();
     let store = Arc::new(
@@ -97,13 +142,14 @@ pub(crate) fn build(
         })?,
     );
     log::error!("[e2ee-adapter] stage=store_ok");
-    let service = super::EncryptedSyncService::new(
+    let service = super::EncryptedSyncService::new_with_legacy(
         super::SyncServiceConfig {
             origin,
             github_client_id,
         },
         marketplace,
         local,
+        legacy_local,
         store.clone(),
         credential_store_for_service,
         events,
@@ -117,6 +163,13 @@ pub(crate) fn load_device_id(root: &Path) -> SyncResult<String> {
         Ok(value) => value,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Never invent another keyring/AAD binding for existing ciphertext.
+            if has_legacy_root_ciphertext(root)? {
+                log::error!(
+                    "[e2ee-adapter] device-id missing but legacy root ciphertext is present under {}; recovery required",
+                    root.display()
+                );
+                return Err(super::error("recovery_required"));
+            }
             for entry in std::fs::read_dir(root).map_err(|error| {
                 log::error!(
                     "[e2ee-adapter] read encrypted-sync root failed path={} err={error}",
@@ -190,6 +243,25 @@ pub(crate) fn load_device_id(root: &Path) -> SyncResult<String> {
         super::error("recovery_required")
     })?;
     Ok(device_id)
+}
+
+fn has_legacy_root_ciphertext(root: &Path) -> SyncResult<bool> {
+    let entries = std::fs::read_dir(root).map_err(|error| {
+        log::error!(
+            "[e2ee-adapter] inspect legacy encrypted-sync root failed path={} err={error}",
+            root.display()
+        );
+        super::error("local_storage_unavailable")
+    })?;
+    for entry in entries {
+        let path = entry
+            .map_err(|_| super::error("local_storage_unavailable"))?
+            .path();
+        if path.is_file() && path.extension().is_some_and(|extension| extension == "enc") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 impl ProtectedExtensionStore for LocalStorage {
@@ -302,6 +374,19 @@ impl SyncServiceData for CoreSyncStore {
     fn recover(&self) -> BoxFuture<'_, SyncResult<()>> {
         Box::pin(async move { self.recover_registered().await.map_err(document_error) })
     }
+    fn migrate_legacy_origin(
+        &self,
+        legacy: Arc<dyn crate::cloud_sync_e2ee_store::ProtectedExtensionStore>,
+        legacy_origin: String,
+        stable_origin: String,
+        current_scope: Option<SyncScope>,
+    ) -> BoxFuture<'_, SyncResult<()>> {
+        Box::pin(async move {
+            self.migrate_legacy_origin(legacy, &legacy_origin, &stable_origin, current_scope)
+                .await
+                .map_err(document_error)
+        })
+    }
     fn baseline(
         &self,
         scope: SyncScope,
@@ -319,6 +404,9 @@ impl SyncServiceData for CoreSyncStore {
     }
     fn device(&self) -> SourceDevice {
         CoreSyncStore::device(self)
+    }
+    fn recovery_scopes(&self) -> SyncResult<Vec<SyncScope>> {
+        CoreSyncStore::recovery_scopes(self).map_err(document_error)
     }
     fn custom_server_origin(&self) -> Option<String> {
         CoreSyncStore::custom_server_origin(self)

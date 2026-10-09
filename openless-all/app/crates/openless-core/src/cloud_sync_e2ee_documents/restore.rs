@@ -111,6 +111,47 @@ impl JournalProtector for CryptoJournalProtector {
     }
 }
 
+pub(crate) fn migrate_sealed_journal(
+    old_scope: &SyncScope,
+    new_scope: &SyncScope,
+    sealed: &SealedJournal,
+    old_protector: &dyn JournalProtector,
+    new_protector: &dyn JournalProtector,
+) -> DocumentResult<SealedJournal> {
+    validate_scope(old_scope)?;
+    validate_scope(new_scope)?;
+    uuid_v4(&sealed.operation_id)?;
+    if sealed.ciphertext.len() > MAX_JOURNAL_BYTES + 128 {
+        return Err(DocumentError::RecoveryRequired);
+    }
+    let plaintext = old_protector.open(old_scope, &sealed.operation_id, &sealed.ciphertext)?;
+    if plaintext.len() > MAX_JOURNAL_BYTES {
+        return Err(DocumentError::RecoveryRequired);
+    }
+    let mut journal: Journal =
+        serde_json::from_slice(&plaintext).map_err(|_| DocumentError::RecoveryRequired)?;
+    if journal.schema_version != 1
+        || journal.scope != *old_scope
+        || journal.operation_id != sealed.operation_id
+    {
+        return Err(DocumentError::RecoveryRequired);
+    }
+    journal.scope = new_scope.clone();
+    let plaintext =
+        Zeroizing::new(serde_json::to_vec(&journal).map_err(|_| DocumentError::RecoveryRequired)?);
+    if plaintext.len() > MAX_JOURNAL_BYTES {
+        return Err(DocumentError::RecoveryRequired);
+    }
+    let ciphertext = new_protector.seal(new_scope, &sealed.operation_id, &plaintext)?;
+    if ciphertext.is_empty() || ciphertext.len() > MAX_JOURNAL_BYTES + 128 {
+        return Err(DocumentError::JournalUnavailable);
+    }
+    Ok(SealedJournal {
+        operation_id: sealed.operation_id.clone(),
+        ciphertext,
+    })
+}
+
 fn journal_aad(scope: &SyncScope, operation_id: &str) -> DocumentResult<Vec<u8>> {
     validate_scope(scope)?;
     uuid_v4(operation_id)?;

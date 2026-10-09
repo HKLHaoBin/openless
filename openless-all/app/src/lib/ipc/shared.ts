@@ -4,7 +4,10 @@ import type {
   PlatformCapabilities,
   WindowsImeStatus,
 } from '../types';
-import { getPlatformCapabilities as loadPlatformCapabilities } from '../platform';
+import {
+  getPlatformCapabilities as loadPlatformCapabilities,
+  resetPlatformCapabilitiesCache,
+} from '../platform';
 
 declare global {
   interface Window {
@@ -18,12 +21,30 @@ declare global {
 // here would stay permanently `false` for the rest of that page's lifetime,
 // even once the bridge becomes available moments later — silently routing
 // every subsequent backend call through the browser-preview mock forever.
-// `isTauriNow()` re-checks live; `isTauri` is kept as a snapshot for the many
-// call sites that only use it for one-time UI/render decisions.
+// `isTauriNow()` re-checks live, while the exported binding is refreshed when
+// late Tauri injection announces readiness so existing consumers observe the
+// same native transition without requiring a full page reload.
+export const TAURI_READY_EVENT = 'openless:tauri-ready';
+
+let platformCapsPromise: Promise<PlatformCapabilities> | null = null;
+
 export function isTauriNow(): boolean {
   return globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
 }
-export const isTauri = isTauriNow();
+
+export let isTauri = isTauriNow();
+
+function refreshTauriReadiness(): void {
+  const next = isTauriNow();
+  if (next === isTauri) return;
+  isTauri = next;
+  platformCapsPromise = null;
+  resetPlatformCapabilitiesCache();
+}
+
+if (globalThis.window !== undefined) {
+  globalThis.window.addEventListener(TAURI_READY_EVENT, refreshTauriReadiness);
+}
 
 export const BACKEND_CONTRACT_VERSION = '2.0.0';
 
@@ -56,8 +77,6 @@ export function requireBackendReady(): Promise<StartupSnapshot> {
     .then(validateStartupSnapshot);
   return backendReadyPromise;
 }
-
-let platformCapsPromise: Promise<PlatformCapabilities> | null = null;
 
 export async function platformCapabilities(): Promise<PlatformCapabilities> {
   platformCapsPromise ??= loadPlatformCapabilities();

@@ -15,7 +15,13 @@ export {
 } from './platform-exports';
 
 // shared
-export { isTauri, invokeOrMock, getPlatformCapabilities } from './shared';
+export {
+  isTauri,
+  isTauriNow,
+  TAURI_READY_EVENT,
+  invokeOrMock,
+  getPlatformCapabilities,
+} from './shared';
 
 // settings
 export type { StartupSnapshot } from './settings';

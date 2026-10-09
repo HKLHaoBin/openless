@@ -12,6 +12,8 @@ use tokio::sync::watch;
 use crate::cloud_sync_e2ee_documents::{DocumentError, DocumentResult, SyncScope};
 use crate::cloud_sync_e2ee_protocol::types::Revision;
 
+use super::state::scope_id;
+
 static GATES: OnceLock<Mutex<BTreeMap<PathBuf, Weak<SyncWriteGate>>>> = OnceLock::new();
 
 /// Host entry point before constructing any repository. Reuses the registered Arc exactly.
@@ -730,6 +732,58 @@ impl ExclusivePermit {
 
     pub fn pending_restore(&self) -> DocumentResult<bool> {
         Ok(self.lease.gate.lock()?.stored.pending_restore.is_some())
+    }
+
+    pub(crate) fn migrate_scope_origin(
+        &self,
+        old_scope: &SyncScope,
+        new_scope: &SyncScope,
+    ) -> DocumentResult<()> {
+        let old_id = scope_id(old_scope)?;
+        let new_id = scope_id(new_scope)?;
+        let mut state = self.lease.gate.lock()?;
+        let mut next = state.stored.clone();
+        let mut changed = false;
+        if let Some(pending) = next.pending_restore.as_mut() {
+            if pending.scope_id == old_id {
+                pending.scope_id = new_id.clone();
+                pending.scope = new_scope.clone();
+                changed = true;
+            } else if pending.scope == *old_scope {
+                return Err(DocumentError::RecoveryRequired);
+            }
+        }
+        if let Some(receipt) = next.completed_restores.remove(&old_id) {
+            if receipt.scope != *old_scope {
+                return Err(DocumentError::RecoveryRequired);
+            }
+            if let Some(existing) = next.completed_restores.get(&new_id) {
+                if existing.operation_id != receipt.operation_id
+                    || existing.scope != *new_scope
+                    || existing.generation != receipt.generation
+                    || existing.committed != receipt.committed
+                {
+                    return Err(DocumentError::RecoveryRequired);
+                }
+            } else {
+                next.completed_restores.insert(
+                    new_id.clone(),
+                    GateRestoreReceipt {
+                        operation_id: receipt.operation_id,
+                        scope_id: new_id,
+                        scope: new_scope.clone(),
+                        generation: receipt.generation,
+                        committed: receipt.committed,
+                    },
+                );
+            }
+            changed = true;
+        }
+        if changed {
+            self.lease.gate.save(&mut state, next)?;
+            self.lease.gate.refresh_runtime_flag(&state);
+        }
+        Ok(())
     }
 
     /// Called only after every store and credential source was successfully read/validated.

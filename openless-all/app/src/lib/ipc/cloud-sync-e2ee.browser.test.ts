@@ -36,6 +36,9 @@ const operations: Array<() => Promise<unknown>> = [
       confirmed: true,
     }),
   api.cloudSyncE2eeSignOut,
+  api.cloudSyncE2eeSignInWithToken,
+  api.cloudSyncE2eeGetCustomServerConfig,
+  () => api.cloudSyncE2eeSetCustomServerConfig({ origin: 'https://sync.example', token: 'fixture' }),
   api.cloudSyncE2eeGetUiPreferences,
   api.mirrorEncryptedSyncUiPreferences,
 ];

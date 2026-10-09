@@ -3,11 +3,7 @@ use crate::{cloud_sync_e2ee::*, BackendError};
 
 impl OpenLessBackend {
     pub async fn sign_out_account(&self) -> Result<(), BackendError> {
-        if let Some(service) = &self.encrypted_sync {
-            service.sign_out().await.map(|_| ())
-        } else {
-            self.services().marketplace.logout().await
-        }
+        self.services().marketplace.logout().await
     }
     fn encrypted_sync_service(
         &self,
@@ -161,6 +157,22 @@ impl OpenLessBackend {
     ) -> Result<EncryptedSyncStatus, BackendError> {
         self.encrypted_sync_service()?
             .sign_in_with_custom_token()
+            .await
+    }
+
+    pub async fn cloud_sync_e2ee_get_custom_server_config(
+        &self,
+    ) -> Result<Option<EncryptedSyncCustomServerConfig>, BackendError> {
+        self.encrypted_sync_service()?.custom_server_config().await
+    }
+
+    pub async fn cloud_sync_e2ee_set_custom_server_config(
+        &self,
+        origin: String,
+        token: Option<String>,
+    ) -> Result<Option<EncryptedSyncCustomServerConfig>, BackendError> {
+        self.encrypted_sync_service()?
+            .set_custom_server_config(origin, token)
             .await
     }
 

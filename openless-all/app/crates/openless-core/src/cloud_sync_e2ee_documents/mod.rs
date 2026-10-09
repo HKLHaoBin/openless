@@ -15,6 +15,7 @@ pub use merge::{
     diff_sync_documents, record_missing_tombstones, ConflictChoice, ConflictReason, ConflictSide,
     MergePreview, RedactedConflict,
 };
+pub(crate) use restore::migrate_sealed_journal;
 pub use restore::{
     apply_sync_restore, prepare_sync_restore, recover_sync_restore, CryptoJournalProtector,
     JournalProtector, JournalStore, RecoveryOutcome, RestorePlan, RestoreReceipt, SealedJournal,

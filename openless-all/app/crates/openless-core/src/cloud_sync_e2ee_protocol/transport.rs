@@ -66,6 +66,7 @@ impl ProxyPolicy {
 #[derive(Clone)]
 pub(crate) struct Transport {
     origin: Url,
+    service_origin: String,
     client: Client,
     capabilities: Arc<Capabilities>,
     proxy_policy: ProxyPolicy,
@@ -282,7 +283,7 @@ pub(crate) enum OperationStatus {
 }
 
 impl Transport {
-    /// Check capabilities without credentials before allowing authentication.
+    /// Check capabilities without credentials before allowing GitHub authentication.
     pub(crate) async fn new(
         origin: &str,
         expected_github_client_id: &str,
@@ -294,31 +295,56 @@ impl Transport {
             .https_only(true)
             .build()
             .map_err(|_| Error::Transport)?;
-        Self::check_capabilities(origin, client, expected_github_client_id, proxy_policy).await
+        Self::check_capabilities(
+            origin,
+            client,
+            Some(expected_github_client_id),
+            proxy_policy,
+        )
+        .await
+    }
+
+    /// Check capabilities for a self-hosted server authenticated by a static token.
+    pub(crate) async fn new_for_custom_token(
+        origin: &str,
+        proxy_policy: ProxyPolicy,
+    ) -> Result<Self> {
+        let origin = parse_origin(origin, false)?;
+        let proxy_policy = ProxyPolicy::for_origin(origin.as_str(), proxy_policy.use_system_proxy);
+        let client = client_builder(proxy_policy)
+            .https_only(true)
+            .build()
+            .map_err(|_| Error::Transport)?;
+        Self::check_capabilities(origin, client, None, proxy_policy).await
     }
 
     async fn check_capabilities(
         origin: Url,
         client: Client,
-        expected_github_client_id: &str,
+        expected_github_client_id: Option<&str>,
         proxy_policy: ProxyPolicy,
     ) -> Result<Self> {
-        if expected_github_client_id.is_empty()
-            || expected_github_client_id.len() > 128
-            || !expected_github_client_id
-                .bytes()
-                .all(|byte| byte.is_ascii_graphic())
-        {
-            return Err(Error::InvalidEndpoint);
+        if let Some(expected_github_client_id) = expected_github_client_id {
+            if expected_github_client_id.is_empty()
+                || expected_github_client_id.len() > 128
+                || !expected_github_client_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_graphic())
+            {
+                return Err(Error::InvalidEndpoint);
+            }
         }
         let mut endpoint = origin.clone();
         endpoint.set_path("/v1/capabilities");
         let response = send(client.get(endpoint).header(ACCEPT, "application/json")).await?;
         let capabilities: Capabilities = success_json(response, CONTROL_BODY_LIMIT).await?;
-        if capabilities.github_client_id != expected_github_client_id {
-            return Err(Error::InvalidResponse("OAuth application mismatch"));
+        if let Some(expected_github_client_id) = expected_github_client_id {
+            if capabilities.github_client_id.as_deref() != Some(expected_github_client_id) {
+                return Err(Error::InvalidResponse("OAuth application mismatch"));
+            }
         }
         Ok(Self {
+            service_origin: origin.origin().ascii_serialization(),
             origin,
             client,
             capabilities: Arc::new(capabilities),
@@ -336,7 +362,7 @@ impl Transport {
 
     /// Canonical HTTPS origin for native secure-store/journal scope binding.
     pub(crate) fn service_origin(&self) -> &str {
-        self.origin.as_str()
+        &self.service_origin
     }
 
     pub(crate) async fn exchange(
@@ -758,6 +784,19 @@ impl Transport {
     }
 
     #[cfg(test)]
+    pub(crate) async fn for_test_with_proxy_policy_for_custom_token(
+        origin: &str,
+        proxy_policy: ProxyPolicy,
+    ) -> Result<Self> {
+        let origin = parse_origin(origin, true)?;
+        let proxy_policy = ProxyPolicy::for_origin(origin.as_str(), proxy_policy.use_system_proxy);
+        let client = client_builder(proxy_policy)
+            .build()
+            .map_err(|_| Error::Transport)?;
+        Self::check_capabilities(origin, client, None, proxy_policy).await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn for_test_with_proxy_policy(
         origin: &str,
         expected_client_id: &str,
@@ -768,7 +807,7 @@ impl Transport {
         let client = client_builder(proxy_policy)
             .build()
             .map_err(|_| Error::Transport)?;
-        Self::check_capabilities(origin, client, expected_client_id, proxy_policy).await
+        Self::check_capabilities(origin, client, Some(expected_client_id), proxy_policy).await
     }
 }
 
@@ -791,6 +830,12 @@ fn client_builder(proxy_policy: ProxyPolicy) -> reqwest::ClientBuilder {
     )
 }
 
+pub(crate) fn canonicalize_origin(input: &str) -> Result<String> {
+    Ok(parse_origin(input, cfg!(test))?
+        .origin()
+        .ascii_serialization())
+}
+
 fn parse_origin(input: &str, test_loopback: bool) -> Result<Url> {
     if input.chars().any(char::is_whitespace) {
         return Err(Error::InvalidEndpoint);
@@ -811,7 +856,7 @@ fn parse_origin(input: &str, test_loopback: bool) -> Result<Url> {
     {
         return Err(Error::InvalidEndpoint);
     }
-    Ok(url)
+    Url::parse(&url.origin().ascii_serialization()).map_err(|_| Error::InvalidEndpoint)
 }
 
 fn bearer_header(token: &str) -> Result<HeaderValue> {
@@ -828,7 +873,10 @@ fn bearer_header(token: &str) -> Result<HeaderValue> {
 
 async fn send(request: RequestBuilder) -> Result<Response> {
     let response = request.send().await.map_err(|e| {
-        log::warn!("[e2ee-token] raw reqwest send error: {e:?} (url={:?})", e.url());
+        log::warn!(
+            "[e2ee-token] raw reqwest send error: {e:?} (url={:?})",
+            e.url()
+        );
         Error::Transport
     })?;
     if response.status().is_redirection() && response.status() != StatusCode::NOT_MODIFIED {
@@ -1319,6 +1367,27 @@ mod tests {
             .unwrap()
     }
 
+    #[test]
+    fn canonical_origin_equivalent_spellings_share_one_serialization() {
+        assert_eq!(
+            canonicalize_origin("HTTPS://Example.COM:443/").unwrap(),
+            "https://example.com"
+        );
+        assert_eq!(
+            canonicalize_origin("https://example.com").unwrap(),
+            canonicalize_origin("https://EXAMPLE.com:443/").unwrap()
+        );
+        for invalid in [
+            "http://example.com",
+            "https://example.com/path",
+            "https://example.com?query",
+            "https://user@example.com",
+            "https://example.com#fragment",
+        ] {
+            assert!(canonicalize_origin(invalid).is_err(), "accepted {invalid}");
+        }
+    }
+
     #[tokio::test]
     async fn production_constructor_rejects_insecure_or_ambiguous_origins() {
         for origin in [
@@ -1469,6 +1538,8 @@ mod tests {
     async fn wrong_oauth_capability_or_duplicate_wire_key_prevents_authentication() {
         let mut wrong = capabilities();
         wrong["githubClientId"] = json!("another-app");
+        let mut missing = capabilities();
+        missing.as_object_mut().unwrap().remove("githubClientId");
         let duplicate = serde_json::to_string(&capabilities()).unwrap().replacen(
             '{',
             "{\"protocolVersion\":1,",
@@ -1476,6 +1547,7 @@ mod tests {
         );
         for reply in [
             Reply::json("200 OK", wrong),
+            Reply::json("200 OK", missing),
             Reply::raw("200 OK", duplicate.into_bytes()),
         ] {
             let server = FakeServer::start(vec![reply]).await;
@@ -1485,6 +1557,33 @@ mod tests {
             let requests = server.finish().await;
             assert_eq!(requests.len(), 1);
             assert!(!requests[0].headers.contains_key("authorization"));
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_token_auth_does_not_require_github_oauth_capability() {
+        let mut missing = capabilities();
+        missing.as_object_mut().unwrap().remove("githubClientId");
+        let mut foreign = capabilities();
+        foreign["githubClientId"] = json!("self-hosted-app");
+        for capabilities in [missing, foreign] {
+            let server = FakeServer::start(vec![
+                Reply::json("200 OK", capabilities),
+                Reply::json("200 OK", auth(OWNER, 'b')),
+            ])
+            .await;
+            let transport = Transport::for_test_with_proxy_policy_for_custom_token(
+                &server.origin,
+                ProxyPolicy::for_origin(&server.origin, false),
+            )
+            .await
+            .unwrap();
+            let session = transport.exchange_with_token("custom-token").await.unwrap();
+            assert_eq!(session.account_id().as_str(), OWNER);
+            let requests = server.finish().await;
+            assert_eq!(requests[0].path, "/v1/capabilities");
+            assert_eq!(requests[1].path, "/v1/auth/token");
+            assert_eq!(requests[1].headers["authorization"], "Bearer custom-token");
         }
     }
 

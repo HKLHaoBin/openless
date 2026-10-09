@@ -22,7 +22,7 @@ use tokio::{
 };
 
 use super::{
-    local::LocalStorage,
+    local::{ClientSettings, KnownRemoteAccount, LocalStorage},
     service::{EncryptedSyncService, SyncServiceConfig, SyncServiceData},
     *,
 };
@@ -47,6 +47,7 @@ struct Vault {
     secrets: Mutex<HashMap<String, SecretValue>>,
     deny: AtomicBool,
     deny_remove: AtomicBool,
+    deny_custom_config_read: AtomicBool,
 }
 impl CredentialStore for Vault {
     fn status(
@@ -59,6 +60,12 @@ impl CredentialStore for Vault {
         &self,
         key: CredentialKey,
     ) -> BoxFuture<'static, Result<Option<SecretValue>, BackendError>> {
+        if self.deny_custom_config_read.load(Ordering::Acquire)
+            && key.namespace == CredentialNamespace::Application
+            && key.account == crate::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT
+        {
+            return Box::pin(async { Err(error("secure_storage_denied")) });
+        }
         self.ordinary.read(key)
     }
     fn write(
@@ -118,6 +125,7 @@ struct Data {
     fail_restore: AtomicBool,
     capture_gate: Mutex<Option<Arc<crate::cloud_sync_e2ee_store::gate::SyncWriteGate>>>,
     export_attempts: AtomicU64,
+    custom_origin: Mutex<Option<String>>,
 }
 impl Data {
     fn new() -> Arc<Self> {
@@ -165,6 +173,7 @@ impl Data {
             fail_restore: AtomicBool::new(false),
             capture_gate: Mutex::new(None),
             export_attempts: AtomicU64::new(0),
+            custom_origin: Mutex::new(None),
         })
     }
     fn edit(&self, text: &str) {
@@ -181,6 +190,9 @@ impl Data {
             generation: Revision::new(generation),
             origin: ChangeOrigin::User,
         });
+    }
+    fn set_custom_origin(&self, origin: Option<String>) {
+        *self.custom_origin.lock().unwrap() = origin;
     }
 }
 impl SyncServiceData for Data {
@@ -257,7 +269,7 @@ impl SyncServiceData for Data {
         self.documents.lock().unwrap().source_device.clone()
     }
     fn custom_server_origin(&self) -> Option<String> {
-        None
+        self.custom_origin.lock().unwrap().clone()
     }
     fn changes(&self) -> tokio::sync::watch::Receiver<SyncChange> {
         self.changes.subscribe()
@@ -471,6 +483,28 @@ impl Drop for Fixture {
 }
 impl Fixture {
     async fn new(server: &Server) -> Self {
+        Self::new_with_origins(server, server.origin.clone(), None).await
+    }
+
+    async fn new_with_origins(
+        server: &Server,
+        stable_origin: String,
+        legacy_origin: Option<String>,
+    ) -> Self {
+        Self::new_with_origins_at_root(server, stable_origin, legacy_origin, false).await
+    }
+
+    async fn new_with_legacy_root(server: &Server, stable_origin: String) -> Self {
+        Self::new_with_origins_at_root(server, stable_origin.clone(), Some(stable_origin), true)
+            .await
+    }
+
+    async fn new_with_origins_at_root(
+        server: &Server,
+        stable_origin: String,
+        legacy_origin: Option<String>,
+        legacy_root: bool,
+    ) -> Self {
         let root =
             std::env::temp_dir().join(format!("openless-e2ee-service-{}", uuid::Uuid::new_v4()));
         let repos = crate::BackendRepositories::open(&root).unwrap();
@@ -499,19 +533,40 @@ impl Fixture {
             .unwrap(),
         );
         let data = Data::new();
+        data.set_custom_origin(
+            legacy_origin
+                .clone()
+                .or_else(|| Some(server.origin.clone())),
+        );
         let local = LocalStorage::new(
             root.join("protected"),
-            server.origin.clone(),
+            stable_origin.clone(),
             data.device().id.clone(),
             vault.clone(),
         );
-        let service = EncryptedSyncService::new(
+        let legacy_local = legacy_origin
+            .map(|origin| {
+                LocalStorage::new(
+                    if legacy_root {
+                        root.clone()
+                    } else {
+                        root.join("protected")
+                    },
+                    origin,
+                    data.device().id.clone(),
+                    vault.clone(),
+                )
+            })
+            .into_iter()
+            .collect();
+        let service = EncryptedSyncService::new_with_legacy(
             SyncServiceConfig {
-                origin: server.origin.clone(),
+                origin: stable_origin,
                 github_client_id: CLIENT.into(),
             },
             marketplace,
             local,
+            legacy_local,
             data.clone(),
             vault.clone(),
             events,
@@ -1151,7 +1206,214 @@ fn device_identity_is_create_only_and_never_replaced_over_existing_ciphertext() 
         "recovery_required"
     );
     assert!(!root.join("device-id").exists());
+    std::fs::write(root.join("legacy-root-state.enc"), b"existing ciphertext").unwrap();
+    assert_eq!(
+        super::adapter::load_device_id(&root).unwrap_err().message,
+        "recovery_required"
+    );
+    assert!(!root.join("device-id").exists());
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn legacy_root_records_migrate_into_protected_storage() {
+    let server = Server::start().await;
+    let fixture = Fixture::new_with_legacy_root(&server, server.origin.clone()).await;
+    let legacy = LocalStorage::new(
+        fixture.root.clone(),
+        server.origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    let settings = ClientSettings {
+        owner_id: Some(OWNER.into()),
+        known_owner_ids: vec![OWNER.into()],
+        ..ClientSettings::default()
+    };
+    legacy.write("device", "client", settings).await.unwrap();
+    legacy
+        .write(
+            OWNER,
+            "pending",
+            json!({
+                "record":"futureLayout",
+                "operationId":"11111111-1111-4111-8111-111111111114",
+                "vaultId":"vault-root",
+                "keyId":"key-root",
+                "localGeneration":"7",
+                "deleted":false,
+                "rememberKey":false,
+                "keyPreferenceEpoch":1,
+                "baseRevision":"6",
+                "oldKeyId":null
+            }),
+        )
+        .await
+        .unwrap();
+    legacy.set_lockout(true).await.unwrap();
+
+    fixture
+        .service
+        .prepare_enable(CONSENT_VERSION.into())
+        .await
+        .unwrap();
+
+    let stable = LocalStorage::new(
+        fixture.root.join("protected"),
+        server.origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    assert!(stable
+        .read::<ClientSettings>("device", "client")
+        .await
+        .unwrap()
+        .is_some());
+    assert!(stable
+        .read::<Value>(OWNER, "pending")
+        .await
+        .unwrap()
+        .is_some());
+    assert!(stable.locked_out().await.unwrap());
+}
+
+#[tokio::test]
+async fn mixed_layout_migrates_legacy_owner_records_after_protected_client_selection() {
+    let server = Server::start().await;
+    let fixture = Fixture::new_with_legacy_root(&server, server.origin.clone()).await;
+    let stable = LocalStorage::new(
+        fixture.root.join("protected"),
+        server.origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    stable
+        .write(
+            "device",
+            "client",
+            ClientSettings {
+                owner_id: Some(OWNER.into()),
+                known_owner_ids: vec![OWNER.into()],
+                ..ClientSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+    let legacy = LocalStorage::new(
+        fixture.root.clone(),
+        server.origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    legacy.prepare_migration_key().await.unwrap();
+    legacy
+        .write(
+            OWNER,
+            "pending",
+            json!({
+                "record":"futureLayout",
+                "operationId":"11111111-1111-4111-8111-111111111115",
+                "vaultId":"vault-mixed",
+                "keyId":"key-mixed",
+                "localGeneration":"8",
+                "deleted":false,
+                "rememberKey":false,
+                "keyPreferenceEpoch":1,
+                "baseRevision":"7",
+                "oldKeyId":null
+            }),
+        )
+        .await
+        .unwrap();
+
+    fixture
+        .service
+        .prepare_enable(CONSENT_VERSION.into())
+        .await
+        .unwrap();
+
+    assert!(stable
+        .read::<Value>(OWNER, "pending")
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn mixed_layout_keeps_same_origin_remembered_key() {
+    let server = Server::start().await;
+    let fixture = Fixture::new_with_legacy_root(&server, server.origin.clone()).await;
+    let stable = LocalStorage::new(
+        fixture.root.join("protected"),
+        server.origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    stable
+        .write(
+            "device",
+            "client",
+            ClientSettings {
+                owner_id: Some(OWNER.into()),
+                known_owner_ids: vec![OWNER.into()],
+                ..ClientSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+    let legacy = LocalStorage::new(
+        fixture.root.clone(),
+        server.origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    legacy.prepare_migration_key().await.unwrap();
+    let old_key = legacy.key().await.unwrap();
+    legacy
+        .remember(
+            OWNER,
+            "vault-mixed-key",
+            "key-mixed-key",
+            old_key.as_ref(),
+            true,
+        )
+        .await
+        .unwrap();
+    legacy
+        .write(
+            OWNER,
+            "pending",
+            json!({
+                "record":"futureLayout",
+                "operationId":"11111111-1111-4111-8111-111111111116",
+                "vaultId":"vault-mixed-key",
+                "keyId":"key-mixed-key",
+                "localGeneration":"8",
+                "deleted":false,
+                "rememberKey":true,
+                "keyPreferenceEpoch":1,
+                "baseRevision":"7",
+                "oldKeyId":null
+            }),
+        )
+        .await
+        .unwrap();
+
+    fixture
+        .service
+        .prepare_enable(CONSENT_VERSION.into())
+        .await
+        .unwrap();
+
+    let migrated_key = stable
+        .remembered(OWNER, "vault-mixed-key", "key-mixed-key")
+        .await
+        .unwrap()
+        .expect("same-origin remembered key must not be deleted");
+    assert_eq!(
+        migrated_key.copy_secret_bytes(),
+        old_key.copy_secret_bytes()
+    );
 }
 
 #[tokio::test]
@@ -1354,6 +1616,612 @@ async fn round2_sync_key_deletion_failure_must_not_prevent_account_sign_out() {
 }
 
 #[tokio::test]
+async fn custom_server_config_is_atomic_and_canonicalized() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    let saved = fixture
+        .service
+        .set_custom_server_config(
+            " HTTPS://SYNC.EXAMPLE:443/ ".into(),
+            Some(" token-a ".into()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.origin, "https://sync.example");
+    assert!(saved.has_token);
+    assert!(
+        !serde_json::to_string(&saved).unwrap().contains("token-a"),
+        "custom token must never cross the native/webview response boundary"
+    );
+    let stored = fixture.custom_token().await.unwrap();
+    let record: PersistedCustomServerConfig = serde_json::from_str(stored.expose_secret()).unwrap();
+    assert_eq!(record.version, CUSTOM_SYNC_CONFIG_VERSION);
+    assert_eq!(record.origin, "https://sync.example");
+    assert_eq!(record.token, "token-a");
+
+    let rebound = fixture
+        .service
+        .set_custom_server_config("https://other.example".into(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(rebound.message, "unsupported_protocol");
+    let current = fixture
+        .service
+        .custom_server_config()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.origin, "https://sync.example");
+
+    let preserved = fixture
+        .service
+        .set_custom_server_config("https://sync.example".into(), None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(preserved.origin, "https://sync.example");
+    assert!(preserved.has_token);
+    assert_eq!(
+        serde_json::from_str::<PersistedCustomServerConfig>(
+            fixture.custom_token().await.unwrap().expose_secret(),
+        )
+        .unwrap()
+        .token,
+        "token-a"
+    );
+
+    let rejected = fixture
+        .service
+        .set_custom_server_config("".into(), Some("replacement".into()))
+        .await
+        .unwrap_err();
+    assert_eq!(rejected.message, "unsupported_protocol");
+    let current_after_reject = fixture
+        .service
+        .custom_server_config()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current_after_reject.origin, "https://sync.example");
+    assert!(current_after_reject.has_token);
+
+    fixture
+        .service
+        .set_custom_server_config(String::new(), None)
+        .await
+        .unwrap();
+    assert!(fixture
+        .service
+        .custom_server_config()
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn legacy_custom_origin_state_migrates_to_stable_local_identity() {
+    let server = Server::start().await;
+    let stable_origin = "https://apic.openless.top:9443".to_owned();
+    let legacy_origin = server.origin.clone();
+    let fixture =
+        Fixture::new_with_origins(&server, stable_origin.clone(), Some(legacy_origin.clone()))
+            .await;
+    let legacy = LocalStorage::new(
+        fixture.root.join("protected"),
+        legacy_origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    let settings = ClientSettings {
+        version: 1,
+        enabled: false,
+        consent_version: Some(CONSENT_VERSION.into()),
+        owner_id: Some(OWNER.into()),
+        known_owner_ids: Vec::new(),
+        known_accounts: Vec::new(),
+        remote_origin: None,
+        remember_key: true,
+        key_preference_epoch: 4,
+        last_success: Some("2026-09-25T12:01:00Z".into()),
+        last_generation: Some("7".into()),
+        vault_id: Some("vault-legacy".into()),
+        key_id: Some("key-legacy".into()),
+        prompted: true,
+    };
+    let baseline = json!({"revision":"7","marker":"legacy-baseline"});
+    let pending = json!({
+        "record":"futureLayout",
+        "operationId":"11111111-1111-4111-8111-111111111112",
+        "vaultId":"vault-legacy",
+        "keyId":"key-legacy",
+        "localGeneration":"7",
+        "deleted":false,
+        "rememberKey":true,
+        "keyPreferenceEpoch":4,
+        "baseRevision":"6",
+        "oldKeyId":null
+    });
+    legacy.write("device", "client", settings).await.unwrap();
+    legacy
+        .write(OWNER, "baseline", baseline.clone())
+        .await
+        .unwrap();
+    legacy
+        .write(OWNER, "pending", pending.clone())
+        .await
+        .unwrap();
+    legacy
+        .write(OWNER, "last-seen-revision", json!("7"))
+        .await
+        .unwrap();
+    let old_key = legacy.key().await.unwrap();
+    legacy
+        .remember(OWNER, "vault-legacy", "key-legacy", old_key.as_ref(), true)
+        .await
+        .unwrap();
+    fixture.set_custom_token("fixture-custom-token").await;
+
+    fixture
+        .service
+        .start(Arc::new(crate::TokioTaskSpawner))
+        .await
+        .unwrap();
+
+    let stable = LocalStorage::new(
+        fixture.root.join("protected"),
+        stable_origin,
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    let migrated_settings: ClientSettings = stable.read("device", "client").await.unwrap().unwrap();
+    assert_eq!(
+        migrated_settings.remote_origin.as_deref(),
+        Some(legacy_origin.as_str())
+    );
+    assert_eq!(
+        stable.read::<Value>(OWNER, "baseline").await.unwrap(),
+        Some(baseline)
+    );
+    assert_eq!(
+        stable.read::<Value>(OWNER, "pending").await.unwrap(),
+        Some(pending)
+    );
+    assert_eq!(
+        stable
+            .read::<String>(OWNER, "last-seen-revision")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("7")
+    );
+    let migrated_key = stable
+        .remembered(OWNER, "vault-legacy", "key-legacy")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        migrated_key.copy_secret_bytes(),
+        old_key.copy_secret_bytes()
+    );
+    assert!(stable.origin_migration_complete(&legacy_origin).unwrap());
+    fixture.service.shutdown().await;
+}
+
+#[tokio::test]
+async fn stable_origin_custom_migration_preserves_legacy_lockout() {
+    let server = Server::start().await;
+    let stable_origin = "https://apic.openless.top:9443".to_owned();
+    let fixture = Fixture::new_with_legacy_root(&server, stable_origin.clone()).await;
+    let legacy = LocalStorage::new(
+        fixture.root.clone(),
+        stable_origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    let settings = ClientSettings {
+        version: 1,
+        enabled: false,
+        consent_version: Some(CONSENT_VERSION.into()),
+        owner_id: Some(OWNER.into()),
+        known_owner_ids: Vec::new(),
+        known_accounts: Vec::new(),
+        remote_origin: Some(server.origin.clone()),
+        remember_key: true,
+        key_preference_epoch: 1,
+        last_success: None,
+        last_generation: None,
+        vault_id: Some("vault-custom-lockout".into()),
+        key_id: Some("key-custom-lockout".into()),
+        prompted: true,
+    };
+    legacy.write("device", "client", settings).await.unwrap();
+    let old_key = legacy.key().await.unwrap();
+    legacy
+        .remember(
+            OWNER,
+            "vault-custom-lockout",
+            "key-custom-lockout",
+            old_key.as_ref(),
+            true,
+        )
+        .await
+        .unwrap();
+    legacy.set_lockout(true).await.unwrap();
+    fixture.set_custom_token("fixture-custom-token").await;
+
+    fixture
+        .service
+        .start(Arc::new(crate::TokioTaskSpawner))
+        .await
+        .unwrap();
+
+    let protected = LocalStorage::new(
+        fixture.root.join("protected"),
+        stable_origin,
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    assert!(protected.locked_out().await.unwrap());
+    assert!(protected
+        .remembered(OWNER, "vault-custom-lockout", "key-custom-lockout")
+        .await
+        .unwrap()
+        .is_some());
+    fixture.service.shutdown().await;
+}
+
+#[tokio::test]
+async fn stable_device_record_does_not_skip_legacy_custom_origin_state() {
+    let server = Server::start().await;
+    let stable_origin = "https://apic.openless.top:9443".to_owned();
+    let legacy_origin = server.origin.clone();
+    let fixture =
+        Fixture::new_with_origins(&server, stable_origin.clone(), Some(legacy_origin.clone()))
+            .await;
+    let stable = LocalStorage::new(
+        fixture.root.join("protected"),
+        stable_origin,
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    stable.prepare_migration_key().await.unwrap();
+    let legacy = LocalStorage::new(
+        fixture.root.join("protected"),
+        legacy_origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    legacy.prepare_migration_key().await.unwrap();
+    stable
+        .write(
+            "device",
+            "client",
+            ClientSettings {
+                version: 1,
+                enabled: false,
+                consent_version: Some(CONSENT_VERSION.into()),
+                owner_id: Some(OWNER.into()),
+                known_owner_ids: Vec::new(),
+                known_accounts: Vec::new(),
+                remote_origin: None,
+                remember_key: false,
+                key_preference_epoch: 0,
+                last_success: None,
+                last_generation: None,
+                vault_id: Some("vault-legacy".into()),
+                key_id: Some("key-legacy".into()),
+                prompted: true,
+            },
+        )
+        .await
+        .unwrap();
+
+    let baseline = json!({"revision":"7","marker":"legacy-baseline"});
+    legacy
+        .write(OWNER, "baseline", baseline.clone())
+        .await
+        .unwrap();
+    fixture.set_custom_token("fixture-custom-token").await;
+
+    fixture
+        .service
+        .start(Arc::new(crate::TokioTaskSpawner))
+        .await
+        .unwrap();
+
+    let migrated_settings: ClientSettings = stable.read("device", "client").await.unwrap().unwrap();
+    assert_eq!(
+        migrated_settings.remote_origin.as_deref(),
+        Some(legacy_origin.as_str())
+    );
+    assert_eq!(
+        stable.read::<Value>(OWNER, "baseline").await.unwrap(),
+        Some(baseline)
+    );
+    assert_eq!(
+        stable
+            .read::<String>(OWNER, "state-origin")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(legacy_origin.as_str())
+    );
+    fixture.service.shutdown().await;
+}
+
+#[tokio::test]
+async fn target_owner_pending_state_survives_origin_reset_for_migration() {
+    let stable_server = Server::start().await;
+    let custom_server = Server::start().await;
+    let fixture = Fixture::new_with_origins(
+        &custom_server,
+        stable_server.origin.clone(),
+        Some(custom_server.origin.clone()),
+    )
+    .await;
+    let custom_local = LocalStorage::new(
+        fixture.root.join("protected"),
+        custom_server.origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    custom_local.prepare_migration_key().await.unwrap();
+    fixture.prepare().await;
+
+    fixture.data.set_custom_origin(None);
+    fixture
+        .service
+        .connect_with_proxy_setting_for_test(false)
+        .await
+        .unwrap();
+    fixture
+        .data
+        .set_custom_origin(Some(custom_server.origin.clone()));
+
+    let operation_id = "11111111-1111-4111-8111-111111111113";
+    let pending = json!({
+        "record":"futureLayout",
+        "operationId":operation_id,
+        "vaultId":"vault-custom",
+        "keyId":"key-custom",
+        "localGeneration":"7",
+        "deleted":false,
+        "rememberKey":true,
+        "keyPreferenceEpoch":4,
+        "baseRevision":"6",
+        "oldKeyId":null
+    });
+    custom_local
+        .write(OWNER, "pending", pending.clone())
+        .await
+        .unwrap();
+    fixture.set_custom_token("fixture-custom-token").await;
+    let status = fixture.service.sign_in_with_custom_token().await.unwrap();
+    assert_eq!(status.pending_operation_id.as_deref(), Some(operation_id));
+
+    let stable_local = LocalStorage::new(
+        fixture.root.join("protected"),
+        stable_server.origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    let migrated = stable_local
+        .read::<Value>(OWNER, "pending")
+        .await
+        .unwrap()
+        .expect("pending record should survive target-origin migration");
+    assert_eq!(
+        migrated.get("operationId").and_then(Value::as_str),
+        Some(operation_id)
+    );
+}
+
+#[tokio::test]
+async fn legacy_owner_migration_moves_current_remembered_key_without_pending() {
+    let server = Server::start().await;
+    let stable_origin = "https://apic.openless.top:9443".to_owned();
+    let legacy_origin = server.origin.clone();
+    let fixture =
+        Fixture::new_with_origins(&server, stable_origin.clone(), Some(legacy_origin.clone()))
+            .await;
+    let stable = LocalStorage::new(
+        fixture.root.join("protected"),
+        stable_origin,
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    let legacy = LocalStorage::new(
+        fixture.root.join("protected"),
+        legacy_origin,
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    stable.prepare_migration_key().await.unwrap();
+    legacy.prepare_migration_key().await.unwrap();
+    stable
+        .write(
+            "device",
+            "client",
+            ClientSettings {
+                version: 1,
+                enabled: false,
+                consent_version: Some(CONSENT_VERSION.into()),
+                owner_id: Some(OWNER.into()),
+                known_owner_ids: vec![OWNER.into()],
+                known_accounts: vec![KnownRemoteAccount {
+                    owner_id: OWNER.into(),
+                    vault_id: Some("vault-legacy".into()),
+                    key_id: Some("key-legacy".into()),
+                }],
+                remote_origin: None,
+                remember_key: true,
+                key_preference_epoch: 1,
+                last_success: None,
+                last_generation: None,
+                vault_id: Some("vault-legacy".into()),
+                key_id: Some("key-legacy".into()),
+                prompted: true,
+            },
+        )
+        .await
+        .unwrap();
+    legacy
+        .write(OWNER, "baseline", json!({"revision":"7"}))
+        .await
+        .unwrap();
+    let old_key = legacy.key().await.unwrap();
+    legacy
+        .remember(OWNER, "vault-legacy", "key-legacy", old_key.as_ref(), true)
+        .await
+        .unwrap();
+    fixture.set_custom_token("fixture-custom-token").await;
+
+    fixture
+        .service
+        .start(Arc::new(crate::TokioTaskSpawner))
+        .await
+        .unwrap();
+
+    let migrated_key = stable
+        .remembered(OWNER, "vault-legacy", "key-legacy")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        migrated_key.copy_secret_bytes(),
+        old_key.copy_secret_bytes()
+    );
+    assert!(legacy
+        .remembered(OWNER, "vault-legacy", "key-legacy")
+        .await
+        .unwrap()
+        .is_none());
+    fixture.service.shutdown().await;
+}
+
+#[tokio::test]
+async fn stale_custom_origin_without_token_does_not_rebind_official_state() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture
+        .data
+        .set_custom_origin(Some("https://stale.example".into()));
+    let local = LocalStorage::new(
+        fixture.root.join("protected"),
+        server.origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    local.prepare_migration_key().await.unwrap();
+    local
+        .write("device", "client", ClientSettings::default())
+        .await
+        .unwrap();
+
+    fixture
+        .service
+        .start(Arc::new(crate::TokioTaskSpawner))
+        .await
+        .unwrap();
+
+    let settings: ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert_eq!(settings.remote_origin, None);
+    fixture.service.shutdown().await;
+}
+
+#[tokio::test]
+async fn unmarked_official_state_survives_first_connection_after_upgrade() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    let local = LocalStorage::new(
+        fixture.root.join("protected"),
+        server.origin.clone(),
+        fixture.data.device().id.clone(),
+        fixture.vault.clone(),
+    );
+    local.prepare_migration_key().await.unwrap();
+    local
+        .write(
+            "device",
+            "client",
+            ClientSettings {
+                version: 1,
+                enabled: false,
+                consent_version: Some(CONSENT_VERSION.into()),
+                owner_id: Some(OWNER.into()),
+                known_owner_ids: Vec::new(),
+                known_accounts: Vec::new(),
+                remote_origin: None,
+                remember_key: false,
+                key_preference_epoch: 0,
+                last_success: None,
+                last_generation: None,
+                vault_id: Some("vault".into()),
+                key_id: Some("key".into()),
+                prompted: true,
+            },
+        )
+        .await
+        .unwrap();
+    let baseline = json!({"revision":"7"});
+    let pending = json!({
+        "record":"futureLayout",
+        "operationId":"11111111-1111-4111-8111-111111111112",
+        "vaultId":"vault",
+        "keyId":"key",
+        "localGeneration":"7",
+        "deleted":false,
+        "rememberKey":false,
+        "keyPreferenceEpoch":0,
+        "baseRevision":"6",
+        "oldKeyId":null
+    });
+    local
+        .write(OWNER, "baseline", baseline.clone())
+        .await
+        .unwrap();
+    local
+        .write(OWNER, "pending", pending.clone())
+        .await
+        .unwrap();
+    local
+        .write(OWNER, "last-seen-revision", Revision::new(7))
+        .await
+        .unwrap();
+
+    fixture
+        .service
+        .ensure_remote_state_origin_for_test(OWNER, &server.origin, false)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        local.read::<Value>(OWNER, "baseline").await.unwrap(),
+        Some(baseline)
+    );
+    assert_eq!(
+        local.read::<Value>(OWNER, "pending").await.unwrap(),
+        Some(pending)
+    );
+    assert_eq!(
+        local
+            .read::<Revision>(OWNER, "last-seen-revision")
+            .await
+            .unwrap(),
+        Some(Revision::new(7))
+    );
+    assert_eq!(
+        local
+            .read::<String>(OWNER, "state-origin")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(server.origin.as_str())
+    );
+}
+
+#[tokio::test]
 async fn custom_token_sign_in_takes_priority_over_github_and_never_calls_github_auth() {
     let server = Server::start().await;
     let fixture = Fixture::new(&server).await;
@@ -1385,6 +2253,38 @@ async fn sign_in_with_custom_token_fails_clearly_without_a_saved_token() {
         "sign_in_required"
     );
     assert_eq!(server.state.lock().unwrap().token_auth_requests, 0);
+}
+
+#[tokio::test]
+async fn legacy_raw_token_without_origin_is_rejected_without_network_auth() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.data.set_custom_origin(None);
+    fixture
+        .vault
+        .write(
+            CredentialKey::new(
+                CredentialNamespace::Application,
+                None,
+                crate::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT,
+            )
+            .unwrap(),
+            SecretValue::new("legacy-token"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .sign_in_with_custom_token()
+            .await
+            .unwrap_err()
+            .message,
+        "unsupported_protocol"
+    );
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.token_auth_requests, 0);
+    assert_eq!(remote.github_auth_requests, 0);
 }
 
 #[tokio::test]
@@ -1420,12 +2320,65 @@ async fn sign_out_with_custom_token_forgets_only_the_custom_token_not_github() {
     );
     let github_token = fixture
         .vault
-        .read(CredentialKey::new(CredentialNamespace::Marketplace, None, "github.oauth_token").unwrap())
+        .read(
+            CredentialKey::new(CredentialNamespace::Marketplace, None, "github.oauth_token")
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert!(
         github_token.is_some(),
         "sign_out from a custom-token session must never delete an unrelated GitHub credential"
+    );
+}
+
+#[tokio::test]
+async fn sign_out_without_active_custom_connection_preserves_github() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.set_custom_token("fixture-custom-token").await;
+
+    fixture.service.sign_out().await.unwrap();
+
+    assert!(fixture.custom_token().await.is_none());
+    let github_token = fixture
+        .vault
+        .read(
+            CredentialKey::new(CredentialNamespace::Marketplace, None, "github.oauth_token")
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        github_token.is_some(),
+        "a configured custom server must not revoke GitHub when no custom session is active"
+    );
+}
+
+#[tokio::test]
+async fn github_sign_out_still_removes_github_token_when_custom_config_read_fails() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    assert_eq!(fixture.service.status().auth_state, AuthState::SignedIn);
+    fixture
+        .vault
+        .deny_custom_config_read
+        .store(true, Ordering::Release);
+
+    fixture.service.sign_out().await.unwrap();
+
+    let github_token = fixture
+        .vault
+        .read(
+            CredentialKey::new(CredentialNamespace::Marketplace, None, "github.oauth_token")
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        github_token.is_none(),
+        "GitHub sign-out must not be skipped when custom configuration cannot be read"
     );
 }
 

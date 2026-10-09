@@ -11,7 +11,8 @@ import {
   getSettings,
   getPlatformCapabilities,
   handleWindowHotkeyEvent,
-  isTauri,
+  isTauriNow,
+  TAURI_READY_EVENT,
   qaWindowDismiss,
 } from './lib/ipc';
 import type { PlatformCapabilities } from './lib/types';
@@ -69,19 +70,36 @@ const ANDROID_SETUP_WIZARD_COMPLETE_KEY = 'openless.androidSetupWizardComplete';
  * later main-window reads never trigger a second startup request.
  */
 export function App(props: AppProps) {
-  const [ready, setReady] = useState(!isTauri);
+  const [nativeReady, setNativeReady] = useState(isTauriNow());
+  const [ready, setReady] = useState(!isTauriNow());
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isTauri) return;
+    const update = () => setNativeReady(isTauriNow());
+    update();
+    window.addEventListener(TAURI_READY_EVENT, update);
+    return () => window.removeEventListener(TAURI_READY_EVENT, update);
+  }, []);
+
+  useEffect(() => {
+    if (!nativeReady) return;
+    let cancelled = false;
+    setReady(false);
+    setError(null);
     void getStartupSnapshot()
-      .then(() => setReady(true))
+      .then(() => {
+        if (!cancelled) setReady(true);
+      })
       .catch((reason) => {
+        if (cancelled) return;
         const detail = reason instanceof Error ? reason.message : String(reason);
         console.error('[startup] backend contract handshake failed', reason);
         setError(detail);
       });
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [nativeReady]);
 
   if (error) {
     return (
@@ -136,7 +154,7 @@ function ReadyApp({
 
   const os = forcedOs ?? detectOS();
   // Windows startup must not block the first screen on permission probes.
-  const [gate, setGate] = useState<Gate>(isTauri ? 'checking' : 'ready');
+  const [gate, setGate] = useState<Gate>(isTauriNow() ? 'checking' : 'ready');
   const [startupError, setStartupError] = useState<string | null>(null);
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [mobileQaOpen, setMobileQaOpen] = useState(false);
@@ -147,7 +165,7 @@ function ReadyApp({
     setGate('ready');
   };
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isTauriNow()) return;
     void getStartupSnapshot()
       .then(() => getPlatformCapabilities())
       .then(setPlatformCaps)
@@ -160,7 +178,7 @@ function ReadyApp({
   }, []);
 
   useEffect(() => {
-    if (!isTauri || platformCaps?.platform !== 'android') return;
+    if (!isTauriNow() || platformCaps?.platform !== 'android') return;
     let unlistenState: (() => void) | undefined;
     let unlistenDismiss: (() => void) | undefined;
     let cancelled = false;
@@ -209,7 +227,7 @@ function ReadyApp({
   }, [mobileQaOpen, platformCaps?.platform]);
 
   useEffect(() => {
-    if (!isTauri || !platformCaps) return;
+    if (!isTauriNow() || !platformCaps) return;
     let cancelled = false;
     requestAnimationFrame(() => {
       if (cancelled) return;
@@ -255,7 +273,7 @@ function ReadyApp({
   }, [os, platformCaps]);
 
   useEffect(() => {
-    if (!isTauri || !platformCaps) return;
+    if (!isTauriNow() || !platformCaps) return;
     let cancelled = false;
 
     void (async () => {
@@ -326,7 +344,7 @@ function ReadyApp({
   }, [os, platformCaps]);
 
   useEffect(() => {
-    if (!isTauri || os !== 'win') return;
+    if (!isTauriNow() || os !== 'win') return;
     const forwardKey = (event: KeyboardEvent) => {
       if (!isWindowHotkeyKeyboardCandidate(event)) return;
       void handleWindowHotkeyEvent(

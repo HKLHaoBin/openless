@@ -19,12 +19,37 @@ class ImePrivacyPolicyTest {
         assertEquals(0, reads)
     }
     @Test fun sensitivePackagesAreNeverRead() {
-        for (name in listOf("com.x8bit.bitwarden", "com.kunzisoft.keepass.free", "com.termux",
-            "com.lastpass.lpandroid", "com.dashlane", "com.agilebits.onepassword", "com.onepassword.android")) {
+        for (name in listOf(
+            "com.x8bit.bitwarden",
+            "com.kunzisoft.keepass.free",
+            "keepass2android.keepass2android",
+            "keepass2android.keepass2android_nonet",
+            "com.termux",
+            "com.lastpass.lpandroid",
+            "com.dashlane",
+            "com.agilebits.onepassword",
+            "com.onepassword.android",
+            "com.callpod.android_apps.keeper",
+            "com.keepersecurity.keeper",
+            "com.sinew.enpass",
+            "io.enpass.app",
+            "proton.android.pass",
+            "com.nordpass",
+            "com.siber.roboform",
+            "com.safeincloud",
+            "com.server.auditor.ssh.client",
+            "org.connectbot",
+            "com.sonelli.juicessh",
+        )) {
             assertTrue(name, ImePrivacyPolicy.isSensitivePackage(name))
             assertNull(name, capture(packageName = name))
         }
+        assertTrue(ImePrivacyPolicy.isSensitivePackage("COM.SINEW.ENPASS.vault"))
+        assertTrue(ImePrivacyPolicy.isSensitivePackage("ORG.CONNECTBOT.PLUGIN"))
         assertFalse(ImePrivacyPolicy.isSensitivePackage("com.tencent.mm"))
+        assertFalse(ImePrivacyPolicy.isSensitivePackage("com.example.password.editor"))
+        assertFalse(ImePrivacyPolicy.isSensitivePackage("com.example.keepassnotes"))
+        assertFalse(ImePrivacyPolicy.isSensitivePackage("com.server.auditor.ssh.clientx"))
         assertFalse(ImePrivacyPolicy.isSensitivePackage(null))
         assertEquals(0, reads)
     }

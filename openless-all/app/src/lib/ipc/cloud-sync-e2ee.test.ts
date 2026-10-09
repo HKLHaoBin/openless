@@ -80,6 +80,17 @@ try {
     ['change_password', change, () => api.cloudSyncE2eeChangePassword(change)],
     ['delete_remote', deletion, () => api.cloudSyncE2eeDeleteRemote(deletion)],
     ['sign_out', undefined, api.cloudSyncE2eeSignOut],
+    ['sign_in_with_token', undefined, api.cloudSyncE2eeSignInWithToken],
+    ['get_custom_server_config', undefined, api.cloudSyncE2eeGetCustomServerConfig],
+    [
+      'set_custom_server_config',
+      { origin: 'https://sync.example/', token: 'fixture-token' },
+      () =>
+        api.cloudSyncE2eeSetCustomServerConfig({
+          origin: 'https://sync.example/',
+          token: 'fixture-token',
+        }),
+    ],
     ['get_ui_preferences', undefined, api.cloudSyncE2eeGetUiPreferences],
   ];
   for (const [command, args, invoke] of cases) {

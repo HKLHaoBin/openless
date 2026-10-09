@@ -32,11 +32,25 @@ pub(crate) struct LocalStorage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct KnownRemoteAccount {
+    pub owner_id: String,
+    pub vault_id: Option<String>,
+    pub key_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ClientSettings {
     pub version: u32,
     pub enabled: bool,
     pub consent_version: Option<String>,
     pub owner_id: Option<String>,
+    #[serde(default)]
+    pub known_owner_ids: Vec<String>,
+    #[serde(default)]
+    pub known_accounts: Vec<KnownRemoteAccount>,
+    #[serde(default)]
+    pub remote_origin: Option<String>,
     pub remember_key: bool,
     #[serde(default)]
     pub key_preference_epoch: u64,
@@ -55,6 +69,44 @@ pub(crate) struct UiEnvelope {
     pub value: crate::cloud_sync_e2ee_documents::SecretJson,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OriginMigrationManifest {
+    version: u32,
+    #[serde(default)]
+    legacy_origin: Option<String>,
+    entries: Vec<OriginMigrationEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OriginMigrationCompletion {
+    version: u32,
+    legacy_origin: String,
+    manifest_hash: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OriginMigrationEntry {
+    owner: String,
+    name: String,
+    existed: bool,
+}
+
+pub(crate) struct LocalMigrationRecord {
+    pub owner: String,
+    pub name: String,
+    pub value: serde_json::Value,
+}
+
+const ORIGIN_MIGRATION_VERSION: u32 = 1;
+const MAX_ORIGIN_MIGRATION_ENTRIES: usize = 4096;
+
+fn migration_manifest_hash(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 impl Default for ClientSettings {
     fn default() -> Self {
         Self {
@@ -62,6 +114,9 @@ impl Default for ClientSettings {
             enabled: false,
             consent_version: None,
             owner_id: None,
+            known_owner_ids: Vec::new(),
+            known_accounts: Vec::new(),
+            remote_origin: None,
             remember_key: false,
             key_preference_epoch: 0,
             last_success: None,
@@ -88,6 +143,121 @@ impl LocalStorage {
             cipher: Arc::new(OnceCell::new()),
             io: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    pub(crate) fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    pub(crate) fn shares_root_with(&self, other: &Self) -> bool {
+        self.root == other.root
+    }
+
+    pub(crate) fn with_origin(&self, origin: String) -> Self {
+        Self::new(
+            self.root.clone(),
+            origin,
+            self.device_id.clone(),
+            self.credentials.clone(),
+        )
+    }
+
+    pub(crate) fn origin_migration_complete(&self, legacy_origin: &str) -> SyncResult<bool> {
+        let path = self.root.join(".origin-migration-complete-v1");
+        match fs::read_to_string(path) {
+            Ok(value) => {
+                let value = value.trim();
+                if value == legacy_origin {
+                    return Ok(true);
+                }
+                let Ok(completion) = serde_json::from_str::<OriginMigrationCompletion>(value)
+                else {
+                    return Ok(false);
+                };
+                Ok(completion.version == ORIGIN_MIGRATION_VERSION
+                    && completion.legacy_origin == legacy_origin)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(_) => Err(error("local_storage_unavailable")),
+        }
+    }
+
+    pub(crate) fn recover_origin_migration(&self) -> SyncResult<()> {
+        recover_origin_migration_sync(&self.root)
+    }
+
+    pub(crate) async fn prepare_migration_key(&self) -> SyncResult<()> {
+        if self.cipher.get().is_some() {
+            return Ok(());
+        }
+        let account = self.storage_key_account()?;
+        let bytes = match self
+            .credentials
+            .read_sync_secret(account.clone())
+            .await
+            .map_err(|_| error("secure_storage_denied"))?
+        {
+            Some(value) => decode_key(value.expose_secret())?,
+            None => {
+                let mut bytes = Zeroizing::new([0_u8; 32]);
+                getrandom::fill(&mut *bytes).map_err(|_| error("secure_random_unavailable"))?;
+                self.credentials
+                    .write_sync_secret(
+                        account.clone(),
+                        SecretValue::new(URL_SAFE_NO_PAD.encode(&bytes[..])),
+                    )
+                    .await
+                    .map_err(|_| error("secure_storage_denied"))?;
+                let verified = self
+                    .credentials
+                    .read_sync_secret(account)
+                    .await
+                    .map_err(|_| error("secure_storage_denied"))?
+                    .ok_or_else(|| error("secure_storage_denied"))?;
+                if decode_key(verified.expose_secret())?.as_ref() != bytes.as_ref() {
+                    return Err(error("secure_storage_denied"));
+                }
+                bytes
+            }
+        };
+        let _ = self
+            .cipher
+            .set(Arc::new(DerivedKey::from_secret_bytes(bytes)));
+        Ok(())
+    }
+
+    pub(crate) async fn migrate_records(
+        &self,
+        legacy_origin: &str,
+        records: Vec<LocalMigrationRecord>,
+    ) -> SyncResult<()> {
+        self.recover_origin_migration()?;
+        self.prepare_migration_key().await?;
+        let key = self.key().await?;
+        let mut staged = Vec::with_capacity(records.len());
+        for record in records {
+            let aad = self.aad(&record.owner, &record.name)?;
+            let bytes = serde_json::to_vec(&record.value)
+                .map_err(|_| error("local_storage_unavailable"))?;
+            let sealed =
+                seal_local(&key, &aad, &bytes).map_err(|_| error("local_storage_unavailable"))?;
+            staged.push((record.owner, record.name, sealed));
+        }
+        let root = self.root.clone();
+        let legacy_origin = legacy_origin.to_owned();
+        let io = self.io.clone().lock_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let _io = io;
+            commit_origin_migration(&root, &legacy_origin, staged)
+        })
+        .await
+        .map_err(|_| error("local_storage_unavailable"))?
+    }
+
+    fn storage_key_account(&self) -> SyncResult<SyncSecretAccount> {
+        let aad = self.aad("device", "storage-key")?;
+        SyncSecretAccount::new(format!("cloud-sync.e2ee.local.{:x}", Sha256::digest(aad)))
+            .map_err(|_| error("local_storage_unavailable"))
     }
 
     pub(crate) fn initialized(&self) -> SyncResult<bool> {
@@ -383,6 +553,152 @@ impl LocalStorage {
     }
 }
 
+fn commit_origin_migration(
+    root: &Path,
+    legacy_origin: &str,
+    staged: Vec<(String, String, Vec<u8>)>,
+) -> SyncResult<()> {
+    let marker = root.join(".origin-migration-v1.json");
+    let backup_dir = root.join(".origin-migration-v1");
+    if marker.exists() || backup_dir.exists() {
+        recover_origin_migration_sync(root)?;
+    }
+    if staged.len() > MAX_ORIGIN_MIGRATION_ENTRIES {
+        return Err(error("recovery_required"));
+    }
+    fs::create_dir_all(&backup_dir).map_err(|_| error("local_storage_unavailable"))?;
+    let mut entries = Vec::with_capacity(staged.len());
+    for (index, (owner, name, _)) in staged.iter().enumerate() {
+        let path = root.join(format!(
+            "{:x}.enc",
+            Sha256::digest(format!("{owner}\0{name}").as_bytes())
+        ));
+        let existed = path
+            .try_exists()
+            .map_err(|_| error("local_storage_unavailable"))?;
+        if existed {
+            let bytes = fs::read(&path).map_err(|_| error("local_storage_unavailable"))?;
+            durable_replace(&backup_dir.join(format!("{index}.bak")), &bytes)?;
+        }
+        entries.push(OriginMigrationEntry {
+            owner: owner.clone(),
+            name: name.clone(),
+            existed,
+        });
+    }
+    let manifest = OriginMigrationManifest {
+        version: ORIGIN_MIGRATION_VERSION,
+        legacy_origin: Some(legacy_origin.to_owned()),
+        entries,
+    };
+    let manifest_bytes =
+        serde_json::to_vec(&manifest).map_err(|_| error("local_storage_unavailable"))?;
+    durable_replace(&marker, &manifest_bytes)?;
+    let completion_bytes = serde_json::to_vec(&OriginMigrationCompletion {
+        version: ORIGIN_MIGRATION_VERSION,
+        legacy_origin: legacy_origin.to_owned(),
+        manifest_hash: migration_manifest_hash(&manifest_bytes),
+    })
+    .map_err(|_| error("local_storage_unavailable"))?;
+    let result = (|| {
+        for (owner, name, sealed) in staged {
+            let path = root.join(format!(
+                "{:x}.enc",
+                Sha256::digest(format!("{owner}\0{name}").as_bytes())
+            ));
+            durable_replace(&path, &sealed)?;
+        }
+        durable_replace(
+            &root.join(".origin-migration-complete-v1"),
+            &completion_bytes,
+        )?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = recover_origin_migration_sync(root);
+        return result;
+    }
+    fs::remove_file(&marker).map_err(|_| error("local_storage_unavailable"))?;
+    fs::remove_dir_all(&backup_dir).map_err(|_| error("local_storage_unavailable"))?;
+    sync_directory(root)
+}
+
+fn recover_origin_migration_sync(root: &Path) -> SyncResult<()> {
+    let marker = root.join(".origin-migration-v1.json");
+    let backup_dir = root.join(".origin-migration-v1");
+    if !marker
+        .try_exists()
+        .map_err(|_| error("local_storage_unavailable"))?
+    {
+        if backup_dir.exists() {
+            fs::remove_dir_all(&backup_dir).map_err(|_| error("local_storage_unavailable"))?;
+        }
+        return Ok(());
+    }
+    let bytes = fs::read(&marker).map_err(|_| error("recovery_required"))?;
+    let manifest: OriginMigrationManifest =
+        serde_json::from_slice(&bytes).map_err(|_| error("recovery_required"))?;
+    if manifest.version != ORIGIN_MIGRATION_VERSION
+        || manifest.entries.len() > MAX_ORIGIN_MIGRATION_ENTRIES
+    {
+        return Err(error("recovery_required"));
+    }
+    let completion = match fs::read_to_string(root.join(".origin-migration-complete-v1")) {
+        Ok(value) => serde_json::from_str::<OriginMigrationCompletion>(value.trim()).ok(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err(error("local_storage_unavailable")),
+    };
+    if completion.as_ref().is_some_and(|completion| {
+        completion.version == ORIGIN_MIGRATION_VERSION
+            && manifest
+                .legacy_origin
+                .as_deref()
+                .is_some_and(|legacy_origin| completion.legacy_origin == legacy_origin)
+            && completion.manifest_hash == migration_manifest_hash(&bytes)
+    }) {
+        fs::remove_file(&marker).map_err(|_| error("recovery_required"))?;
+        sync_directory(root)?;
+        match fs::remove_dir_all(&backup_dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(error("recovery_required")),
+        }
+        return sync_directory(root);
+    }
+    if !backup_dir.is_dir() {
+        return Err(error("recovery_required"));
+    }
+    for (index, entry) in manifest.entries.iter().enumerate() {
+        let path = root.join(format!(
+            "{:x}.enc",
+            Sha256::digest(format!("{}\0{}", entry.owner, entry.name).as_bytes())
+        ));
+        if entry.existed {
+            let backup = backup_dir.join(format!("{index}.bak"));
+            if backup.is_file() {
+                let bytes = fs::read(&backup).map_err(|_| error("recovery_required"))?;
+                durable_replace(&path, &bytes)?;
+            } else if !path.is_file() {
+                return Err(error("recovery_required"));
+            }
+        } else {
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(error("recovery_required")),
+            }
+        }
+    }
+    fs::remove_file(&marker).map_err(|_| error("recovery_required"))?;
+    sync_directory(root)?;
+    match fs::remove_dir_all(&backup_dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(error("recovery_required")),
+    }
+    sync_directory(root)
+}
+
 fn decode_key(value: &str) -> SyncResult<Zeroizing<[u8; 32]>> {
     let bytes = Zeroizing::new(
         URL_SAFE_NO_PAD
@@ -442,7 +758,7 @@ pub(crate) fn durable_replace(path: &Path, bytes: &[u8]) -> SyncResult<()> {
             );
             error("local_storage_unavailable")
         })?;
-        fs::rename(&temporary, path).map_err(|err| {
+        replace_temporary(&temporary, path).map_err(|err| {
             log::error!(
                 "[e2ee-local] durable_replace rename tmp={} dest={} err={err}",
                 temporary.display(),
@@ -456,6 +772,39 @@ pub(crate) fn durable_replace(path: &Path, bytes: &[u8]) -> SyncResult<()> {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(target_os = "windows")]
+fn replace_temporary(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(source.as_ptr()),
+            PCWSTR(destination.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|error| std::io::Error::other(error.to_string()))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_temporary(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(source, destination)
 }
 
 fn sync_directory(path: &Path) -> SyncResult<()> {
@@ -595,6 +944,68 @@ fn exclusive_create(path: &Path, bytes: &[u8]) -> SyncResult<bool> {
             );
             Err(error("local_storage_unavailable"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durable_replace_updates_existing_file() {
+        let root =
+            std::env::temp_dir().join(format!("openless-durable-replace-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("record.enc");
+
+        durable_replace(&path, b"first").unwrap();
+        durable_replace(&path, b"second").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn origin_only_completion_marker_does_not_acknowledge_a_new_manifest() {
+        let root =
+            std::env::temp_dir().join(format!("openless-origin-recovery-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let owner = "owner";
+        let name = "baseline";
+        let path = root.join(format!(
+            "{:x}.enc",
+            Sha256::digest(format!("{owner}\0{name}").as_bytes())
+        ));
+        let backup_dir = root.join(".origin-migration-v1");
+        fs::create_dir_all(&backup_dir).unwrap();
+        fs::write(&path, b"partially replaced").unwrap();
+        fs::write(backup_dir.join("0.bak"), b"original").unwrap();
+        let manifest = OriginMigrationManifest {
+            version: ORIGIN_MIGRATION_VERSION,
+            legacy_origin: Some("https://legacy.example".into()),
+            entries: vec![OriginMigrationEntry {
+                owner: owner.into(),
+                name: name.into(),
+                existed: true,
+            }],
+        };
+        fs::write(
+            root.join(".origin-migration-v1.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join(".origin-migration-complete-v1"),
+            b"https://legacy.example\n",
+        )
+        .unwrap();
+
+        recover_origin_migration_sync(&root).unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert!(!root.join(".origin-migration-v1.json").exists());
+        assert!(!root.join(".origin-migration-v1").exists());
+        let _ = fs::remove_dir_all(root);
     }
 }
 

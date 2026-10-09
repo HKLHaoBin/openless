@@ -1,6 +1,6 @@
 // The main native window owns the device-local UI mirror. Every write shares
 // this queue and a native revision, including the initial consent preparation.
-import { invokeOrMock, isTauri } from './ipc/shared';
+import { invokeOrMock, isTauriNow, TAURI_READY_EVENT } from './ipc/shared';
 import {
   getLocalePreference,
   setLocalePreference,
@@ -21,6 +21,9 @@ type Status = {
 type Restored = { sequence: string; accountId: string; vaultId: string; taskId: string | null };
 let installation: Promise<void> | null = null;
 let flushBridge: (() => Promise<void>) | null = null;
+let injectionWatchActive = false;
+let tauriReadyAnnounced = false;
+const isAuxiliaryWindow = new URLSearchParams(location.search).has('window');
 
 export async function flushEncryptedSyncUiPreferences(): Promise<void> {
   await installEncryptedSyncUiBridge();
@@ -29,8 +32,44 @@ export async function flushEncryptedSyncUiPreferences(): Promise<void> {
 }
 
 export function installEncryptedSyncUiBridge(): Promise<void> {
-  if (!isTauri || new URLSearchParams(location.search).has('window')) return Promise.resolve();
+  if (!isTauriNow()) return waitForTauriInjection();
+  return installAfterTauriReady();
+}
+
+function installAfterTauriReady(): Promise<void> {
+  if (!tauriReadyAnnounced) {
+    tauriReadyAnnounced = true;
+    window.dispatchEvent(new Event(TAURI_READY_EVENT));
+  }
+  if (isAuxiliaryWindow) return Promise.resolve();
   return (installation ??= install());
+}
+
+function watchForTauriInjection() {
+  if (injectionWatchActive) return;
+  injectionWatchActive = true;
+  const poll = () => {
+    if (isTauriNow()) {
+      injectionWatchActive = false;
+      void installAfterTauriReady().catch(() => {});
+      return;
+    }
+    setTimeout(poll, 250);
+  };
+  setTimeout(poll, 250);
+}
+
+async function waitForTauriInjection(): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (isTauriNow()) {
+      await installAfterTauriReady();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  // Injection is controlled by the host WebView and can outlive the startup
+  // grace period. Keep observing so a late bridge cannot leave native UI inert.
+  watchForTauriInjection();
 }
 
 async function install(): Promise<void> {

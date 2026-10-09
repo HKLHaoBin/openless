@@ -34,6 +34,7 @@ function context({ native = true, blocked = false } = {}) {
   let cursor = 0,
     id = 0,
     calls = 0,
+    nativeReady = native,
     response = false,
     props = { blocked, onSetup: () => {} },
     last;
@@ -74,7 +75,10 @@ function context({ native = true, blocked = false } = {}) {
     'react-i18next': { useTranslation: () => ({ t: (k) => k }) },
     'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'fragment' },
     'lucide-react': { CloudIcon: 'cloud', XIcon: 'x' },
-    '../lib/ipc/shared': { isTauri: native },
+    '../lib/ipc/shared': {
+      isTauriNow: () => nativeReady,
+      TAURI_READY_EVENT: 'openless:tauri-ready',
+    },
     '../lib/ipc/cloud-sync-e2ee': {
       cloudSyncE2eeClaimSetupPrompt: async () => {
         calls++;
@@ -118,8 +122,15 @@ function context({ native = true, blocked = false } = {}) {
     effects.splice(0).forEach((fn) => fn());
     return last;
   };
+  const renderWelcome = () => {
+    cursor = 0;
+    last = exports.CloudSyncWelcome();
+    effects.splice(0).forEach((fn) => fn());
+    return last;
+  };
   return {
     render,
+    renderWelcome,
     document,
     window,
     setResponse: (v) => {
@@ -127,6 +138,10 @@ function context({ native = true, blocked = false } = {}) {
     },
     setBlocked: (v) => {
       props = { ...props, blocked: v };
+    },
+    injectTauri: () => {
+      nativeReady = true;
+      window.dispatchEvent(new Event('openless:tauri-ready'));
     },
     calls: () => calls,
     listeners,
@@ -145,6 +160,28 @@ function context({ native = true, blocked = false } = {}) {
     },
     welcome: exports.CloudSyncWelcome,
   };
+}
+{
+  const c = context({ native: false });
+  c.setResponse(true);
+  assert.equal(c.render(), null);
+  await c.flush();
+  assert.equal(c.calls(), 0);
+  c.injectTauri();
+  await c.flush();
+  const tree = await c.flush();
+  assert.equal(tree.type, 'modal');
+  assert.equal(c.calls(), 1);
+  c.unmount();
+}
+{
+  const c = context({ native: false });
+  const before = all(c.renderWelcome()).find((node) => node.type === 'button');
+  assert.equal(before?.props.disabled, true);
+  c.injectTauri();
+  const after = all(c.renderWelcome()).find((node) => node.type === 'button');
+  assert.equal(after?.props.disabled, false);
+  c.unmount();
 }
 for (const options of [{ native: false }, { blocked: true }]) {
   const c = context(options);
@@ -239,4 +276,4 @@ for (const change of ['hidden', 'focus', 'recording']) {
   assert.equal(c.render(), null, `late claim after ${change} must not open`);
   c.unmount();
 }
-console.log('encrypted sync setup prompt: 10 lifecycle cases passed');
+console.log('encrypted sync setup prompt: 12 lifecycle cases passed');

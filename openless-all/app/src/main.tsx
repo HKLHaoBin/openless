@@ -54,6 +54,10 @@ void i18nReady
       // Native credential access can wait for an OS prompt before the UI mirror is ready.
       root.render(<CoreStartupScreen />);
       await installEncryptedSyncUiBridge().catch(() => {});
+    } else {
+      // Auxiliary WebViews do not own the UI mirror, but they still need the
+      // late-injection watcher so shared native consumers leave browser mode.
+      void installEncryptedSyncUiBridge().catch(() => {});
     }
     renderApp();
   })

@@ -12,7 +12,25 @@ pub(crate) use adapter::build;
 pub use dto::*;
 pub(crate) use service::{EncryptedSyncService, SyncServiceConfig};
 
+use serde::{Deserialize, Serialize};
+
 pub const DEFAULT_SYNC_SERVICE_ORIGIN: &str = "https://apic.openless.top:9443";
+pub(crate) const CUSTOM_SYNC_CONFIG_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EncryptedSyncCustomServerConfig {
+    pub origin: String,
+    pub has_token: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PersistedCustomServerConfig {
+    pub version: u32,
+    pub origin: String,
+    pub token: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct EncryptedSyncConfig {

@@ -41,3 +41,6 @@ uuid = { version = "1", features = ["v4", "serde"] }
 unicode-normalization = "0.1"
 zeroize = { version = "1", features = ["derive"] }
 zip = "2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Win32_Storage_FileSystem"] }

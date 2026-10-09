@@ -21,11 +21,14 @@ const defer = () => {
   });
   return { promise, resolve, reject };
 };
-function context({ fresh = false } = {}) {
+function context({ fresh = false, native = true, windowed = false } = {}) {
   const window = new EventTarget(),
     handlers = new Map(),
     statusQueue = [],
     attempts = [];
+  let nativeReady = native;
+  let readyEvents = 0;
+  window.addEventListener('openless:tauri-ready', () => readyEvents++);
   let errors = 0;
   window.addEventListener('openless:sync-ui-persistence-failed', () => errors++);
   let locale = 'en',
@@ -81,7 +84,11 @@ function context({ fresh = false } = {}) {
     throw new Error(cmd);
   };
   const exports = {},
-    shared = { isTauri: true, invokeOrMock: invoke };
+    shared = {
+      isTauriNow: () => nativeReady,
+      TAURI_READY_EVENT: 'openless:tauri-ready',
+      invokeOrMock: invoke,
+    };
   const localRequire = (name) =>
     name === './ipc/shared'
       ? shared
@@ -101,13 +108,17 @@ function context({ fresh = false } = {}) {
     localRequire,
     exports,
     window,
-    { search: '' },
+    { search: windowed ? '?window=capsule' : '' },
     Event,
     CustomEvent,
   );
   return {
     install: exports.installEncryptedSyncUiBridge,
     flush: exports.flushEncryptedSyncUiPreferences,
+    injectTauri: () => {
+      nativeReady = true;
+    },
+    readyEvents: () => readyEvents,
     userLocale: i18n.setLocalePreference,
     userFont: fonts.setFontScale,
     statusQueue,
@@ -143,6 +154,19 @@ async function test(name, fn) {
     console.log('FAIL ' + name + '\n' + e.message);
   }
 }
+await test('late Tauri injection announces readiness before installing the native mirror', async () => {
+  const c = context({ native: false });
+  setTimeout(c.injectTauri, 10);
+  await c.install();
+  assert.equal(c.readyEvents(), 1);
+});
+await test('auxiliary WebView late injection announces readiness without installing the mirror', async () => {
+  const c = context({ native: false, windowed: true });
+  setTimeout(c.injectTauri, 10);
+  await c.install();
+  assert.equal(c.readyEvents(), 1);
+  await assert.rejects(c.flush(), /cloud_sync_unavailable/);
+});
 await test('old mirror queued before restore cannot overwrite its native value', async () => {
   const c = context();
   await c.install();

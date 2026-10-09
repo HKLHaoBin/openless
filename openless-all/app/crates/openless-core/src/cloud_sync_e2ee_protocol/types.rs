@@ -522,7 +522,8 @@ impl Validate for SnapshotUpload {
 pub(crate) struct Capabilities {
     pub(crate) protocol_version: u32,
     pub(crate) crypto_profile: String,
-    pub(crate) github_client_id: String,
+    #[serde(default)]
+    pub(crate) github_client_id: Option<String>,
     pub(crate) max_http_body_bytes: u64,
     pub(crate) max_ciphertext_bytes: u64,
     pub(crate) max_plaintext_json_bytes: u64,
@@ -541,7 +542,10 @@ impl Validate for Capabilities {
         {
             return Err(Error::UnsupportedProtocol);
         }
-        bounded_text(&self.github_client_id, 1, 128)
+        if let Some(github_client_id) = &self.github_client_id {
+            bounded_text(github_client_id, 1, 128)?;
+        }
+        Ok(())
     }
 }
 #[derive(Clone, Debug, Deserialize)]

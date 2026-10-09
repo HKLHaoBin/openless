@@ -165,8 +165,13 @@ const dependencies: Record<string, any> = {
   Btn: 'button',
   Card: 'card',
   Toggle: 'toggle',
-  isTauri: true,
+  isTauriNow: () => true,
   marketplaceAuthStatus: async () => ({ signedIn: true }),
+  cloudSyncE2eeGetCustomServerConfig: async () => null,
+  cloudSyncE2eeSetCustomServerConfig: async (value: any) => value,
+  cloudSyncE2eeSignInWithToken: async () => ({ ...server }),
+  cloudSyncE2eeSignOut: async () =>
+    update({ authState: 'signed_out', syncState: 'disabled', account: null }),
   cloudSyncE2eeStatus: async () => deferredStatus ?? { ...server },
   mirrorEncryptedSyncUiPreferences: async () => {
     calls.push(['mirror']);
@@ -474,6 +479,46 @@ try {
     observedRevision: '42',
   });
   freshHooks.unmount();
+  await settle();
+  assert.equal(events.size, 0);
+
+  // Marketplace authentication must not hide self-hosted configuration while encrypted sync is signed out.
+  server = {
+    ...initial,
+    authState: 'signed_out',
+    syncState: 'disabled',
+    account: null,
+    vaultId: null,
+    keyId: null,
+  };
+  const marketplaceOnlyHooks = new Hooks();
+  const marketplaceOnly = () => marketplaceOnlyHooks.render(() => components.CloudSyncSection());
+  marketplaceOnly();
+  await settle();
+  tree = marketplaceOnly();
+  assert(
+    nodes(tree).some((node) => node.props.children === 'cloudSyncE2ee.customServerTitle'),
+    'self-hosted configuration must remain visible when only Marketplace auth is active',
+  );
+  marketplaceOnlyHooks.unmount();
+  await settle();
+  assert.equal(events.size, 0);
+
+  server = { ...initial };
+  const signOutHooks = new Hooks();
+  const signOutView = () => signOutHooks.render(() => components.CloudSyncSection());
+  signOutView();
+  await settle();
+  tree = signOutView();
+  find(tree, (node) => node.type === 'button' && node.props.children === 'cloudSyncE2ee.signOut').props.onClick();
+  await settle();
+  tree = signOutView();
+  assert.equal(
+    syncSwitch(tree).props.disabled,
+    false,
+    'custom-token sign-out must retain the Marketplace-authenticated controls',
+  );
+  signOutHooks.unmount();
   await settle();
   assert.equal(events.size, 0);
 } finally {

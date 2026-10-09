@@ -649,6 +649,104 @@ fn unknown_nested_rows_abort_ordinary_mutation_without_writing_or_dirty_generati
 }
 
 #[tokio::test]
+async fn legacy_scope_migration_does_not_overwrite_stable_scope_on_refresh() {
+    let fixture = Fixture::new();
+    let legacy_origin = "https://legacy.sync.example.test";
+    let mut legacy_scope = fixture.scope.clone();
+    legacy_scope.service_origin = legacy_origin.into();
+    let mut legacy_state = state::ScopeState::empty(&legacy_scope).unwrap();
+    legacy_state.baseline_revision = Revision::new(7);
+    fixture
+        .extensions
+        .write_scope(legacy_scope, legacy_state.secret_json().unwrap())
+        .await
+        .unwrap();
+    let legacy: Arc<dyn ProtectedExtensionStore> = fixture.extensions.clone();
+
+    fixture
+        .store
+        .migrate_legacy_origin(
+            Arc::clone(&legacy),
+            legacy_origin,
+            &fixture.scope.service_origin,
+            Some(fixture.scope.clone()),
+        )
+        .await
+        .unwrap();
+    let migrated = fixture
+        .extensions
+        .read_scope(fixture.scope.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut stable_state = state::ScopeState::decode(&fixture.scope, Some(migrated)).unwrap();
+    stable_state.baseline_revision = Revision::new(11);
+    fixture
+        .extensions
+        .write_scope(fixture.scope.clone(), stable_state.secret_json().unwrap())
+        .await
+        .unwrap();
+
+    fixture
+        .store
+        .migrate_legacy_origin(
+            legacy,
+            legacy_origin,
+            &fixture.scope.service_origin,
+            Some(fixture.scope.clone()),
+        )
+        .await
+        .unwrap();
+    let final_state = state::ScopeState::decode(
+        &fixture.scope,
+        fixture
+            .extensions
+            .read_scope(fixture.scope.clone())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(final_state.baseline_revision, Revision::new(11));
+}
+
+#[tokio::test]
+async fn layout_migration_copies_same_origin_scope_extension_state() {
+    let fixture = Fixture::new();
+    let legacy_extensions = Arc::new(Extensions {
+        values: Mutex::new(BTreeMap::new()),
+        protector: Arc::clone(&fixture.extensions.protector),
+        key_requested: AtomicBool::new(false),
+        ui_revision: Mutex::new(None),
+    });
+    let mut legacy_state = state::ScopeState::empty(&fixture.scope).unwrap();
+    legacy_state.baseline_revision = Revision::new(7);
+    legacy_extensions
+        .write_scope(fixture.scope.clone(), legacy_state.secret_json().unwrap())
+        .await
+        .unwrap();
+
+    fixture
+        .store
+        .migrate_legacy_origin(
+            legacy_extensions,
+            &fixture.scope.service_origin,
+            &fixture.scope.service_origin,
+            Some(fixture.scope.clone()),
+        )
+        .await
+        .unwrap();
+
+    let migrated = fixture
+        .extensions
+        .read_scope(fixture.scope.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    let state = state::ScopeState::decode(&fixture.scope, Some(migrated)).unwrap();
+    assert_eq!(state.baseline_revision, Revision::new(7));
+}
+
+#[tokio::test]
 async fn baseline_updates_do_not_erase_newer_local_edits_or_tombstones() {
     let fixture = Fixture::new();
     let before = fixture

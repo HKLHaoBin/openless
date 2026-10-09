@@ -8,6 +8,10 @@ export type { PlatformCapabilities, PlatformKind };
 
 let cachedCapabilities: PlatformCapabilities | null = null;
 
+export function resetPlatformCapabilitiesCache(): void {
+  cachedCapabilities = null;
+}
+
 function detectAndroidFromUa(): boolean {
   if (typeof navigator === 'undefined') return false;
   const uaDataPlatform =

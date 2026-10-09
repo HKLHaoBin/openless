@@ -2,6 +2,7 @@ package com.openless.app
 
 import android.text.InputType
 import android.view.inputmethod.EditorInfo
+import java.util.Locale
 
 /** Text around the caret, read once when a recording starts. */
 internal data class AndroidCursorContext(
@@ -20,13 +21,36 @@ internal object ImePrivacyPolicy {
     const val CURSOR_BEFORE_CHARS = 600
     const val CURSOR_AFTER_CHARS = 200
 
-    private val sensitivePackageHints =
-        listOf("keepass", "bitwarden", "1password", "lastpass", "dashlane", "termux", "password")
+    private val sensitivePackagePrefixes = setOf(
+        "com.x8bit.bitwarden",
+        "com.android.keepass",
+        "com.kunzisoft.keepass",
+        "keepass2android.keepass2android",
+        "keepass2android.keepass2android_nonet",
+        "com.agilebits.onepassword",
+        "com.onepassword.android",
+        "com.lastpass.lpandroid",
+        "com.dashlane",
+        "com.callpod.android_apps.keeper",
+        "com.keepersecurity.keeper",
+        "com.sinew.enpass",
+        "io.enpass.app",
+        "proton.android.pass",
+        "me.proton.android.pass",
+        "com.nordpass",
+        "com.nordpass.passwordmanager",
+        "com.siber.roboform",
+        "com.safeincloud",
+        "com.termux",
+        "com.server.auditor.ssh.client",
+        "org.connectbot",
+        "com.sonelli.juicessh",
+    )
 
     /** Single list for cursor context and accessibility vocabulary observation alike. */
     fun isSensitivePackage(packageName: String?): Boolean {
-        val name = packageName?.lowercase().orEmpty()
-        return sensitivePackageHints.any { name.contains(it) }
+        val name = packageName?.trim()?.lowercase(Locale.ROOT).orEmpty()
+        return sensitivePackagePrefixes.any { name == it || name.startsWith("$it.") }
     }
 
     fun allowsCursorContext(inputType: Int, imeOptions: Int, packageName: String?): Boolean =

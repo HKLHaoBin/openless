@@ -11583,11 +11583,18 @@ mod tests {
                 Box::pin(async { Ok(crate::ports::PolishOutput::text("polished words")) })
             }
 
-            fn cancel(&self, _session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            fn cancel(
+                &self,
+                _session_id: SessionId,
+            ) -> BoxFuture<'static, Result<(), BackendError>> {
                 Box::pin(async { Ok(()) })
             }
         }
-        fn files_containing(dir: &std::path::Path, needle: &str, found: &mut Vec<std::path::PathBuf>) {
+        fn files_containing(
+            dir: &std::path::Path,
+            needle: &str,
+            found: &mut Vec<std::path::PathBuf>,
+        ) {
             for entry in std::fs::read_dir(dir).unwrap().flatten() {
                 let path = entry.path();
                 if path.is_dir() {
@@ -11650,7 +11657,9 @@ mod tests {
             let seen = seen.lock().unwrap().clone();
             assert_eq!(seen.len(), 1, "{target}");
             assert!(
-                seen[0].as_deref().is_some_and(|context| context.contains(HOST_TEXT)),
+                seen[0]
+                    .as_deref()
+                    .is_some_and(|context| context.contains(HOST_TEXT)),
                 "{target}: polish must still see the cursor context"
             );
             assert_eq!(
@@ -11661,7 +11670,10 @@ mod tests {
             backend.shutdown().await.unwrap();
             let mut leaked = Vec::new();
             files_containing(&data_dir, HOST_TEXT, &mut leaked);
-            assert!(leaked.is_empty(), "{target}: cursor context persisted in {leaked:?}");
+            assert!(
+                leaked.is_empty(),
+                "{target}: cursor context persisted in {leaked:?}"
+            );
             // The scan is meaningful: what does get stored is readable the same way.
             let mut stored = Vec::new();
             files_containing(&data_dir, "polished words", &mut stored);

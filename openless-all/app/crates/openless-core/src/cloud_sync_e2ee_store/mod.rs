@@ -15,8 +15,8 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 
 use crate::cloud_sync_e2ee_documents::{
-    DocumentError, DocumentResult, ExportedDocuments, RestoreBackend, RestoreContext, RestoreLease,
-    SecretJson, SyncScope, ValidatedSyncDocuments,
+    DocumentError, DocumentResult, ExportedDocuments, JournalStore, RestoreBackend, RestoreContext,
+    RestoreLease, SecretJson, SyncScope, ValidatedSyncDocuments,
 };
 use crate::cloud_sync_e2ee_protocol::types::{DocumentSet, Revision, SourceDevice};
 use crate::{BackendRepositories, CredentialStore};
@@ -87,8 +87,15 @@ impl CoreSyncStore {
     pub fn device(&self) -> SourceDevice {
         self.inner.device.clone()
     }
+    pub fn recovery_scopes(&self) -> DocumentResult<Vec<SyncScope>> {
+        self.inner.gate.registered_recovery_scopes()
+    }
     pub fn custom_server_origin(&self) -> Option<String> {
-        self.inner.repositories.preferences.get().sync_custom_server_origin
+        self.inner
+            .repositories
+            .preferences
+            .get()
+            .sync_custom_server_origin
     }
     pub fn changes(&self) -> tokio::sync::watch::Receiver<SyncChange> {
         self.inner.gate.subscribe()
@@ -287,6 +294,115 @@ impl CoreSyncStore {
             Ok(())
         })
         .await
+    }
+
+    pub async fn migrate_legacy_origin(
+        &self,
+        legacy: Arc<dyn ProtectedExtensionStore>,
+        legacy_origin: &str,
+        stable_origin: &str,
+        current_scope: Option<SyncScope>,
+    ) -> DocumentResult<()> {
+        let mut scopes = self.inner.gate.registered_recovery_scopes()?;
+        let explicit_scope = current_scope.clone();
+        if let Some(scope) = current_scope {
+            if !scopes.contains(&scope) {
+                scopes.push(scope);
+            }
+        }
+        let mut old_scopes = Vec::new();
+        for scope in scopes {
+            let is_explicit_scope = explicit_scope
+                .as_ref()
+                .is_some_and(|current| current == &scope);
+            let old_scope = if scope.service_origin == legacy_origin {
+                scope
+            } else if scope.service_origin == stable_origin {
+                let mut old_scope = scope;
+                old_scope.service_origin = legacy_origin.to_owned();
+                old_scope
+            } else if is_explicit_scope {
+                scope
+            } else {
+                continue;
+            };
+            if !old_scopes.contains(&old_scope) {
+                old_scopes.push(old_scope);
+            }
+        }
+        if old_scopes.is_empty() {
+            return Ok(());
+        }
+
+        // Journal saves/clears and gate metadata migration must share one exclusive
+        // lease. Without it, a journal write is rejected as SourceChanged and a
+        // completion receipt can be cleared before its remapped scope is durable.
+        let permit = self.inner.gate.try_exclusive_recovery()?;
+        let journal = self.journal();
+        for old_scope in old_scopes {
+            let mut new_scope = old_scope.clone();
+            new_scope.service_origin = stable_origin.to_owned();
+            let old_scope_value = legacy.read_scope(old_scope.clone()).await?;
+            if old_scope == new_scope {
+                if old_scope_value.is_some()
+                    && self
+                        .inner
+                        .extensions
+                        .read_scope(new_scope.clone())
+                        .await?
+                        .is_none()
+                {
+                    let scope_state = state::ScopeState::decode(&old_scope, old_scope_value)?;
+                    self.inner
+                        .extensions
+                        .write_scope(new_scope, scope_state.secret_json()?)
+                        .await?;
+                }
+                continue;
+            }
+            // Probe both stores before opening any origin-specific wrapping key. A
+            // configured remote origin is a transport route, not evidence that the
+            // current local files were encrypted under that origin.
+            let old_journal = journal.load(old_scope.clone()).await?;
+            if old_journal.is_none() && old_scope_value.is_none() {
+                continue;
+            }
+            let stable_scope_value = self.inner.extensions.read_scope(new_scope.clone()).await?;
+            if stable_scope_value.is_none() {
+                if let Some(value) = old_scope_value {
+                    let mut scope_state = state::ScopeState::decode(&old_scope, Some(value))?;
+                    scope_state.scope_id = state::scope_id(&new_scope)?;
+                    self.inner
+                        .extensions
+                        .write_scope(new_scope.clone(), scope_state.secret_json()?)
+                        .await?;
+                }
+            }
+            if let Some(sealed) = old_journal.as_ref() {
+                let old_protector = legacy.journal_protector().await?;
+                let new_protector = self.inner.extensions.journal_protector().await?;
+                let migrated = crate::cloud_sync_e2ee_documents::migrate_sealed_journal(
+                    &old_scope,
+                    &new_scope,
+                    sealed,
+                    old_protector.as_ref(),
+                    new_protector.as_ref(),
+                )?;
+                if let Some(existing) = journal.load(new_scope.clone()).await? {
+                    if existing.operation_id != migrated.operation_id {
+                        return Err(DocumentError::RecoveryRequired);
+                    }
+                }
+                journal.save(new_scope.clone(), migrated).await?;
+            }
+            permit.migrate_scope_origin(&old_scope, &new_scope)?;
+            if old_journal.is_some() {
+                // Remap gate completion metadata before clear: clear only forgets the
+                // old scope ID, leaving the stable receipt available after a crash.
+                journal.clear(old_scope.clone()).await?;
+            }
+        }
+        Ok(())
     }
 
     /// Runs an owned operation on the host task spawner and awaits its outcome.
