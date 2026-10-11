@@ -91,6 +91,7 @@ const KOTLIN_TEST_FILES = [
   'OpenLessAccessibilityTargetTest.kt',
   'OpenLessPasteVerificationTest.kt',
   'OpenLessAccessibilityComponentIdsTest.kt',
+  'LitePinyinControllerTest.kt',
 ];
 const KOTLIN_ANDROID_TEST_FILES = [
   'OpenLessCredentialVaultInstrumentedTest.kt',

@@ -15,8 +15,39 @@ import android.content.Context
  * with them (render a row, commit a character, etc.) — see the lite-pinyin
  * plan's 5.2 ("不让 View 直接查询词库或持有 Repository").
  */
-internal class LitePinyinController(context: Context) {
-    private val repository = LitePinyinRepository(context)
+internal enum class PinyinCandidateSource {
+    LEARNED,
+    FULL_PINYIN,
+    ABBREVIATION,
+    SYLLABLE,
+}
+
+internal data class PinyinCandidate(
+    val text: String,
+    val sourceKey: String,
+    val consumedLength: Int,
+    val source: PinyinCandidateSource,
+    val queryEpoch: Long = 0L,
+    val learningKey: String = "",
+)
+
+internal interface PinyinInputEngine {
+    fun query(
+        encoding: String,
+        personalize: Boolean,
+        callback: (List<PinyinCandidate>) -> Unit,
+    )
+
+    fun recordSelection(candidate: PinyinCandidate)
+    fun observeSequence(combinedEncoding: String, text: String)
+    fun preloadAsync()
+    fun shutdown()
+}
+
+internal class LitePinyinController internal constructor(
+    private val engine: PinyinInputEngine,
+) {
+    internal constructor(context: Context) : this(LitePinyinRepository(context))
     private val encoding = StringBuilder()
     private var learningAllowed = false
     fun setLearningAllowed(allowed: Boolean) {
@@ -24,7 +55,7 @@ internal class LitePinyinController(context: Context) {
         clear()
         resetAssociationContext()
     }
-    fun shutdown() = repository.shutdown()
+    fun shutdown() = engine.shutdown()
 
     // --- Two-step combo learning (见 LitePinyinLearnedPhrases 的文档注释) ---
     // "上次直接打拼音上屏的是什么" — separate from confirmedText above
@@ -45,7 +76,7 @@ internal class LitePinyinController(context: Context) {
 
     fun isEmpty(): Boolean = encoding.isEmpty()
 
-    fun preloadAsync() = repository.preloadAsync()
+    fun preloadAsync() = engine.preloadAsync()
 
     /**
      * Record frequency under the candidate's real sourceKey, then drop only
@@ -53,17 +84,25 @@ internal class LitePinyinController(context: Context) {
      * the whole buffer; first-syllable consume when it matched the leading
      * syllable — including multi-character phrases keyed on that syllable).
      */
-    fun commitSelection(text: String, onCandidates: (List<String>) -> Unit) {
+    fun isCandidateCurrent(candidate: PinyinCandidate): Boolean {
         val currentEncoding = encoding.toString()
-        val sourceKey = repository.resolveSourceKey(currentEncoding, text)
-        if (learningAllowed) repository.recordSelection(sourceKey, text)
-        if (sourceKey.length >= currentEncoding.length) {
+        return candidate.queryEpoch == queryEpoch &&
+            candidate.consumedLength > 0 &&
+            candidate.consumedLength <= currentEncoding.length &&
+            currentEncoding.startsWith(candidate.sourceKey)
+    }
+
+    fun commitSelection(candidate: PinyinCandidate, onCandidates: (List<PinyinCandidate>) -> Unit): Boolean {
+        if (!isCandidateCurrent(candidate)) return false
+        if (learningAllowed) engine.recordSelection(candidate)
+        if (candidate.consumedLength >= encoding.length) {
             clear()
             onCandidates(emptyList())
-            return
+            return true
         }
-        encoding.delete(0, sourceKey.length)
+        encoding.delete(0, candidate.consumedLength)
         query(onCandidates)
+        return true
     }
 
     /**
@@ -76,44 +115,39 @@ internal class LitePinyinController(context: Context) {
      * LitePinyinLearnedPhrases so a real habit (not a one-off) eventually
      * surfaces on its own — see that class's own doc comment.
      */
-    fun observeCommitForLearning(text: String) {
+    fun observeCommitForLearning(candidate: PinyinCandidate) {
         if (!learningAllowed) return
+        val text = candidate.text
         val currentEncoding = encoding.toString()
         // A single full-pinyin syllable ("guo") contributes only its first
         // letter, matching how a real abbreviation is built one letter per
-        // character — an already-abbreviation-shaped encoding ("zg", one
-        // letter per character in `text`) is used as-is.
-        val abbreviation = if (currentEncoding.length == text.length) currentEncoding else currentEncoding.take(1)
+        // character. Repository candidates provide the exact key for phrases;
+        // the fallback keeps injected engines compatible with the old rule.
+        val abbreviation = candidate.learningKey.ifEmpty {
+            if (currentEncoding.length == text.length) currentEncoding else currentEncoding.take(1)
+        }
         val previousAbbreviation = lastCommitEncoding
         val previousText = lastCommitText
         if (previousAbbreviation != null && previousText != null) {
-            repository.observeSequence(previousAbbreviation + abbreviation, previousText + text)
+            engine.observeSequence(previousAbbreviation + abbreviation, previousText + text)
         }
         lastCommitEncoding = abbreviation
         lastCommitText = text
     }
 
     /** Letters only — OpenLessImeService is responsible for routing non-letter keys elsewhere. */
-    fun appendLetter(char: Char, onCandidates: (List<String>) -> Unit) {
+    fun appendLetter(char: Char, onCandidates: (List<PinyinCandidate>) -> Unit) {
         if (!char.isLetter()) return
         encoding.append(char.lowercaseChar())
+        associationEpoch++
         query(onCandidates)
     }
 
     /** @return true if a character was actually removed (false when the encoding was already empty, meaning the caller should fall back to normal backspace). */
-    fun backspace(onCandidates: (List<String>) -> Unit): Boolean {
+    fun backspace(onCandidates: (List<PinyinCandidate>) -> Unit): Boolean {
         if (encoding.isEmpty()) return false
         encoding.deleteCharAt(encoding.length - 1)
-        query(onCandidates)
-        return true
-    }
-
-    /** Consume only the first valid syllable, then query the remaining buffer. */
-    fun consumeFirstSyllable(onCandidates: (List<String>) -> Unit): Boolean {
-        if (encoding.isEmpty()) return false
-        val firstSyllable = repository.segmentEncoding(encoding.toString()).firstOrNull()
-        val consumeLength = firstSyllable?.length ?: encoding.length
-        encoding.delete(0, consumeLength)
+        associationEpoch++
         query(onCandidates)
         return true
     }
@@ -122,6 +156,7 @@ internal class LitePinyinController(context: Context) {
     fun clear() {
         encoding.clear()
         queryEpoch++
+        associationEpoch++
     }
 
     // --- Post-commit association (取最后几个字联想下一个词，与笔画面板共用同一份联想词库+调频) ---
@@ -154,11 +189,11 @@ internal class LitePinyinController(context: Context) {
      */
     fun queryAssociations(phraseRepository: StrokePhraseRepository, onResults: (List<StrokePhraseRepository.Candidate>) -> Unit) {
         val context = confirmedText.toString()
+        val epoch = ++associationEpoch
         if (context.isEmpty()) {
             onResults(emptyList())
             return
         }
-        val epoch = ++associationEpoch
         phraseRepository.searchAsync(context) { result ->
             if (epoch == associationEpoch) onResults(result)
         }
@@ -172,15 +207,16 @@ internal class LitePinyinController(context: Context) {
         lastCommitText = null
     }
 
-    private fun query(onCandidates: (List<String>) -> Unit) {
+    private fun query(onCandidates: (List<PinyinCandidate>) -> Unit) {
         if (encoding.isEmpty()) {
             queryEpoch++
             onCandidates(emptyList())
             return
         }
         val epoch = ++queryEpoch
-        repository.query(encoding.toString(), personalize = learningAllowed) { results ->
-            if (epoch == queryEpoch) onCandidates(results)
+        engine.query(encoding.toString(), personalize = learningAllowed) { results ->
+            val tagged = results.map { it.copy(queryEpoch = epoch) }
+            if (epoch == queryEpoch) onCandidates(tagged)
         }
     }
 }

@@ -31,6 +31,11 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 
+internal object KeyboardLayoutMetrics {
+    fun modeToggleWidthDp(windowWidthDp: Int): Int =
+        (windowWidthDp * 0.62f).toInt().coerceIn(180, 240)
+}
+
 /** Minimal system IME surface. Voice transport is intentionally added in a later phase. */
 class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlayStateListener {
     internal enum class InputMode { VOICE, STROKE, CLIPBOARD, ENGLISH }
@@ -517,6 +522,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         englishComposingWord.clear()
         englishCandidateQueryEpoch++
         litePinyinController.clear()
+        litePinyinController.resetAssociationContext()
         latinInputMode = if (latinInputMode == LatinInputMode.ENGLISH) LatinInputMode.PINYIN else LatinInputMode.ENGLISH
         saveLatinInputMode(latinInputMode)
         refreshLatinCandidateBar()
@@ -966,12 +972,17 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         return overlayHost
     }
 
+    private fun modeToggleWidthPx(): Int {
+        val widthDp = resources.displayMetrics.widthPixels / resources.displayMetrics.density
+        return dp(KeyboardLayoutMetrics.modeToggleWidthDp(widthDp.toInt()))
+    }
+
     private fun buildVoiceHeader(): LinearLayout {
         val header = LinearLayout(this).apply {
             gravity = android.view.Gravity.CENTER_VERTICAL
         }
         header.addView(buildBrandView(), LinearLayout.LayoutParams(0, dp(38), 1f))
-        header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(240), dp(38)))
+        header.addView(buildModeToggle(), LinearLayout.LayoutParams(modeToggleWidthPx(), dp(38)))
         return header
     }
 
@@ -1260,6 +1271,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             else -> null
         }
         selectInputMode(selected, slideDirection = direction)
+    }.apply {
+        contentDescription = ui("输入模式：语音、笔画、剪贴板、英文。点击切换", "Input mode: voice, stroke, clipboard, English. Tap to switch")
+        isFocusable = true
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
     }
 
     /**
@@ -1425,7 +1440,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             gravity = android.view.Gravity.CENTER_VERTICAL
         }
         header.addView(buildBrandView(), LinearLayout.LayoutParams(0, dp(38), 1f))
-        header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(240), dp(38)))
+        header.addView(buildModeToggle(), LinearLayout.LayoutParams(modeToggleWidthPx(), dp(38)))
         // This panel's own root padding (8dp) is narrower than the voice panel's
         // (16dp), which it needs for its body rows. Compensate with margins so
         // the header/toggle still land at the same canonical 16dp/8dp inset as
@@ -1728,7 +1743,62 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             elevation = 0f
             translationZ = 0f
             setPadding(dp(11), 0, dp(11), 0)
+            minimumWidth = dp(44)
+            minimumHeight = dp(36)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
             styleCandidateFirstState(this, isFirst)
+        }
+    }
+
+    private fun renderStableCandidateRow(
+        row: LinearLayout,
+        prefix: String?,
+        entries: List<Pair<String, () -> Unit>>,
+    ) {
+        val expectedCount = entries.size + if (prefix == null) 0 else 1
+        while (row.childCount > expectedCount) row.removeViewAt(row.childCount - 1)
+
+        fun replaceChild(index: Int, prefixRole: Boolean): TextView {
+            val role = if (prefixRole) "pinyin-prefix" else "candidate"
+            val existing = row.getChildAt(index) as? TextView
+            if (existing?.tag == role) return existing
+            val replacement = if (prefixRole) {
+                TextView(this).apply {
+                    textSize = 16f
+                    setSingleLine(true)
+                    gravity = android.view.Gravity.CENTER
+                    setTextColor(tone(Color.rgb(180, 180, 180), Color.rgb(120, 120, 125)))
+                    setPadding(dp(9), 0, dp(9), 0)
+                    isClickable = false
+                }
+            } else {
+                candidateItemView("", isFirst = false) {}
+            }
+            replacement.tag = role
+            if (existing != null) row.removeViewAt(index)
+            row.addView(
+                replacement,
+                index,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT),
+            )
+            return replacement
+        }
+
+        var index = 0
+        if (prefix != null) {
+            val label = replaceChild(index++, prefixRole = true)
+            label.text = prefix
+            label.contentDescription = ui("拼音编码 $prefix", "Pinyin $prefix")
+            label.setOnClickListener(null)
+        }
+        entries.forEachIndexed { entryIndex, (label, action) ->
+            val candidate = replaceChild(index++, prefixRole = false)
+            candidate.text = label
+            candidate.contentDescription = ui("候选 $label", "Candidate $label")
+            candidate.setOnClickListener { action() }
+            candidate.isClickable = true
+            candidate.isFocusable = true
+            styleCandidateFirstState(candidate, entryIndex == 0)
         }
     }
 
@@ -3196,50 +3266,25 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * a non-empty encoding, per phase-0 audit section 5, adding no new row
      * or container so the fixed 300dp panel height is never touched.
      */
-    private fun renderPinyinCandidates(candidates: List<String>) {
+    private fun renderPinyinCandidates(candidates: List<PinyinCandidate>) {
         val row = englishCandidateRow ?: return
-        row.removeAllViews()
-        val encoding = litePinyinController.currentEncoding()
-        if (encoding.isNotEmpty()) {
-            val label = TextView(this).apply {
-                text = encoding
-                textSize = 16f
-                setSingleLine(true)
-                gravity = android.view.Gravity.CENTER
-                setTextColor(tone(Color.rgb(180, 180, 180), Color.rgb(120, 120, 125)))
-                setPadding(dp(9), 0, dp(9), 0)
-                isClickable = false
-            }
-            row.addView(label, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        val encoding = litePinyinController.currentEncoding().takeIf { it.isNotEmpty() }
+        val overlayEntries = candidates.map { candidate ->
+            candidate.text to { selectPinyinCandidate(candidate) }
         }
-        val overlayEntries = mutableListOf<Pair<String, () -> Unit>>()
-        candidates.forEachIndexed { index, char ->
-            row.addView(
-                candidateItemView(
-                    char,
-                    isFirst = index == 0,
-                    action = { selectPinyinCandidate(char) },
-                ),
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT),
-            )
-            overlayEntries.add(char to { selectPinyinCandidate(char) })
-        }
-        // Shared with the English/stroke candidate rows (only one of the
-        // three is ever visible at a time) — see showCandidateOverlay().
+        renderStableCandidateRow(row, encoding, overlayEntries)
         candidateOverlayEntries = overlayEntries
         if (candidates.isEmpty()) englishExpandCandidatesButton?.visibility = View.GONE
     }
 
-    /** Candidate tap is the ONLY way a pinyin candidate reaches the field — see toggleLatinInputMode()'s doc comment on why Space deliberately never does this. */
-    private fun selectPinyinCandidate(char: String) {
+    /** Candidate tap is the ONLY way a pinyin candidate reaches the field. */
+    private fun selectPinyinCandidate(candidate: PinyinCandidate) {
         if (ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) return
-        if (currentInputConnection?.commitText(char, 1) != true) return
-        // observeCommitForLearning needs the encoding still intact; commitSelection
-        // then records frequency under the real sourceKey and consumes that key
-        // (full buffer or first syllable) before refreshing the candidate row.
-        litePinyinController.observeCommitForLearning(char)
-        litePinyinController.commitSelection(char) { renderPinyinCandidates(it) }
-        litePinyinController.recordCommittedText(char)
+        if (!litePinyinController.isCandidateCurrent(candidate)) return
+        if (currentInputConnection?.commitText(candidate.text, 1) != true) return
+        litePinyinController.observeCommitForLearning(candidate)
+        if (!litePinyinController.commitSelection(candidate) { renderPinyinCandidates(it) }) return
+        litePinyinController.recordCommittedText(candidate.text)
         performKeyHaptic()
         refreshPinyinAssociations()
     }
@@ -3271,20 +3316,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     /** Same row/candidateItemView() machinery as renderPinyinCandidates(), but no encoding label (there's no in-progress encoding here) and suffix-based commit (see selectPinyinAssociation()) instead of committing the whole label — mirrors StrokeInputController.refreshAssociations() exactly. */
     private fun renderPinyinAssociations(candidates: List<StrokePhraseRepository.Candidate>) {
         val row = englishCandidateRow ?: return
-        row.removeAllViews()
-        val overlayEntries = mutableListOf<Pair<String, () -> Unit>>()
-        candidates.forEachIndexed { index, candidate ->
+        val overlayEntries = candidates.map { candidate ->
             val displayText = outputScript(candidate.text)
-            row.addView(
-                candidateItemView(
-                    displayText,
-                    isFirst = index == 0,
-                    action = { selectPinyinAssociation(candidate) },
-                ),
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT),
-            )
-            overlayEntries.add(displayText to { selectPinyinAssociation(candidate) })
+            displayText to { selectPinyinAssociation(candidate) }
         }
+        renderStableCandidateRow(row, prefix = null, entries = overlayEntries)
         candidateOverlayEntries = overlayEntries
         if (candidates.isEmpty()) englishExpandCandidatesButton?.visibility = View.GONE
     }
@@ -4585,8 +4621,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // leaves the mode unchanged just settles here with no animation.
         private var indicatorPosition: Float
         private var indicatorAnimator: android.animation.ValueAnimator? = null
+        private var pendingMode: InputMode? = null
 
         init {
+            isClickable = true
             val modes = InputMode.entries
             val targetIndex = modes.indexOf(selectedMode).coerceAtLeast(0).toFloat()
             val previousMode = lastRenderedMode
@@ -4722,9 +4760,17 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             if (event.action == android.view.MotionEvent.ACTION_UP) {
                 val modes = InputMode.entries
                 val index = (event.x / (width / modes.size.toFloat())).toInt().coerceIn(0, modes.lastIndex)
-                onModeSelected(modes[index])
+                pendingMode = modes[index]
+                performClick()
             }
             return true
+        }
+
+        override fun performClick(): Boolean {
+            val mode = pendingMode ?: InputMode.entries[(selectedMode.ordinal + 1) % InputMode.entries.size]
+            pendingMode = null
+            onModeSelected(mode)
+            return super.performClick()
         }
 
         private companion object {
