@@ -51,6 +51,46 @@ class OpenLessAccessibilityTargetTest {
     }
 
     @Test
+    fun cachedTargetRequiresFocusedNodeInTheActiveWindowAndPackage() {
+        assertTrue(
+            OpenLessAccessibilityTarget.passesCachedTargetChecks(
+                isFocused = true,
+                nodePackage = "com.example.app",
+                activePackage = "com.example.app",
+                cachedWindowId = 3,
+                activeWindowId = 3,
+            )
+        )
+        assertFalse(
+            OpenLessAccessibilityTarget.passesCachedTargetChecks(
+                isFocused = false,
+                nodePackage = "com.example.app",
+                activePackage = "com.example.app",
+                cachedWindowId = 3,
+                activeWindowId = 3,
+            )
+        )
+        assertFalse(
+            OpenLessAccessibilityTarget.passesCachedTargetChecks(
+                isFocused = true,
+                nodePackage = "com.example.app",
+                activePackage = "com.other.app",
+                cachedWindowId = 3,
+                activeWindowId = 3,
+            )
+        )
+        assertFalse(
+            OpenLessAccessibilityTarget.passesCachedTargetChecks(
+                isFocused = true,
+                nodePackage = "com.example.app",
+                activePackage = "com.example.app",
+                cachedWindowId = 3,
+                activeWindowId = 4,
+            )
+        )
+    }
+
+    @Test
     fun selectionRangeValidationRejectsEmptyAndOutOfBoundsRanges() {
         assertTrue(OpenLessAccessibilityTarget.isSelectionRangeValid("hello", 1, 4))
         assertTrue(OpenLessAccessibilityTarget.isSelectionRangeValid("hello", 4, 1))

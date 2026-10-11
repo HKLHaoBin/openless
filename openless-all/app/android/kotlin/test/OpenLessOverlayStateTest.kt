@@ -13,4 +13,14 @@ class OpenLessOverlayStateTest {
         assertFalse(shouldIgnoreOverlayRecordingFrame(true, "voice edit capture failed"))
         assertFalse(shouldIgnoreOverlayRecordingFrame(false, null))
     }
+
+    @Test
+    fun terminalCapsuleStatesResetOverlayToIdle() {
+        assertTrue(isOverlayTerminalState("done"))
+        assertTrue(isOverlayTerminalState("cancelled"))
+        assertTrue(isOverlayTerminalState("idle"))
+        assertFalse(isOverlayTerminalState("recording"))
+        assertFalse(isOverlayTerminalState("error"))
+        assertFalse(isOverlayTerminalState("transcribing"))
+    }
 }

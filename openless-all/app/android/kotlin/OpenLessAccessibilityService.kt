@@ -489,7 +489,11 @@ class OpenLessAccessibilityService : AccessibilityService() {
 
     private fun findEditableTarget(): AccessibilityNodeInfo? {
         lastEditableFocus?.let { cached ->
-            if (cached.refresh() && OpenLessAccessibilityTarget.isPasteTarget(cached)) {
+            if (
+                cached.refresh() &&
+                cached.isFocused &&
+                OpenLessAccessibilityTarget.isPasteTarget(cached)
+            ) {
                 return AccessibilityNodeInfo.obtain(cached)
             }
         }

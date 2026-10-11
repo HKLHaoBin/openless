@@ -24,6 +24,24 @@ internal object OpenLessAccessibilityTarget {
         return cachedWindowId == activeWindowId
     }
 
+    fun passesCachedTargetChecks(
+        isFocused: Boolean,
+        nodePackage: String?,
+        activePackage: String?,
+        cachedWindowId: Int,
+        activeWindowId: Int,
+    ): Boolean {
+        if (
+            !isFocused ||
+            nodePackage.isNullOrEmpty() ||
+            activePackage.isNullOrEmpty()
+        ) {
+            return false
+        }
+        if (nodePackage != activePackage) return false
+        return passesWindowChecks(cachedWindowId, activeWindowId)
+    }
+
     fun isSelectionRangeValid(text: String?, start: Int, end: Int): Boolean {
         if (text == null || start < 0 || end < 0 || start == end) return false
         val from = minOf(start, end)
@@ -98,8 +116,12 @@ internal object OpenLessAccessibilityTarget {
         if (!isPasteTarget(cached)) return false
         val activePackage = activeRoot.packageName?.toString()
         val nodePackage = cached.packageName?.toString()
-        if (nodePackage.isNullOrEmpty() || activePackage.isNullOrEmpty()) return false
-        if (nodePackage != activePackage) return false
-        return passesWindowChecks(cached.windowId, activeRoot.windowId)
+        return passesCachedTargetChecks(
+            isFocused = cached.isFocused,
+            nodePackage = nodePackage,
+            activePackage = activePackage,
+            cachedWindowId = cached.windowId,
+            activeWindowId = activeRoot.windowId,
+        )
     }
 }

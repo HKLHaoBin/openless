@@ -26,6 +26,9 @@ import kotlin.math.abs
 internal fun shouldIgnoreOverlayRecordingFrame(processing: Boolean, message: String?): Boolean =
     processing && message.isNullOrBlank()
 
+internal fun isOverlayTerminalState(state: String): Boolean =
+    state == "done" || state == "cancelled" || state == "idle"
+
 /** Foreground service + TYPE_APPLICATION_OVERLAY floating dictation control. */
 class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateListener {
 
@@ -148,8 +151,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     override fun onCapsuleStateChanged(state: String, message: String?, level: Float) {
-        when (state) {
-            "recording" -> {
+        when {
+            state == "recording" -> {
                 // Queued meter frames must not undo a stop/handoff gesture.
                 if (shouldIgnoreOverlayRecordingFrame(processing, message)) return
                 recording = true
@@ -164,29 +167,23 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 }
                 applyVisualState(OverlayVisualState.Recording)
             }
-            "transcribing",
-            "polishing" -> {
+            state == "transcribing" || state == "polishing" -> {
                 recording = false
                 processing = true
                 applyVisualState(OverlayVisualState.Processing)
             }
-            "done" -> {
+            isOverlayTerminalState(state) -> {
                 recording = false
                 processing = false
                 setArmed(false)
+                applyVisualState(OverlayVisualState.Idle)
             }
-            "error" -> {
+            state == "error" -> {
                 recording = false
                 processing = false
                 setArmed(false)
                 applyVisualState(OverlayVisualState.Error)
                 message?.takeIf { it.isNotBlank() }?.let { showToast(it) }
-            }
-            "cancelled",
-            "idle" -> {
-                recording = false
-                processing = false
-                setArmed(false)
             }
         }
     }
