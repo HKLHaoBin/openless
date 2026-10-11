@@ -118,6 +118,7 @@ function context(native = true, embedded = false) {
       mic: 0,
       mode: [],
       preview: [],
+      polishPreview: 0,
       confirm: [],
       revert: [],
       dismiss: 0,
@@ -156,6 +157,10 @@ function context(native = true, embedded = false) {
     qaGetSnapshot: async () => {
       calls.snapshot++;
       return pending.snapshot?.() ?? { kind: 'idle', messages: [] };
+    },
+    getSelectionPolishPreview: async () => {
+      calls.polishPreview++;
+      return pending.polishPreview?.() ?? null;
     },
     qaToggleRecording: async () => {
       calls.mic++;
@@ -235,6 +240,28 @@ await test('browser compact has no demo conversations and cannot execute native 
     ui = h.render(() => c.api.Composer(p));
   for (const button of nodes(ui).filter((n) => n.type === 'button'))
     assert.equal(button.props.disabled, true);
+  c.hooks.unmount();
+});
+await test('polish preview expands native window after payload arrives', async () => {
+  const c = context();
+  c.render();
+  await tick();
+  assert.deepEqual(c.calls.resize, [false]);
+  c.pending.polishPreview = () => ({ text: 'polished result', sourceText: 'source text' });
+  c.emit('selection-polish-preview:shown', {});
+  await tick();
+  const tree = c.render();
+  await tick();
+  assert.deepEqual(c.calls.resize, [false, true]);
+  assert(nodes(tree).some((n) => n.props.className === 'qa-polish-text'));
+  assert(
+    nodes(tree).some(
+      (n) =>
+        n.type === 'button' &&
+        Array.isArray(n.props.children) &&
+        n.props.children.includes('selectionPolishPreview.confirmReplace'),
+    ),
+  );
   c.hooks.unmount();
 });
 await test('native text waits for expansion and excludes repeated clicks; keeps a newer draft', async () => {

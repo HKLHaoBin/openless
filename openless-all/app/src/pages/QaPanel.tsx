@@ -357,6 +357,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
 
   const expanded =
     embedded ||
+    polishResult !== null ||
     submitted ||
     messages.length > 0 ||
     streamingAnswer.length > 0 ||

@@ -93,6 +93,13 @@ if (!qaPanel.includes('selectionPolishPreview.confirmReplace')) {
 if (!qaPanel.includes('aria-readonly="true"')) {
   violations.push('QaPanel.tsx polish-result box is no longer read-only');
 }
+const expandedStart = qaPanel.indexOf('const expanded');
+if (
+  expandedStart < 0 ||
+  !qaPanel.slice(expandedStart, expandedStart + 240).includes('polishResult !== null')
+) {
+  violations.push('QaPanel.tsx expanded layout does not include polishResult');
+}
 
 // 6. 五种语言都要有这套文案（合并后由 qa 面板复用同一批 key）。
 for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
