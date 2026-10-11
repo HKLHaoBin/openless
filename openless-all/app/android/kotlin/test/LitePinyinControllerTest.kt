@@ -126,7 +126,7 @@ class KeyboardLayoutMetricsTest {
     @Test
     fun modeToggleWidthStaysUsableAcrossPhoneWidths() {
         assertEquals(180, KeyboardLayoutMetrics.modeToggleWidthDp(240))
-        assertEquals(198, KeyboardLayoutMetrics.modeToggleWidthDp(320))
-        assertEquals(240, KeyboardLayoutMetrics.modeToggleWidthDp(480))
+        assertEquals(204, KeyboardLayoutMetrics.modeToggleWidthDp(320))
+        assertEquals(230, KeyboardLayoutMetrics.modeToggleWidthDp(480))
     }
 }

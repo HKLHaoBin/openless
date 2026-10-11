@@ -76,6 +76,7 @@ const KOTLIN_FILES = [
   'OpenLessBackendWarmupActivity.kt',
   'OpenLessClipboardHistory.kt',
   'OpenLessKeyboardSettingsActivity.kt',
+  'KeyboardUiKit.kt',
   'OpenLessProcessRestartStats.kt',
   'OpenLessBuildInfo.kt',
 ];
@@ -92,6 +93,7 @@ const KOTLIN_TEST_FILES = [
   'OpenLessPasteVerificationTest.kt',
   'OpenLessAccessibilityComponentIdsTest.kt',
   'LitePinyinControllerTest.kt',
+  'KeyboardUiKitTest.kt',
 ];
 const KOTLIN_ANDROID_TEST_FILES = [
   'OpenLessCredentialVaultInstrumentedTest.kt',

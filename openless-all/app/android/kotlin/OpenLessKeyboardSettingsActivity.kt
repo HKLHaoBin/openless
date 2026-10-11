@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -763,50 +764,66 @@ class OpenLessKeyboardSettingsActivity : Activity() {
      * uses the stretch height; raise strip is empty lift space below keys.
      */
     private fun buildKeyboardFootprintPreview(): KeyboardFootprintPreview {
+        val tokens = KeyboardUiKit.tokens(isDarkTheme)
+        fun surface(color: Int, radiusDp: Int): GradientDrawable = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(radiusDp).toFloat()
+            setColor(color)
+            setStroke(dp(1), tokens.divider)
+        }
         val caption = TextView(this).apply {
             textSize = 11f
             gravity = Gravity.CENTER
-            setTextColor(tone(Color.rgb(160, 160, 160), Color.rgb(100, 100, 105)))
+            setTextColor(tokens.secondaryText)
             setPadding(0, dp(6), 0, dp(4))
         }
         val keysBlock = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
+            background = surface(tokens.sheet, 22)
             setPadding(dp(12), dp(10), dp(12), dp(10))
-            // Three fake key rows so stretch is visually obvious.
-            repeat(3) { rowIndex ->
+            val rows = listOf(
+                listOf("Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"),
+                listOf("A", "S", "D", "F", "G", "H", "J", "K", "L"),
+                listOf("⇧", "Z", "X", "C", "V", "B", "N", "M", "⌫"),
+            )
+            rows.forEachIndexed { rowIndex, labels ->
                 val row = LinearLayout(this@OpenLessKeyboardSettingsActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER
                 }
-                repeat(10) {
+                labels.forEach { label ->
                     row.addView(
-                        View(this@OpenLessKeyboardSettingsActivity).apply {
-                            setBackgroundColor(tone(Color.rgb(70, 70, 70), Color.rgb(255, 255, 255)))
+                        TextView(this@OpenLessKeyboardSettingsActivity).apply {
+                            text = label
+                            textSize = if (label.length == 1 && label[0].isLetter()) 13f else 11f
+                            gravity = Gravity.CENTER
+                            setTextColor(tokens.primaryText)
+                            background = surface(tokens.primaryKey, tokens.keyRadiusDp)
+                            minimumHeight = dp(tokens.minTouchTargetDp)
                         },
                         LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                            marginStart = dp(2)
-                            marginEnd = dp(2)
+                            marginStart = dp(tokens.keyGapDp / 2)
+                            marginEnd = dp(tokens.keyGapDp / 2)
                         },
                     )
                 }
                 addView(
                     row,
                     LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-                        if (rowIndex > 0) topMargin = dp(6)
+                        if (rowIndex > 0) topMargin = dp(tokens.keyGapDp)
                     },
                 )
             }
         }
         val raiseBlock = FrameLayout(this).apply {
-            setBackgroundColor(tone(Color.rgb(36, 36, 36), Color.rgb(220, 220, 224)))
+            setBackgroundColor(tokens.canvas)
             addView(
                 TextView(this@OpenLessKeyboardSettingsActivity).apply {
                     text = ui("抬高", "Raise")
                     textSize = 11f
                     gravity = Gravity.CENTER
-                    setTextColor(tone(Color.rgb(140, 140, 140), Color.rgb(120, 120, 125)))
+                    setTextColor(tokens.secondaryText)
                 },
                 FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -816,7 +833,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(tone(Color.rgb(22, 22, 22), Color.rgb(230, 230, 234)))
+            setBackgroundColor(tokens.canvas)
             addView(caption, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(keysBlock, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(OpenLessImeService.DEFAULT_KEYBOARD_HEIGHT_DP)))
             addView(raiseBlock, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0))

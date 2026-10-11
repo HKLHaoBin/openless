@@ -111,15 +111,15 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, service.keyboardPanelHeightPx())
             minimumHeight = service.keyboardPanelHeightPx()
             setPadding(service.dp(4), service.dp(3), service.dp(4), service.dp(3))
-            setBackgroundColor(service.tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
+            background = service.keyboardSurface(KeyboardSurfaceRole.SHEET, service.uiTokens.sheetRadiusDp)
         }
         val header = LinearLayout(service).apply { gravity = Gravity.CENTER_VERTICAL }
-        header.addView(service.buildBrandView(), LinearLayout.LayoutParams(0, service.dp(38), 1f))
-        header.addView(service.buildModeToggle(), LinearLayout.LayoutParams(service.dp(240), service.dp(38)))
+        header.addView(service.buildBrandView(), LinearLayout.LayoutParams(0, service.dp(service.uiTokens.headerHeightDp), 1f))
+        header.addView(service.buildModeToggle(), LinearLayout.LayoutParams(service.modeToggleWidthPx(), service.dp(service.uiTokens.headerHeightDp)))
         // Stroke mode's root padding is much tighter (4dp/3dp) to fit its dense
         // grid. Compensate with margins so the header/toggle still land at the
         // same canonical 16dp/8dp inset as every other panel.
-        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, service.dp(38)).apply {
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, service.dp(service.uiTokens.headerHeightDp)).apply {
             marginStart = service.dp(12)
             marginEnd = service.dp(12)
             topMargin = service.dp(5)
@@ -212,8 +212,8 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
             expandCandidatesButton.visibility =
                 if (candidates != null && candidates.width > candidatesScroll.width) View.VISIBLE else View.GONE
         }
-        top.addView(candidateRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, service.dp(36)))
-        root.addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, service.dp(60)))
+        top.addView(candidateRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, service.dp(service.uiTokens.candidateHeightDp)))
+        root.addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, service.dp(24 + service.uiTokens.candidateHeightDp)))
 
         val body = LinearLayout(service).apply { gravity = Gravity.CENTER }
         // Swiping the rail up/down cycles through punctuationGroups instead of
@@ -231,7 +231,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
             // padding is kept since it only insets key width, not row
             // position.
             setPadding(service.dp(2), 0, service.dp(2), 0)
-            background = service.roundedButton(service.tone(Color.rgb(45, 45, 45), Color.rgb(230, 230, 234)), service.dp(4))
+            background = service.keyboardSurface(KeyboardSurfaceRole.SECONDARY_KEY, service.uiTokens.cardRadiusDp)
         }
         punctuationGroups[punctuationGroupIndex].forEachIndexed { index, mark ->
             punctuation.addView(service.keyboardKey(mark, 1f, action = { service.currentInputConnection?.commitText(mark, 1) }).apply {
@@ -263,7 +263,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
                     service.toggleScriptPreference()
                 }, graphicCode = "script").apply {
                     if (service.traditionalOutput) {
-                        background = service.roundedButton(service.tone(Color.rgb(112, 78, 92), Color.rgb(232, 205, 213)), service.dp(5))
+                        background = service.keyboardAccentSurface(service.uiTokens.keyRadiusDp)
                     }
                 } else if (code == "voice") service.keyboardKey("0", 1f, action = {
                     service.currentInputConnection?.commitText(" ", 1)
@@ -304,7 +304,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
                 // the same dp(1)/dp(1) below so row top/bottom edges still
                 // land exactly together across both columns.
                 key.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                    setMargins(service.dp(1), service.dp(1), service.dp(1), service.dp(1))
+                    setMargins(service.dp(service.uiTokens.keyGapDp / 2), service.dp(service.uiTokens.keyGapDp / 2), service.dp(service.uiTokens.keyGapDp / 2), service.dp(service.uiTokens.keyGapDp / 2))
                 }
                 row.addView(key)
             }
@@ -326,9 +326,9 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
                 // so every row's top/bottom edge lines up across both
                 // columns; horizontal margin is independent (single column).
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-                    setMargins(service.dp(1), service.dp(1), service.dp(1), service.dp(1))
+                    setMargins(service.dp(service.uiTokens.keyGapDp / 2), service.dp(service.uiTokens.keyGapDp / 2), service.dp(service.uiTokens.keyGapDp / 2), service.dp(service.uiTokens.keyGapDp / 2))
                 }
-                background = service.roundedButton(Color.rgb(153, 26, 40), service.dp(5))
+                background = service.keyboardSurface(KeyboardSurfaceRole.DESTRUCTIVE, service.uiTokens.keyRadiusDp)
             })
         }
         body.addView(actions, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.19f))
@@ -349,15 +349,15 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, service.keyboardPanelHeightPx())
             minimumHeight = service.keyboardPanelHeightPx()
             setPadding(service.dp(8), service.dp(8), service.dp(8), service.dp(8))
-            setBackgroundColor(service.tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
+            background = service.keyboardSurface(KeyboardSurfaceRole.SHEET, service.uiTokens.sheetRadiusDp)
         }
         val header = LinearLayout(service).apply { gravity = Gravity.CENTER_VERTICAL }
-        header.addView(service.buildBrandView().apply { setPadding(service.dp(8), 0, 0, 0) }, LinearLayout.LayoutParams(0, service.dp(38), 1f))
-        header.addView(service.buildModeToggle(), LinearLayout.LayoutParams(service.dp(240), service.dp(38)))
+        header.addView(service.buildBrandView().apply { setPadding(service.dp(8), 0, 0, 0) }, LinearLayout.LayoutParams(0, service.dp(service.uiTokens.headerHeightDp), 1f))
+        header.addView(service.buildModeToggle(), LinearLayout.LayoutParams(service.modeToggleWidthPx(), service.dp(service.uiTokens.headerHeightDp)))
         // This panel's own root padding (8dp) is narrower than the voice panel's
         // (16dp). Compensate with margins so the header/toggle still land at the
         // same canonical 16dp/8dp inset as every other panel.
-        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, service.dp(38)).apply {
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, service.dp(service.uiTokens.headerHeightDp)).apply {
             marginStart = service.dp(8)
             marginEnd = service.dp(8)
         })
@@ -426,7 +426,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
                 }
                 row.addView(service.keyboardKey(label, 1f, action, repeatOnLongPress = rowIndex == 0 && isAction, repeatAction = action).apply {
                     textSize = if (isAction) 15f else 20f
-                    if (isAction) background = service.roundedButton(Color.rgb(153, 26, 40), service.dp(7))
+                    if (isAction) background = service.keyboardSurface(KeyboardSurfaceRole.DESTRUCTIVE, service.uiTokens.keyRadiusDp)
                 })
             }
             body.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -510,7 +510,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
             // Was dp(38); briefly widened to dp(46) alongside
             // candidateItemView()'s own now-reverted padding/text-size
             // experiment (see that function's comment) — settled on dp(45).
-            specs.add(CandidateSpec(displayCandidate, firstCandidate, service.dp(45)) { commitStrokeCandidate(candidate) })
+            specs.add(CandidateSpec(displayCandidate, firstCandidate, service.dp(service.uiTokens.minTouchTargetDp)) { commitStrokeCandidate(candidate) })
             firstCandidate = false
         }
         populateCandidateRow(specs)
@@ -598,7 +598,10 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
             val specs = result.mapIndexed { index, candidate ->
                 val matchedPrefix = candidate.matchedPrefix.ifEmpty { context }
                 val displayText = service.outputScript(candidate.text)
-                val candidateWidth = service.dp((displayText.codePointCount(0, displayText.length) * 22 + 16).coerceAtLeast(46))
+                val candidateWidth = service.dp(
+                    (displayText.codePointCount(0, displayText.length) * 22 + 16)
+                        .coerceAtLeast(service.uiTokens.minTouchTargetDp),
+                )
                 CandidateSpec(displayText, index == 0, candidateWidth) { commitAssociation(candidate.text, matchedPrefix) }
             }
             populateCandidateRow(specs)

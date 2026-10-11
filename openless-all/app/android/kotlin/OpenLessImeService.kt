@@ -32,8 +32,9 @@ import android.widget.TextView
 import android.widget.Toast
 
 internal object KeyboardLayoutMetrics {
-    fun modeToggleWidthDp(windowWidthDp: Int): Int =
-        (windowWidthDp * 0.62f).toInt().coerceIn(180, 240)
+    fun modeToggleWidthDp(windowWidthDp: Int): Int = KeyboardUiKit.modeToggleWidthDp(windowWidthDp)
+
+    fun keyHeightDp(windowWidthDp: Int): Int = KeyboardUiKit.keyHeightDp(windowWidthDp)
 }
 
 /** Minimal system IME surface. Voice transport is intentionally added in a later phase. */
@@ -330,6 +331,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var addToDictionaryForEdit = false
     private var undoRedoButton: TextView? = null
     private var editResultButton: TextView? = null
+    private var voiceFooterCompact = false
+    private var voiceFooterAtButton: View? = null
+    private var voiceFooterBackspaceButton: View? = null
     // The row holding undoRedoButton/editResultButton, toggled as a whole so
     // it stays visible any time there's a result to act on (not just while
     // state == "done"), directly above the @/backspace footer row.
@@ -382,6 +386,53 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     /** Picks `dark` or `light` for the current system theme — the one place every themed color in this file goes through. */
     internal fun tone(dark: Int, light: Int): Int = if (isDarkTheme) dark else light
+
+    internal val uiTokens: KeyboardUiTokens
+        get() = KeyboardUiKit.tokens(isDarkTheme)
+
+    internal fun keyboardSurface(
+        role: KeyboardSurfaceRole,
+        radiusDp: Int = uiTokens.cardRadiusDp,
+    ): android.graphics.drawable.Drawable {
+        val tokens = uiTokens
+        val color = when (role) {
+            KeyboardSurfaceRole.CANVAS -> tokens.canvas
+            KeyboardSurfaceRole.SHEET -> tokens.sheet
+            KeyboardSurfaceRole.CARD -> tokens.card
+            KeyboardSurfaceRole.KEY -> tokens.primaryKey
+            KeyboardSurfaceRole.SECONDARY_KEY -> tokens.secondaryKey
+            KeyboardSurfaceRole.CANDIDATE -> tokens.candidate
+            KeyboardSurfaceRole.VOICE -> tokens.voice
+            KeyboardSurfaceRole.DESTRUCTIVE -> tokens.destructive
+        }
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(radiusDp).toFloat()
+            setColor(color)
+            if (role != KeyboardSurfaceRole.CANVAS && role != KeyboardSurfaceRole.SHEET) {
+                setStroke(dp(1), tokens.divider)
+            }
+        }
+    }
+
+    internal fun keyboardAccentSurface(radiusDp: Int = uiTokens.cardRadiusDp): android.graphics.drawable.Drawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(radiusDp).toFloat()
+        setColor(uiTokens.voice)
+        setStroke(dp(1), uiTokens.accent)
+    }
+
+    internal fun keyboardTextColor(role: KeyboardSurfaceRole = KeyboardSurfaceRole.KEY): Int = when (role) {
+        KeyboardSurfaceRole.DESTRUCTIVE -> if (isDarkTheme) Color.rgb(35, 20, 25) else Color.WHITE
+        KeyboardSurfaceRole.CANVAS,
+        KeyboardSurfaceRole.SHEET,
+        KeyboardSurfaceRole.CARD,
+        KeyboardSurfaceRole.KEY,
+        KeyboardSurfaceRole.SECONDARY_KEY,
+        KeyboardSurfaceRole.CANDIDATE,
+        KeyboardSurfaceRole.VOICE -> uiTokens.primaryText
+    }
+
     // Mirrors whatever's currently in strokeCandidates (word/stroke matches
     // or phrase associations) as plain (label, action) pairs, so the "show
     // more" overlay can replay the exact same set without duplicating the
@@ -646,8 +697,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             )
             addView(
                 View(this@OpenLessImeService).apply {
-                    setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
-                    visibility = if (raisePx > 0) View.VISIBLE else View.GONE
+                    background = keyboardSurface(KeyboardSurfaceRole.CANVAS, 0)
                 },
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, raisePx),
             )
@@ -683,34 +733,45 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     /** Voice panel + floating dictation-result overlay (former onCreateInputView body). */
     private fun buildVoiceInputView(): View {
+        val panelHeightDp = keyboardPanelHeightDp()
+        // Regular chrome needs room for the 72dp microphone and the 48dp
+        // result row above the 84dp footer without either one overlapping.
+        val compact = panelHeightDp < 396
+        val voiceHeaderHeightDp = if (compact) 40 else uiTokens.headerHeightDp
+        val voiceStatusHeightDp = if (compact) 48 else uiTokens.statusCardHeightDp
+        val voiceFooterHeightDp = if (compact) 64 else 84
         val panel = SwipeModeContainer(this) { direction -> swipeInputMode(direction) }.apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
             minimumHeight = keyboardPanelHeightPx()
-            setPadding(dp(16), dp(8), dp(16), dp(4))
-            setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = keyboardSurface(KeyboardSurfaceRole.SHEET, uiTokens.sheetRadiusDp)
             clipChildren = false
             clipToPadding = false
         }
         panel.addView(buildVoiceHeader(), LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            dp(38),
+            dp(voiceHeaderHeightDp),
         ))
         statusNormalColor = tone(Color.rgb(190, 190, 190), Color.rgb(110, 110, 115))
         status = TextView(this).apply {
             text = displayStatus(currentMessage)
-            textSize = 16f
+            textSize = uiTokens.statusTextSp
             if (englishUi) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             gravity = android.view.Gravity.CENTER
             setTextColor(statusNormalColor)
-            setPadding(0, dp(6), 0, dp(4))
+            background = keyboardSurface(KeyboardSurfaceRole.CARD, uiTokens.cardRadiusDp)
+            setPadding(dp(12), dp(6), dp(12), dp(4))
         }
         panel.addView(status, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            dp(38),
-        ))
+            dp(voiceStatusHeightDp),
+        ).apply {
+            topMargin = dp(4)
+            bottomMargin = dp(4)
+        })
 
-        voiceButton = VoiceButton(this, isDarkTheme).apply {
+        voiceButton = VoiceButton(this, isDarkTheme, uiTokens).apply {
             isClickable = true
             setOnClickListener { toggleDictation() }
             contentDescription = ui("OpenLess 语音听写", "OpenLess dictation")
@@ -874,7 +935,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             clipChildren = false
             clipToPadding = false
         }
-        buttonHolder.addView(voiceButton!!, FrameLayout.LayoutParams(dp(176), dp(72), android.view.Gravity.CENTER))
+        buttonHolder.addView(voiceButton!!, FrameLayout.LayoutParams(dp(176), dp(if (compact) 44 else 72), android.view.Gravity.CENTER))
 
         // Small companion hint — deliberately muted (low size + alpha) so it
         // doesn't compete with "Tap to speak" for attention, but
@@ -897,7 +958,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             if (englishUi) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             gravity = android.view.Gravity.CENTER
             setTextColor(rawModeHintColor())
-            visibility = if (rawModeHintVisible()) View.VISIBLE else View.GONE
+            visibility = if (!compact && rawModeHintVisible()) View.VISIBLE else View.GONE
             isClickable = true
             setOnClickListener { Toast.makeText(this@OpenLessImeService, rawModeTooltip, Toast.LENGTH_SHORT).show() }
             setOnLongClickListener {
@@ -945,9 +1006,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             1f,
         ))
 
-        panel.addView(buildVoiceFooter(), LinearLayout.LayoutParams(
+        panel.addView(buildVoiceFooter(compact), LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            dp(84),
+            dp(voiceFooterHeightDp),
         ))
 
         // The undo/redo/edit controls float over the panel instead of taking
@@ -958,21 +1019,28 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
         }
         overlayHost.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        overlayHost.addView(buildDictationResultOverlay(), FrameLayout.LayoutParams(
+        overlayHost.addView(buildDictationResultOverlay(compact), FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
             android.view.Gravity.BOTTOM,
         ).apply {
             marginStart = dp(16)
             marginEnd = dp(16)
-            // Panel's own bottom padding (4dp) + footer height (84dp) + a
-            // small gap (6dp), so this lands just above @ and backspace.
-            bottomMargin = dp(4) + dp(84) + dp(6)
+            // At the compact 220dp height there is no spare row between the
+            // status card and microphone. Place result actions in the footer
+            // slot instead of intercepting microphone touches; regular panels
+            // keep the actions floating above the footer.
+            bottomMargin = if (compact) {
+                // Align with the compact footer's centered 42dp button slot.
+                dp(8 + (64 - 42) / 2)
+            } else {
+                dp(4) + dp(voiceFooterHeightDp) + dp(6)
+            }
         })
         return overlayHost
     }
 
-    private fun modeToggleWidthPx(): Int {
+    internal fun modeToggleWidthPx(): Int {
         val widthDp = resources.displayMetrics.widthPixels / resources.displayMetrics.density
         return dp(KeyboardLayoutMetrics.modeToggleWidthDp(widthDp.toInt()))
     }
@@ -981,8 +1049,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val header = LinearLayout(this).apply {
             gravity = android.view.Gravity.CENTER_VERTICAL
         }
-        header.addView(buildBrandView(), LinearLayout.LayoutParams(0, dp(38), 1f))
-        header.addView(buildModeToggle(), LinearLayout.LayoutParams(modeToggleWidthPx(), dp(38)))
+        header.addView(buildBrandView(), LinearLayout.LayoutParams(0, dp(uiTokens.headerHeightDp), 1f))
+        header.addView(buildModeToggle(), LinearLayout.LayoutParams(modeToggleWidthPx(), dp(uiTokens.headerHeightDp)))
         return header
     }
 
@@ -993,16 +1061,28 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // A single flat fill, not roundedButton()'s layered "keycap" look
         // (gradient face + exposed darker step) — genuinely flat, matching
         // the mic capsule's own plain drawRoundRect fill exactly.
-        view.background = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = (height / 2).toFloat()
-            setColor(tone(Color.rgb(60, 60, 60), Color.rgb(225, 225, 228)))
-        }
+        val radiusDp = (height / resources.displayMetrics.density / 2f).toInt().coerceAtLeast(1)
+        view.background = keyboardSurface(KeyboardSurfaceRole.SECONDARY_KEY, radiusDp)
+    }
+
+    private fun compactVoiceFooterSideWidthDp(): Int {
+        val widthDp = (resources.displayMetrics.widthPixels / resources.displayMetrics.density).toInt()
+        return ((widthDp - 40 - 88) / 2).coerceIn(48, 64)
+    }
+
+    private fun compactVoiceFooterReturnWidthDp(): Int {
+        val widthDp = (resources.displayMetrics.widthPixels / resources.displayMetrics.density).toInt()
+        val sideWidthDp = compactVoiceFooterSideWidthDp()
+        return (widthDp - 40 - sideWidthDp * 2).coerceIn(72, 100)
     }
 
     /** @ / return / backspace — the plain footer row, unaffected by the undo/redo/edit overlay above it. */
-    private fun buildVoiceFooter(): LinearLayout {
-        val footerButtonHeight = dp(48)
+    private fun buildVoiceFooter(compact: Boolean): LinearLayout {
+        voiceFooterCompact = compact
+        val footerButtonHeight = dp(if (compact) 42 else 48)
+        val footerSideWidth = dp(if (compact) compactVoiceFooterSideWidthDp() else 84)
+        val footerReturnWidth = dp(if (compact) compactVoiceFooterReturnWidthDp() else 120)
+        val footerRowHeight = dp(if (compact) 64 else 84)
         val footer = LinearLayout(this).apply {
             gravity = android.view.Gravity.CENTER_VERTICAL
             clipChildren = false
@@ -1011,9 +1091,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val atButton = keyboardKey("@", 1f, action = { currentInputConnection?.commitText("@", 1) }).apply {
             textSize = 20f
             contentDescription = ui("输入 @", "Insert at sign")
-            layoutParams = LinearLayout.LayoutParams(dp(84), footerButtonHeight)
+            layoutParams = LinearLayout.LayoutParams(footerSideWidth, footerButtonHeight)
             flattenFooterButton(this, footerButtonHeight)
-        }
+        }.also { voiceFooterAtButton = it }
         // Chinese UI shows "换行" (line break) instead of the English word
         // "Return" — a real Chinese label reads better here than the
         // borrowed English term, so it gets its own larger, bold treatment
@@ -1027,7 +1107,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
             }
             contentDescription = ui("回车", "Return")
-            layoutParams = LinearLayout.LayoutParams(dp(120), footerButtonHeight)
+            layoutParams = LinearLayout.LayoutParams(footerReturnWidth, footerButtonHeight)
             flattenFooterButton(this, footerButtonHeight)
         }
         val backspaceButton = keyboardKey(
@@ -1039,15 +1119,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         ).apply {
             textSize = 22f
             contentDescription = ui("退格", "Backspace")
-            layoutParams = LinearLayout.LayoutParams(dp(84), footerButtonHeight)
+            layoutParams = LinearLayout.LayoutParams(footerSideWidth, footerButtonHeight)
             flattenFooterButton(this, footerButtonHeight)
-        }
+        }.also { voiceFooterBackspaceButton = it }
         val returnHolder = LinearLayout(this).apply {
             gravity = android.view.Gravity.CENTER
             addView(returnButton)
         }
         footer.addView(atButton)
-        footer.addView(returnHolder, LinearLayout.LayoutParams(0, dp(84), 1f))
+        footer.addView(returnHolder, LinearLayout.LayoutParams(0, footerRowHeight, 1f))
         footer.addView(backspaceButton)
         return footer
     }
@@ -1060,24 +1140,25 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * shift the mic or footer since it never occupies space in their own
      * LinearLayout.
      */
-    private fun buildDictationResultOverlay(): View {
-        val footerButtonHeight = dp(48)
+    private fun buildDictationResultOverlay(compact: Boolean): View {
+        val footerButtonHeight = dp(if (compact) 42 else 48)
+        val footerSideWidth = dp(if (compact) compactVoiceFooterSideWidthDp() else 84)
         undoRedoButton = keyboardKey("✕", 1f, action = { toggleUndoRedoDictation() }).apply {
             textSize = 20f
             contentDescription = ui("撤销本次听写结果", "Undo this dictation")
-            layoutParams = LinearLayout.LayoutParams(dp(84), footerButtonHeight)
+            layoutParams = LinearLayout.LayoutParams(footerSideWidth, footerButtonHeight)
             flattenFooterButton(this, footerButtonHeight)
         }
         editResultButton = keyboardKey("✎", 1f, action = { openEditDictationResult() }).apply {
             textSize = 20f
             contentDescription = ui("编辑听写结果", "Edit dictation result")
-            layoutParams = LinearLayout.LayoutParams(dp(84), footerButtonHeight)
+            layoutParams = LinearLayout.LayoutParams(footerSideWidth, footerButtonHeight)
             flattenFooterButton(this, footerButtonHeight)
         }
         val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        row.addView(undoRedoButton!!, LinearLayout.LayoutParams(dp(84), footerButtonHeight))
+        row.addView(undoRedoButton!!, LinearLayout.LayoutParams(footerSideWidth, footerButtonHeight))
         row.addView(View(this), LinearLayout.LayoutParams(0, footerButtonHeight, 1f))
-        row.addView(editResultButton!!, LinearLayout.LayoutParams(dp(84), footerButtonHeight))
+        row.addView(editResultButton!!, LinearLayout.LayoutParams(footerSideWidth, footerButtonHeight))
         dictationResultRow = row
         updateDictationResultControls()
         return row
@@ -1133,16 +1214,17 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * hairline dividers.
      */
     private fun buildEditPanel(): View {
-        // Same SwipeModeContainer + exact 300dp constraint as every other
-        // panel (voice/stroke/English) — not a plain LinearLayout — so this
-        // is structurally identical to the main voice panel instead of
-        // risking a taller/"fullscreen"-looking measurement.
+        val compact = keyboardPanelHeightDp() <= 240
+        val editHeaderHeightDp = if (compact) 40 else uiTokens.headerHeightDp
+        val editHorizontalPaddingDp = if (compact) 10 else 16
+        val editBottomPaddingDp = if (compact) 4 else 10
+        val editGapDp = if (compact) 4 else 6
         val root = SwipeModeContainer(this) { direction -> swipeInputMode(direction) }.apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
             minimumHeight = keyboardPanelHeightPx()
-            setPadding(dp(16), dp(8), dp(16), dp(10))
-            setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
+            setPadding(dp(editHorizontalPaddingDp), dp(8), dp(editHorizontalPaddingDp), dp(editBottomPaddingDp))
+            background = keyboardSurface(KeyboardSurfaceRole.SHEET, uiTokens.sheetRadiusDp)
             clipChildren = false
             clipToPadding = false
         }
@@ -1152,32 +1234,34 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // IME's own identity/state stays visibly unchanged while editing,
         // exactly like the number panel keeps the same header as the letter
         // panel underneath it.
-        root.addView(buildVoiceHeader(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
-            topMargin = dp(6)
+        root.addView(buildVoiceHeader(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(editHeaderHeightDp)).apply {
+            topMargin = dp(if (compact) 2 else 6)
         })
 
         root.addView(buildDivider(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-            topMargin = dp(6)
+            topMargin = dp(editGapDp)
         })
 
-        val chipRow = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        val chipRow = LinearLayout(this).apply {
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            background = keyboardSurface(KeyboardSurfaceRole.CARD, uiTokens.cardRadiusDp)
+            setPadding(dp(if (compact) 8 else 12), dp(if (compact) 4 else 8), dp(8), dp(if (compact) 4 else 8))
+        }
         val chip = TextView(this).apply {
-            // Plain text, no button/pill background — this is a preview of
-            // text already sitting in the real field, not a tappable control.
             text = editingOriginalText.orEmpty()
-            textSize = 15f
-            setTextColor(strokeEncodeAccentColor)
+            textSize = 16f
+            setTextColor(uiTokens.primaryText)
             maxLines = 2
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
         chipRow.addView(chip, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         // Cancel-editing control lives here instead of the header, since the
         // header is now identical to every other panel's.
-        chipRow.addView(flatCircleButton("✕", 34, ui("取消编辑", "Cancel editing")) {
+        chipRow.addView(flatCircleButton("✕", if (compact) 30 else 34, ui("取消编辑", "Cancel editing")) {
             closeEditDictationResult()
-        }, LinearLayout.LayoutParams(dp(38), dp(38)))
+        }, LinearLayout.LayoutParams(dp(if (compact) 34 else 38), dp(if (compact) 34 else 38)))
         root.addView(chipRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(14)
+            topMargin = dp(if (compact) 6 else 14)
         })
 
         // Flexible filler mirrors the empty middle area in the reference,
@@ -1199,56 +1283,56 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         correctionToggleRow.addView(
             TextView(this).apply {
                 text = if (addToDictionaryForEdit) "☑" else "☐"
-                textSize = 24f
+                textSize = if (compact) 20f else 24f
                 setTextColor(if (addToDictionaryForEdit) strokeEncodeAccentColor else tone(Color.rgb(140, 140, 140), Color.rgb(150, 150, 154)))
             },
-            LinearLayout.LayoutParams(dp(33), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(9) },
+            LinearLayout.LayoutParams(dp(33), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(if (compact) 5 else 9) },
         )
         correctionToggleRow.addView(
             TextView(this).apply {
                 text = ui("加入到字典中", "Add to dictionary")
-                textSize = 18f
+                textSize = if (compact) 16f else 18f
                 setTextColor(tone(Color.rgb(180, 180, 180), Color.rgb(120, 120, 125)))
             },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
         root.addView(
             correctionToggleRow,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(if (compact) 4 else 10) },
         )
 
         root.addView(buildDivider(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-            bottomMargin = dp(10)
+            bottomMargin = dp(if (compact) 4 else 10)
         })
 
         val bottomRow = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        voiceButton = VoiceButton(this, isDarkTheme).apply {
+        voiceButton = VoiceButton(this, isDarkTheme, uiTokens).apply {
             isClickable = true
             setOnClickListener { toggleDictation() }
             contentDescription = ui("说出正确的词", "Speak the correct word")
         }
         // Noticeably wider than a plain circular icon so the recording
         // waveform animation has real room to play.
-        bottomRow.addView(voiceButton!!, LinearLayout.LayoutParams(dp(170), dp(46)))
+        bottomRow.addView(voiceButton!!, LinearLayout.LayoutParams(dp(if (compact) 150 else 170), dp(if (compact) 42 else 46)))
 
         val textStack = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val title = TextView(this).apply {
             text = ui("说出正确的词", "Speak to edit")
-            textSize = 15f
+            textSize = if (compact) 14f else 15f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             setTextColor(tone(Color.WHITE, Color.rgb(30, 30, 34)))
         }
         statusNormalColor = tone(Color.rgb(160, 160, 160), Color.rgb(120, 120, 125))
         status = TextView(this).apply {
             text = displayStatus(currentMessage)
-            textSize = 12f
+            textSize = if (compact) 11f else 12f
             setTextColor(statusNormalColor)
             setPadding(0, dp(2), 0, 0)
         }
         textStack.addView(title, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         textStack.addView(status, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         bottomRow.addView(textStack, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-            marginStart = dp(12)
+            marginStart = dp(if (compact) 8 else 12)
         })
         root.addView(bottomRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
@@ -1433,20 +1517,20 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
             minimumHeight = keyboardPanelHeightPx()
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = keyboardSurface(KeyboardSurfaceRole.SHEET, uiTokens.sheetRadiusDp)
         }
         val header = LinearLayout(this).apply {
             gravity = android.view.Gravity.CENTER_VERTICAL
         }
-        header.addView(buildBrandView(), LinearLayout.LayoutParams(0, dp(38), 1f))
-        header.addView(buildModeToggle(), LinearLayout.LayoutParams(modeToggleWidthPx(), dp(38)))
+        header.addView(buildBrandView(), LinearLayout.LayoutParams(0, dp(uiTokens.headerHeightDp), 1f))
+        header.addView(buildModeToggle(), LinearLayout.LayoutParams(modeToggleWidthPx(), dp(uiTokens.headerHeightDp)))
         // This panel's own root padding (8dp) is narrower than the voice panel's
         // (16dp), which it needs for its body rows. Compensate with margins so
         // the header/toggle still land at the same canonical 16dp/8dp inset as
         // every other panel — otherwise the logo and toggle visibly jump left
         // and up when switching modes.
-        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(uiTokens.headerHeightDp)).apply {
             marginStart = dp(8)
             marginEnd = dp(8)
         })
@@ -1483,7 +1567,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                         // Same cherry red as the stroke panel's own
                         // right-side action rail, matching the Return key
                         // right next to it.
-                        background = roundedButton(Color.rgb(153, 26, 40), dp(5))
+                        background = keyboardSurface(KeyboardSurfaceRole.DESTRUCTIVE, uiTokens.keyRadiusDp)
                         setTextColor(Color.WHITE)
                     },
                 )
@@ -1604,7 +1688,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             // rail (Color.rgb(153, 26, 40)), per product request; fixed
             // white text regardless of theme since keyboardKey()'s own
             // default text color reads poorly against red in light theme.
-            background = roundedButton(Color.rgb(153, 26, 40), dp(5))
+            background = keyboardSurface(KeyboardSurfaceRole.DESTRUCTIVE, uiTokens.keyRadiusDp)
             setTextColor(Color.WHITE)
         }
         bottom.addView(modeButton)
@@ -1649,7 +1733,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         middleKeys.forEach { row.addView(buildEnglishCharKey(it, 1f)) }
         row.addView(
             keyboardKey("⌫", 1.5f, action = { englishDeleteBackward() }, repeatOnLongPress = true, repeatAction = { englishDeleteBackward() }).apply {
-                background = roundedButton(Color.rgb(153, 26, 40), dp(5))
+                background = keyboardSurface(KeyboardSurfaceRole.DESTRUCTIVE, uiTokens.keyRadiusDp)
                 setTextColor(Color.WHITE)
             },
         )
@@ -1702,16 +1786,17 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      */
     internal fun styleCandidateFirstState(view: TextView, isFirst: Boolean) {
         if (isFirst) {
-            // Same red as the action rail's own background
-            // (Color.rgb(153, 26, 40)), brightened a touch for dark
-            // theme only — same hue, just a bit lighter so it reads
-            // more clearly against a dark panel; light theme keeps the
-            // exact action-rail red.
-            view.setTextColor(if (isDarkTheme) Color.rgb(190, 45, 60) else Color.rgb(153, 26, 40))
+            view.setTextColor(if (isDarkTheme) Color.rgb(10, 35, 38) else Color.WHITE)
             view.setTypeface(view.typeface, android.graphics.Typeface.BOLD)
+            view.background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(uiTokens.cardRadiusDp).toFloat()
+                setColor(uiTokens.accent)
+            }
         } else {
-            view.setTextColor(tone(Color.rgb(245, 245, 245), Color.rgb(30, 30, 34)))
+            view.setTextColor(uiTokens.primaryText)
             view.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.NORMAL)
+            view.background = keyboardSurface(KeyboardSurfaceRole.CANDIDATE, uiTokens.cardRadiusDp)
         }
     }
 
@@ -1728,23 +1813,14 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         action: () -> Unit,
     ): TextView {
         return keyboardKey(label, 1f, action = action, longPressAction = onLongPress).apply {
-            // Was 20f/dp(9); briefly tried 17f/dp(12) to fix a clipped-glyph
-            // report on a Xiaomi MIUI device (that OEM's default system
-            // font renders visibly wider per character than stock Android
-            // at the same sp), but 20sp reads noticeably better across
-            // devices — settled on keeping the original text size and
-            // widening padding a bit instead (dp(9) -> dp(11)), which still
-            // gives MIUI's wider glyphs a bit more breathing room without
-            // shrinking the text everyone else sees.
-            textSize = 20f
+            textSize = 18f
             setSingleLine(true)
             maxLines = 1
-            background = null
-            elevation = 0f
+            elevation = dp(1).toFloat()
             translationZ = 0f
-            setPadding(dp(11), 0, dp(11), 0)
-            minimumWidth = dp(44)
-            minimumHeight = dp(36)
+            setPadding(dp(13), dp(4), dp(13), dp(4))
+            minimumWidth = dp(uiTokens.minTouchTargetDp)
+            minimumHeight = dp(uiTokens.candidateHeightDp)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
             styleCandidateFirstState(this, isFirst)
         }
@@ -1908,10 +1984,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
             minimumHeight = keyboardPanelHeightPx()
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = keyboardSurface(KeyboardSurfaceRole.SHEET, uiTokens.sheetRadiusDp)
         }
-        root.addView(buildVoiceHeader(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
+        root.addView(buildVoiceHeader(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(uiTokens.headerHeightDp)).apply {
             marginStart = dp(8)
             marginEnd = dp(8)
         })
@@ -1939,8 +2015,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
             gravity = android.view.Gravity.CENTER_VERTICAL
-            setTextColor(recentClipTextColor)
-            setPadding(dp(10), 0, dp(10), 0)
+            setTextColor(uiTokens.secondaryText)
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            background = keyboardSurface(KeyboardSurfaceRole.CARD, uiTokens.cardRadiusDp)
+            elevation = dp(1).toFloat()
             if (entry != null) {
                 isClickable = true
                 setOnClickListener {
@@ -1975,7 +2053,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // the Select button itself — and lose it the moment it's toggled off.
         val gap = dp(6)
         val mediumTypeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
-        val softWhite = tone(Color.rgb(224, 224, 224), Color.rgb(40, 40, 44))
+        val softWhite = uiTokens.primaryText
 
         // Same keycap background as the stroke panel's own keys (plain
         // keyboardKey() default background/elevation for the normal state,
@@ -1987,7 +2065,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 textSize = textSizeSp
                 typeface = mediumTypeface
                 setTextColor(softWhite)
-                if (highlighted) background = roundedButton(tone(Color.rgb(112, 78, 92), Color.rgb(232, 205, 213)), dp(5))
+                if (highlighted) background = keyboardAccentSurface(uiTokens.keyRadiusDp)
                 attachPressScale(this)
             }
 
@@ -2017,7 +2095,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             graphicRotation = rotationDegrees,
             graphicIconColor = iconColor,
         ).apply {
-            if (highlighted) background = roundedButton(tone(Color.rgb(112, 78, 92), Color.rgb(232, 205, 213)), dp(5))
+            if (highlighted) background = keyboardAccentSurface(uiTokens.keyRadiusDp)
             attachPressScale(this)
         }
 
@@ -2076,7 +2154,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             refreshInputView()
         }, 17f, midDivider = true).apply {
             text = ui("历史\n字典", "History\nDict")
-            background = roundedButton(Color.rgb(153, 26, 40), dp(5))
+            background = keyboardSurface(KeyboardSurfaceRole.DESTRUCTIVE, uiTokens.keyRadiusDp)
             // quickActionLabel()'s own softWhite text color reads fine on a
             // normal/rose key but not on this now-red one (dark gray in
             // light theme, on dark red) — fixed white regardless of theme,
@@ -2093,7 +2171,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             repeatOnLongPress = true,
             iconColor = Color.WHITE,
         ).apply {
-            background = roundedButton(Color.rgb(153, 26, 40), dp(5))
+            background = keyboardSurface(KeyboardSurfaceRole.DESTRUCTIVE, uiTokens.keyRadiusDp)
         }
         for (key in listOf(selectAllKey, copyKey, pasteKey, clipboardKey, backspaceKey)) {
             row2.addView(key, cell())
@@ -2139,16 +2217,20 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
             minimumHeight = keyboardPanelHeightPx()
             setPadding(dp(16), dp(8), dp(16), dp(8))
-            setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
+            background = keyboardSurface(KeyboardSurfaceRole.SHEET, uiTokens.sheetRadiusDp)
             clipChildren = false
             clipToPadding = false
         }
-        root.addView(buildVoiceHeader(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+        root.addView(buildVoiceHeader(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(uiTokens.headerHeightDp)))
         root.addView(buildDivider(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
             topMargin = dp(6)
         })
 
-        val tabsRow = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        val tabsRow = LinearLayout(this).apply {
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            background = keyboardSurface(KeyboardSurfaceRole.CARD, uiTokens.cardRadiusDp)
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+        }
         val tabs = listOf(
             OpenLessClipboardHistory.Category.ALL to ui("全部", "All"),
             OpenLessClipboardHistory.Category.RECENT to ui("最近", "Recent"),
@@ -2162,7 +2244,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 text = label
                 textSize = 14f
                 gravity = android.view.Gravity.CENTER
-                setTextColor(if (selected) Color.rgb(153, 26, 40) else tone(Color.rgb(190, 190, 190), Color.rgb(140, 140, 145)))
+                setTextColor(if (selected) uiTokens.accent else uiTokens.secondaryText)
                 if (englishUi) {
                     typeface = Typeface.create("sans-serif-medium", if (selected) Typeface.BOLD else Typeface.NORMAL)
                 } else {
@@ -2184,7 +2266,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             text = ui("清空", "Clear")
             textSize = 14f
             gravity = android.view.Gravity.CENTER
-            setTextColor(tone(Color.rgb(190, 190, 190), Color.rgb(140, 140, 145)))
+            setTextColor(uiTokens.secondaryText)
             if (englishUi) {
                 typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             }
@@ -2257,7 +2339,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     setTypeface(typeface, android.graphics.Typeface.BOLD)
                     gravity = android.view.Gravity.CENTER
                     setTextColor(Color.WHITE)
-                    setBackgroundColor(Color.rgb(153, 26, 40))
+                    background = keyboardSurface(KeyboardSurfaceRole.DESTRUCTIVE, uiTokens.cardRadiusDp)
                     setPadding(dp(6), 0, dp(6), 0)
                 }
                 revealRow.addView(favoriteZone, LinearLayout.LayoutParams(zoneWidth, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -2281,7 +2363,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     text = if (entry.favorite) "★" else "☆"
                     textSize = 14f
                     setTextColor(
-                        if (entry.favorite) Color.rgb(153, 26, 40) else tone(Color.rgb(120, 120, 120), Color.rgb(180, 180, 184)),
+                        if (entry.favorite) uiTokens.accent else uiTokens.secondaryText,
                     )
                 }
                 row.addView(star, LinearLayout.LayoutParams(dp(22), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(4) })
@@ -2310,7 +2392,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 // Plain flat row — no keycap-style background/press effect —
                 // but still opaque, so it fully hides the reveal zones until dragged.
                 row.setPadding(dp(12), dp(10), dp(12), dp(10))
-                row.setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
+                row.background = keyboardSurface(KeyboardSurfaceRole.CARD, uiTokens.cardRadiusDp)
+                row.elevation = dp(1).toFloat()
                 entryWrapper.addView(row, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
                 var suppressRowClick = false
@@ -2544,14 +2627,28 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     setSpan(android.text.style.RelativeSizeSpan(0.55f), 0, 1, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
             } else label
-            textSize = if (microphoneIcon) 10f else if (strokeIconCode != null) 1f else if (label == "Return") 17f else 22f
+            textSize = if (microphoneIcon) uiTokens.secondaryTextSp else if (strokeIconCode != null) 1f else if (label == "Return") 17f else uiTokens.keyTextSp
             gravity = if (microphoneIcon) android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL else android.view.Gravity.CENTER
             if (microphoneIcon) setPadding(0, dp(2), 0, 0)
-            setTextColor(tone(Color.rgb(245, 245, 245), Color.rgb(30, 30, 34)))
-            background = roundedButton(tone(Color.rgb(52, 52, 54), Color.rgb(255, 255, 255)), dp(5))
-            // Keep the existing palette and geometry, but give each key a subtle raised surface.
-            elevation = dp(5).toFloat()
+            setTextColor(keyboardTextColor())
+            background = keyboardSurface(KeyboardSurfaceRole.KEY, uiTokens.keyRadiusDp)
+            elevation = dp(3).toFloat()
             translationZ = dp(1).toFloat()
+            val target = this
+            stateListAnimator = android.animation.StateListAnimator().apply {
+                val down = android.animation.ObjectAnimator.ofPropertyValuesHolder(
+                    target,
+                    android.animation.PropertyValuesHolder.ofFloat(View.SCALE_X, uiTokens.pressedScale),
+                    android.animation.PropertyValuesHolder.ofFloat(View.SCALE_Y, uiTokens.pressedScale),
+                ).setDuration(70L)
+                val up = android.animation.ObjectAnimator.ofPropertyValuesHolder(
+                    target,
+                    android.animation.PropertyValuesHolder.ofFloat(View.SCALE_X, 1f),
+                    android.animation.PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f),
+                ).setDuration(90L)
+                addState(intArrayOf(android.R.attr.state_pressed), down)
+                addState(intArrayOf(), up)
+            }
             contentDescription = label.ifBlank { ui("空格", "Space") }
             // Retargetable like buildEnglishCharKey()'s tap preview: any
             // sibling key built with its own swipeUpAction/swipePreview
@@ -2772,7 +2869,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 false
             }
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight).apply {
-                setMargins(dp(3), dp(3), dp(3), dp(3))
+                setMargins(dp(uiTokens.keyGapDp / 2), dp(uiTokens.keyGapDp / 2), dp(uiTokens.keyGapDp / 2), dp(uiTokens.keyGapDp / 2))
             }
         }
     }
@@ -3041,7 +3138,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 true
             }
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight).apply {
-                setMargins(dp(3), dp(3), dp(3), dp(3))
+                setMargins(dp(uiTokens.keyGapDp / 2), dp(uiTokens.keyGapDp / 2), dp(uiTokens.keyGapDp / 2), dp(uiTokens.keyGapDp / 2))
             }
         }
     }
@@ -3122,8 +3219,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 marginEnd = dp(1)
             },
         )
-        val container = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        wrapper.addView(container, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)))
+        val container = LinearLayout(this).apply {
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            background = keyboardSurface(KeyboardSurfaceRole.CARD, uiTokens.cardRadiusDp)
+            setPadding(dp(6), 0, dp(6), 0)
+        }
+        wrapper.addView(container, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(uiTokens.candidateHeightDp)))
         wrapper.addView(
             buildDivider(),
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
@@ -3819,7 +3920,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         status?.setTextColor(recordingAccentColor())
         voiceRawHint?.text = rawModeHintText()
         voiceRawHint?.setTextColor(rawModeHintColor())
-        voiceRawHint?.visibility = if (rawModeHintVisible()) View.VISIBLE else View.GONE
+        voiceRawHint?.visibility = if (!voiceFooterCompact && rawModeHintVisible()) View.VISIBLE else View.GONE
         voiceButton?.isRecording = recording
         voiceButton?.isProcessing = processing
         updateDictationResultControls()
@@ -3968,9 +4069,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // up as long as there's a previous result sitting in the buffer to
         // undo/redo/edit, regardless of what the mic is doing right now.
         val visible = inputMode == InputMode.VOICE && lastDictationText != null && !editingDictationResult
-        // This row is a FrameLayout overlay above the footer (see
-        // buildDictationResultOverlay()), not part of the panel's own
-        // LinearLayout flow, so GONE here never shifts the mic or footer.
+        val replaceCompactFooterEdges = visible && voiceFooterCompact
+        voiceFooterAtButton?.visibility = if (replaceCompactFooterEdges) View.GONE else View.VISIBLE
+        voiceFooterBackspaceButton?.visibility = if (replaceCompactFooterEdges) View.GONE else View.VISIBLE
+        // This row is a FrameLayout overlay: in compact mode it replaces the
+        // hidden footer edge buttons; regular panels keep it above the footer.
         dictationResultRow?.visibility = if (visible) View.VISIBLE else View.GONE
         undoRedoButton?.text = if (dictationTextUndone) "↻" else "✕"
         undoRedoButton?.contentDescription = if (dictationTextUndone) {
@@ -4238,21 +4341,18 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
     }
 
-    // Flat (no keycap relief) background for the encode+candidate strip: a
-    // rounded rect a touch lighter than the panel, plus a hairline divider
-    // baked in at the fixed 24dp encode/candidate boundary. Since `top`'s
-    // height is always exactly dp(60), this offset never drifts.
     internal fun buildEncodeAreaBackground(): android.graphics.drawable.Drawable {
         val panel = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(6).toFloat()
-            setColor(tone(Color.rgb(58, 58, 58), Color.rgb(228, 228, 232)))
+            cornerRadius = dp(uiTokens.cardRadiusDp).toFloat()
+            setColor(uiTokens.card)
         }
         val divider = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            setColor(tone(Color.rgb(82, 82, 82), Color.rgb(205, 205, 210)))
+            setColor(uiTokens.divider)
         }
-        val dividerBottomInset = (dp(60) - dp(24) - dp(1)).coerceAtLeast(0)
+        val totalHeightDp = 24 + uiTokens.candidateHeightDp
+        val dividerBottomInset = (dp(totalHeightDp) - dp(24) - dp(1)).coerceAtLeast(0)
         return android.graphics.drawable.LayerDrawable(arrayOf(panel, divider)).apply {
             setLayerInset(1, dp(8), dp(24), dp(8), dividerBottomInset)
         }
@@ -4572,31 +4672,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         private val darkTheme: Boolean,
         private val onModeSelected: (InputMode) -> Unit,
     ) : View(context) {
-        // Instance properties, not companion constants — this view is
-        // rebuilt on every panel refresh, so a live theme switch just means
-        // a fresh instance with the other branch's colors.
-        private val trackColor = if (darkTheme) Color.rgb(28, 28, 28) else Color.rgb(222, 222, 226)
-        // Weakened from a fully-opaque line to a near-invisible one — the
-        // floating selected pill below is meant to be the only thing the
-        // user reads as "current mode", not these dividers, but the layout
-        // math that positions the four icons/labels still uses the same
-        // segmentWidth split, so the dividers stay (very faintly) for
-        // continuity rather than being deleted outright.
-        private val dividerColor = run {
-            val base = if (darkTheme) Color.rgb(58, 58, 58) else Color.rgb(200, 200, 204)
-            Color.argb(28, Color.red(base), Color.green(base), Color.blue(base))
-        }
-        // Same surface color as every ordinary key's own background
-        // (roundedButton(tone(Color.rgb(52, 52, 54), Color.WHITE), ...) —
-        // see buildEnglishCharKey()/keyboardKey()) — reusing it here ties
-        // the selected pill into the keyboard's existing "raised key"
-        // visual language instead of introducing a new floating-pill color.
-        private val selectedPillColor = if (darkTheme) Color.rgb(52, 52, 54) else Color.WHITE
-        private val iconColor = if (darkTheme) Color.rgb(240, 240, 240) else Color.rgb(50, 50, 54)
-        // Unselected icons/labels dim slightly (not a color or hue change)
-        // so the fully-opaque selected one reads as the one thing actively
-        // "on" — a light touch, not the kind of visible recolor the spec
-        // asks not to introduce.
+        private val tokens = KeyboardUiKit.tokens(darkTheme)
+        private val trackColor = tokens.card
+        private val dividerColor = Color.argb(56, Color.red(tokens.divider), Color.green(tokens.divider), Color.blue(tokens.divider))
+        private val selectedPillColor = tokens.accent
+        private val iconColor = tokens.primaryText
+        private val selectedIconColor = if (darkTheme) tokens.canvas else tokens.primaryText
         private val dimmedIconColor = Color.argb(178, Color.red(iconColor), Color.green(iconColor), Color.blue(iconColor))
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             strokeCap = Paint.Cap.ROUND
@@ -4696,7 +4777,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             canvas.drawRoundRect(pillLeft, pillTop, pillRight, pillBottom, (pillBottom - pillTop) / 2f, (pillBottom - pillTop) / 2f, paint)
 
             val selectedIndex = modes.indexOf(selectedMode).coerceAtLeast(0)
-            fun colorFor(index: Int) = if (index == selectedIndex) iconColor else dimmedIconColor
+            fun colorFor(index: Int) = if (index == selectedIndex) selectedIconColor else dimmedIconColor
 
             paint.color = colorFor(0)
             drawWaveform(canvas, segmentWidth * 0.5f, centerY, h)
@@ -5454,13 +5535,14 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
     }
 
-    private class VoiceButton(context: android.content.Context, private val darkTheme: Boolean) : View(context) {
+    private class VoiceButton(
+        context: android.content.Context,
+        private val darkTheme: Boolean,
+        private val tokens: KeyboardUiTokens,
+    ) : View(context) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        // Panel's own dark-theme background is rgb(48,48,48); this reads
-        // 12/255 lighter (tried 6 — too subtle to tell apart from the panel
-        // — then 24, which read as too strong; 12 is the settled value).
-        private val idlePillColor = if (darkTheme) Color.rgb(60, 60, 60) else Color.rgb(225, 225, 228)
-        private val idleIconColor = if (darkTheme) Color.WHITE else Color.rgb(60, 60, 64)
+        private val idlePillColor = tokens.voice
+        private val idleIconColor = tokens.accent
         // Match the raw-mode recording indicator exactly, so the swipe-up
         // preview and the resulting raw recording state use one consistent
         // orange-yellow accent.
@@ -5471,23 +5553,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // Same idea again, for the swipe-right-to-Cloud-notes gesture's own
         // idle-pill preview — see armedForCloudNote/pillArmedAmountRed below.
         private val cloudNoteArmedPillColor = LINK_COLOR_CLOUD_NOTE
-        // Light red, blended into the waveform bars while a swipe-down-to-
-        // cancel gesture is past its commit threshold — same value in both
-        // themes, mirroring swipeArmedPillColor's own choice.
-        private val cancelArmedWaveformColor = Color.rgb(255, 150, 150)
-        private val waveformColor = if (darkTheme) Color.rgb(222, 222, 222) else Color.rgb(70, 70, 74)
+        private val cancelArmedWaveformColor = tokens.destructive
+        private val waveformColor = tokens.accent
         private val processingDotColors = if (darkTheme) {
-            intArrayOf(
-                Color.rgb(245, 245, 245), Color.rgb(205, 205, 205),
-                Color.rgb(170, 170, 170), Color.rgb(235, 235, 235),
-                Color.rgb(190, 190, 190), Color.rgb(220, 220, 220),
-            )
+            intArrayOf(tokens.accent, Color.rgb(178, 238, 232), tokens.secondaryText, tokens.accent, Color.rgb(205, 247, 242), tokens.secondaryText)
         } else {
-            intArrayOf(
-                Color.rgb(40, 40, 40), Color.rgb(90, 90, 90),
-                Color.rgb(130, 130, 130), Color.rgb(55, 55, 55),
-                Color.rgb(100, 100, 100), Color.rgb(70, 70, 70),
-            )
+            intArrayOf(tokens.accent, Color.rgb(31, 145, 145), tokens.secondaryText, tokens.accent, Color.rgb(44, 166, 161), tokens.secondaryText)
         }
         var isRecording: Boolean = false
             set(value) {
@@ -5732,8 +5803,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                     val flow = 0.55f + 0.45f * kotlin.math.sin(
                         (phase * 2.2f + index * 0.9f).toDouble(),
                     ).toFloat()
-                    val halfHeight = minOf(height * 0.95f, dp(66).toFloat()) *
-                        (0.035f + live * 0.965f) * envelope * flow
+                    val halfHeight = minOf(
+                        if (height < dp(60)) height * 0.43f else height * 0.95f,
+                        dp(66).toFloat(),
+                    ) * (0.035f + live * 0.965f) * envelope * flow
                     paint.color = currentWaveformColor
                     paint.strokeWidth = dp(3).toFloat()
                     canvas.drawLine(x, centerY - halfHeight, x, centerY + halfHeight, paint)
@@ -5745,8 +5818,17 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 // then shrinking together as one — rather than each dot
                 // sizing itself independently off its own angle.
                 val colors = processingDotColors
-                val baseOrbit = minOf(width * 0.28f, height * 0.52f)
-                val baseDotRadius = minOf(width * 0.055f, height * 0.15f)
+                val compactHeight = height < dp(60)
+                val baseOrbit = if (compactHeight) {
+                    minOf(width * 0.28f, height * 0.22f)
+                } else {
+                    minOf(width * 0.28f, height * 0.52f)
+                }
+                val baseDotRadius = if (compactHeight) {
+                    minOf(width * 0.055f, height * 0.08f)
+                } else {
+                    minOf(width * 0.055f, height * 0.15f)
+                }
                 val breathe = 0.6f + 0.4f * ((1f + kotlin.math.sin((phase * 0.5f).toDouble()).toFloat()) / 2f)
                 val orbit = baseOrbit * breathe
                 val dotRadius = baseDotRadius * breathe
