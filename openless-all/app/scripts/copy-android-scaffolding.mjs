@@ -81,6 +81,7 @@ const KOTLIN_FILES = [
 
 const KOTLIN_TEST_FILES = [
   'ImeLearningPolicyTest.kt',
+  'LatinInputModeTest.kt',
   'OpenLessContentReaderTest.kt',
   'OpenLessCredentialCipherTest.kt',
   'OpenLessShizukuBridgeTest.kt',
