@@ -887,7 +887,8 @@ impl WarmCaptureHub {
             }
         }
         if !self.sink.has_promoted_claims() {
-            if let Some((enabled, device_name)) = self.pending_configuration.lock().take() {
+            let pending_configuration = self.pending_configuration.lock().take();
+            if let Some((enabled, device_name)) = pending_configuration {
                 self.configure_locked(enabled, device_name);
             }
         }
@@ -908,7 +909,8 @@ impl WarmCaptureHub {
         if !self.cold_capture_active.swap(false, Ordering::AcqRel) {
             return;
         }
-        if let Some((enabled, device_name)) = self.pending_configuration.lock().take() {
+        let pending_configuration = self.pending_configuration.lock().take();
+        if let Some((enabled, device_name)) = pending_configuration {
             self.configure_locked(enabled, device_name);
         }
     }
@@ -2381,5 +2383,73 @@ mod tests {
             &[vec![1, 2, 3, 4], vec![5, 6]]
         );
         assert!(sink.promote(17, first, Arc::new(|_| {}), None).is_err());
+    }
+
+    fn complete_hub_operation(operation: impl FnOnce() + Send + 'static) {
+        let (finished, completion) = std::sync::mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            operation();
+            finished.send(()).unwrap();
+        });
+        completion
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("capture lifecycle operation did not finish");
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn cold_capture_applies_deferred_configuration_without_deadlock() {
+        let hub = WarmCaptureHub::new();
+        hub.begin_cold_capture().unwrap();
+        hub.configure(false, Some("next microphone".into()));
+        assert!(hub.pending_configuration.lock().is_some());
+        assert!(hub.device_name.lock().is_none());
+
+        let worker_hub = Arc::clone(&hub);
+        complete_hub_operation(move || worker_hub.end_cold_capture());
+        assert!(hub.pending_configuration.lock().is_none());
+        assert!(!hub.enabled.load(Ordering::Acquire));
+        assert_eq!(hub.device_name.lock().as_deref(), Some("next microphone"));
+        // Applying the deferred change must leave the next capture admissible.
+        hub.begin_cold_capture().unwrap();
+        hub.end_cold_capture();
+        assert!(hub.pending_configuration.lock().is_none());
+    }
+
+    #[test]
+    fn last_warm_capture_applies_deferred_configuration_without_deadlock() {
+        for claim_count in [1, 2] {
+            let hub = WarmCaptureHub::new();
+            hub.enabled.store(true, Ordering::Release);
+            for press_id in 1..=claim_count {
+                hub.sink.arm(press_id).unwrap();
+                hub.sink
+                    .promote(
+                        press_id,
+                        Arc::new(RecordingConsumer::default()),
+                        Arc::new(|_| {}),
+                        None,
+                    )
+                    .unwrap();
+            }
+            hub.configure(false, Some("next microphone".into()));
+            if claim_count == 2 {
+                hub.release_claim(1);
+                assert!(hub.enabled.load(Ordering::Acquire));
+                assert!(hub.pending_configuration.lock().is_some());
+                assert!(hub.device_name.lock().is_none());
+            }
+
+            let worker_hub = Arc::clone(&hub);
+            complete_hub_operation(move || worker_hub.release_claim(claim_count));
+            assert!(hub.pending_configuration.lock().is_none());
+            assert!(!hub.enabled.load(Ordering::Acquire));
+            assert_eq!(hub.device_name.lock().as_deref(), Some("next microphone"));
+            assert!(!hub.sink.has_claims());
+            hub.release_claim(claim_count);
+            hub.begin_cold_capture().unwrap();
+            hub.end_cold_capture();
+            assert!(hub.pending_configuration.lock().is_none());
+        }
     }
 }
