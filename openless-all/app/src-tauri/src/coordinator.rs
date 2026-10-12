@@ -35,6 +35,7 @@ mod qa;
 mod restore_runtime;
 #[cfg(all(not(mobile), target_os = "windows"))]
 pub(crate) mod selection_voice_session;
+pub(crate) mod voice_edit_session;
 use capsule_focus::*;
 pub(crate) use capsule_focus::{
     capture_external_focus_target, capture_focus_target, capture_frontmost_app,
@@ -564,6 +565,10 @@ struct Inner {
     selection_voice_host: Arc<Mutex<selection_voice_session::SelectionVoiceHostState>>,
     #[cfg(all(not(mobile), target_os = "windows"))]
     selection_voice_capture: Mutex<Option<Arc<openless_core::VoiceTranscriptionSession>>>,
+    /// Host-owned lifecycle handles for Issue #900. The session model and
+    /// EditPlan remain in openless-core; this lock only pairs dictation IDs
+    /// with the platform target captured before the first await.
+    voice_edit_host: Arc<Mutex<voice_edit_session::VoiceEditHostState>>,
     /// Selection voice QA (issue #118): global shortcut listener parallel to
     /// the dictation hotkey (global-hotkey crate). `None` means the feature is
     /// off or installation has not succeeded yet.
@@ -726,6 +731,9 @@ impl Coordinator {
                 )),
                 #[cfg(all(not(mobile), target_os = "windows"))]
                 selection_voice_capture: Mutex::new(None),
+                voice_edit_host: Arc::new(Mutex::new(
+                    voice_edit_session::VoiceEditHostState::default(),
+                )),
                 qa_hotkey: Mutex::new(None),
                 coding_agent_modifier_hotkey: Mutex::new(None),
                 coding_agent_combo_hotkey: Mutex::new(None),
@@ -854,6 +862,9 @@ impl Coordinator {
             selection_voice_host: Arc::clone(&selection_voice_host),
             #[cfg(all(not(mobile), target_os = "windows"))]
             selection_voice_capture: Mutex::new(None),
+            voice_edit_host: Arc::new(
+                Mutex::new(voice_edit_session::VoiceEditHostState::default()),
+            ),
             qa_hotkey: Mutex::new(None),
             coding_agent_modifier_hotkey: Mutex::new(None),
             coding_agent_combo_hotkey: Mutex::new(None),
@@ -874,6 +885,57 @@ impl Coordinator {
 
     pub fn backend(&self) -> Arc<openless_core::OpenLessBackend> {
         Arc::clone(&self.inner.backend)
+    }
+
+    pub(crate) async fn start_voice_edit_session(
+        &self,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::start(&self.inner).await
+    }
+    pub(crate) async fn finalize_voice_edit_from_overlay(&self) -> Result<(), String> {
+        voice_edit_session::from_overlay(&self.inner).await?;
+        self.inner.host.show_voice_edit();
+        Ok(())
+    }
+    pub(crate) async fn finish_voice_edit_dictation(
+        &self,
+        id: openless_core::SessionId,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::finish_dictation(&self.inner, id).await
+    }
+    pub(crate) async fn start_voice_edit_instruction(
+        &self,
+        id: openless_core::SessionId,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::start_instruction(&self.inner, id).await
+    }
+    pub(crate) async fn finish_voice_edit_instruction(
+        &self,
+        id: openless_core::SessionId,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::finish_instruction(&self.inner, id).await
+    }
+    pub(crate) async fn commit_voice_edit_session(
+        &self,
+        id: openless_core::SessionId,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::commit(&self.inner, id).await
+    }
+    pub(crate) async fn cancel_voice_edit_session(
+        &self,
+        id: Option<openless_core::SessionId>,
+    ) -> Result<Option<openless_core::VoiceEditSnapshot>, String> {
+        voice_edit_session::cancel(&self.inner, id).await
+    }
+    pub(crate) fn voice_edit_session_can_close(
+        &self,
+        id: Option<openless_core::SessionId>,
+    ) -> Result<(), String> {
+        voice_edit_session::can_close(&self.inner, id)
+    }
+
+    pub(crate) fn voice_edit_session_snapshot(&self) -> Option<openless_core::VoiceEditSnapshot> {
+        voice_edit_session::snapshot(&self.inner)
     }
 
     pub fn show_core_insert_fallback(&self, text: String, reason: &str) {

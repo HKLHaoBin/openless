@@ -25,9 +25,9 @@ use crate::events::{
 };
 use crate::ports::{
     ActiveRecording, AudioConsumer, CaptureStartRequest, CapturedPcm, EditObservationSink,
-    EngineFailureStage, EngineProgress, EngineProgressSink, EngineStage, HostAction, InsertOutcome,
-    PendingAudioCapture, TextInserter, TextInsertionSession, TextStreamChunk, TextStreamSink,
-    TranscriptionSession,
+    EngineFailureStage, EngineProgress, EngineProgressSink, EngineStage, HostAction,
+    HostContextAdapter, InsertOutcome, PendingAudioCapture, TextInserter, TextInsertionSession,
+    TextStreamChunk, TextStreamSink, TranscriptionSession,
 };
 use crate::shared_types::{
     CredentialsStatus, PendingCorrection, UserPreferences, LEARNED_VOCAB_NOTE,
@@ -122,6 +122,7 @@ struct DictationReservation {
     session_id: SessionId,
     resources: Arc<crate::voice_session::VoiceResourceHold>,
     inserter: Arc<dyn TextInserter>,
+    host_context: Arc<dyn HostContextAdapter>,
     capture_generation: Option<u64>,
     pending_capture: Option<Box<dyn PendingAudioCapture>>,
 }
@@ -5766,12 +5767,22 @@ impl OpenLessBackend {
             crate::voice_session::VoiceSessionKind::Dictation,
         )?;
         let starting_resources = self.voice_sessions.hold_resources(session_id)?;
-        // Freeze the destination before context/credential awaits or feedback
-        // can change foreground focus. No native preparation happens yet.
-        let inserter = insert_text
-            .then(|| self.deps.text_inserter.capture_target())
-            .flatten()
-            .unwrap_or_else(|| Arc::clone(&self.deps.text_inserter));
+        // Freeze the destination and its matching host-context reader before context/credential
+        // awaits or feedback can change foreground focus. No native preparation happens yet.
+        let (inserter, host_context) = if insert_text {
+            match self.deps.text_inserter.capture_target() {
+                Some(captured) => (captured.inserter, captured.host_context),
+                None => (
+                    Arc::clone(&self.deps.text_inserter),
+                    Arc::clone(&self.deps.services.host_context),
+                ),
+            }
+        } else {
+            (
+                Arc::clone(&self.deps.text_inserter),
+                Arc::clone(&self.deps.services.host_context),
+            )
+        };
         self.disarm_edit_observation();
         // Context capture can await AX, a keyring, or another host service.
         // Publish ownership before that first await so Esc/stop see Starting
@@ -5807,6 +5818,7 @@ impl OpenLessBackend {
             inserter,
             capture_generation,
             pending_capture,
+            host_context,
         })
     }
 
@@ -5830,6 +5842,7 @@ impl OpenLessBackend {
             inserter,
             capture_generation,
             mut pending_capture,
+            host_context,
         } = reservation;
         if options.output_target == DictationOutputTarget::CloudNote {
             if let Err(error) = self.set_dictation_cloud_note(session_id, true) {
@@ -5839,7 +5852,11 @@ impl OpenLessBackend {
             }
         }
         let context = match self
-            .capture_dictation_context(&options, DictationContextPurpose::Dictation)
+            .capture_dictation_context_with_host(
+                &options,
+                DictationContextPurpose::Dictation,
+                host_context.as_ref(),
+            )
             .await
         {
             Ok(context) => Arc::new(context),
@@ -6643,6 +6660,7 @@ impl OpenLessBackend {
         engine_result: &crate::ports::EngineResult,
     ) {
         if context.output_target == DictationOutputTarget::Qa
+            || context.output_target == DictationOutputTarget::VoiceEdit
             || context.output_target == DictationOutputTarget::CloudNote
             || self.is_cloud_note(result.session_id)
         {
@@ -7049,6 +7067,20 @@ impl OpenLessBackend {
         options: &DictationStartOptions,
         purpose: DictationContextPurpose,
     ) -> Result<DictationContext, BackendError> {
+        self.capture_dictation_context_with_host(
+            options,
+            purpose,
+            self.deps.services.host_context.as_ref(),
+        )
+        .await
+    }
+
+    async fn capture_dictation_context_with_host(
+        &self,
+        options: &DictationStartOptions,
+        purpose: DictationContextPurpose,
+        host_context: &dyn HostContextAdapter,
+    ) -> Result<DictationContext, BackendError> {
         let preferences = self.get_preferences();
         let mut captured_options = options.clone();
         if !preferences.cursor_context_enabled {
@@ -7060,10 +7092,7 @@ impl OpenLessBackend {
         if captured_options.front_app.is_none()
             || (preferences.cursor_context_enabled && captured_options.cursor_context.is_none())
         {
-            match self
-                .deps
-                .services
-                .host_context
+            match host_context
                 .capture(preferences.cursor_context_enabled)
                 .await
             {
@@ -11297,6 +11326,65 @@ mod tests {
         assert_eq!(context.output_target, DictationOutputTarget::Qa);
         assert!(!context.insertion.enabled);
         assert!(!context.uses_llm_polisher());
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn voice_edit_handoff_keeps_polish_without_inserting_or_recording_intermediate_history() {
+        let data_dir = TestDataDir::new("voice-edit-dictation-handoff");
+        let engine =
+            crate::testing::FixtureDictationEngine::successful("raw draft", "polished draft");
+        let backend =
+            backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine.clone()));
+        let mut preferences = backend.get_preferences();
+        preferences.streaming_insert = true;
+        backend.set_preferences(preferences).unwrap();
+        backend.start().await.unwrap();
+        let session = backend
+            .start_dictation_with_options(DictationStartOptions {
+                output_target: DictationOutputTarget::Undecided,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let result = backend
+            .stop_dictation_session_with_options(
+                Some(session),
+                DictationStopOptions::default(),
+                Some(DictationOutputTarget::VoiceEdit),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.raw_text, "raw draft");
+        assert_eq!(result.polished_text, "polished draft");
+        assert_eq!(result.inserted, crate::types::InsertStatus::NotRequested);
+        assert!(backend.list_history().unwrap().is_empty());
+        let contexts = engine.contexts();
+        let context = contexts.last().unwrap();
+        assert_eq!(context.output_target, DictationOutputTarget::VoiceEdit);
+        assert!(!context.insertion.enabled);
+        assert!(!context.insertion.streaming);
+        assert!(context.uses_llm_polisher());
+        // Later instructions use the same output contract without another foreground handoff.
+        let instruction = backend
+            .start_dictation_with_options(DictationStartOptions {
+                insert_text: false,
+                output_target: DictationOutputTarget::VoiceEdit,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            backend
+                .stop_dictation_session(instruction)
+                .await
+                .unwrap()
+                .inserted,
+            crate::types::InsertStatus::NotRequested
+        );
+        let contexts = engine.contexts();
+        assert!(!contexts.last().unwrap().insertion.streaming);
+        assert!(backend.list_history().unwrap().is_empty());
         backend.shutdown().await.unwrap();
     }
 

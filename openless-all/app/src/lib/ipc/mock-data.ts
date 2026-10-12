@@ -79,6 +79,7 @@ export let mockSettings: UserPreferences = {
   selectionPolishOutputMode: 'directReplace',
   selectionPolishHotkey: defaultSelectionPolishShortcut(),
   selectionVoiceEnabled: false,
+  voiceEditEnabled: false,
   selectionVoiceIntentMode: 'prompt',
   selectionVoiceManualIntent: 'question',
   selectionVoiceEditKeywords: ['翻译', '改成', '替换', '批量', '格式'],

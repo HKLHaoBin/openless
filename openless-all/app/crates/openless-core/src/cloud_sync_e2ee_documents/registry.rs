@@ -341,6 +341,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "voice_edit_enabled",
+        key: "voiceEditEnabled",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "selection_voice_intent_mode",
         key: "selectionVoiceIntentMode",
         class: PreferenceClass::Portable,

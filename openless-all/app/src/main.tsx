@@ -19,6 +19,7 @@ const isCapsule = windowKind === 'capsule';
 const isCapsuleRail = windowKind === 'capsule-rail';
 const isQa = windowKind === 'qa';
 const isSelectionVoiceIntent = windowKind === 'selection-voice-intent';
+const isVoiceEdit = windowKind === 'voice-edit';
 const isLessComputer = windowKind === 'less-computer';
 const isLessComputerGlow = windowKind === 'less-computer-glow';
 // The splash video belongs to the main window only (routes without ?window=):
@@ -41,6 +42,7 @@ const renderApp = () => {
         isCapsuleRail={isCapsuleRail}
         isQa={isQa}
         isSelectionVoiceIntent={isSelectionVoiceIntent}
+        isVoiceEdit={isVoiceEdit}
         isLessComputer={isLessComputer}
         isLessComputerGlow={isLessComputerGlow}
         forcedOs={os}

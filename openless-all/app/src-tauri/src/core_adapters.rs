@@ -9,12 +9,12 @@ use std::time::Instant;
 use futures_util::future::BoxFuture;
 use openless_core::{
     ActiveRecording, AudioConsumer as CoreAudioConsumer, AudioRecorder, AudioRecorderRouter,
-    BackendError, BackendErrorCode, CaptureStartRequest, DictationContext, DictationEngine,
-    EditObservationAdapter, EditObservationSink, ExternalAudioRecorder, HostAction, HostActions,
-    InsertOutcome, InsertWriteResult, PendingAudioCapture, RecordingArchive, RecordingProgressSink,
-    SessionId,
-    TextInserter as CoreTextInserter, TextInsertionSession, TextPolisher, TextStreamChunk,
-    TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
+    BackendError, BackendErrorCode, CaptureStartRequest, CapturedTextTarget, DictationContext,
+    DictationEngine, EditObservationAdapter, EditObservationSink, ExternalAudioRecorder,
+    HostAction, HostActions, InsertOutcome, InsertWriteResult, PendingAudioCapture,
+    RecordingArchive, RecordingProgressSink, SessionId, TextInserter as CoreTextInserter,
+    TextInsertionSession, TextPolisher, TextStreamChunk, TextStreamSink, TranscriptOutput,
+    TranscriptionEngine, TranscriptionSession,
 };
 use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
@@ -274,7 +274,7 @@ pub(crate) fn backend_dependencies(
     }
     dependencies.services.platform =
         Arc::new(TauriPlatformApi::new(Arc::clone(&app), hotkey_status));
-    dependencies.services.host_context = Arc::new(TauriHostContextAdapter);
+    dependencies.services.host_context = Arc::new(TauriHostContextAdapter::default());
     dependencies.services.edit_observation = Arc::new(TauriEditObservationAdapter::default());
     dependencies.local_asr_runtime = Some(local_asr_runtime);
     #[cfg(not(mobile))]
@@ -2505,29 +2505,31 @@ impl TauriStagedCapture {
                 let fallback_level_handler = Arc::clone(&level_handler);
                 let fallback_archive_path = archive_path.clone();
                 match staged.commit(consumer, level_handler, archive_path) {
-                    Ok((capture, runtime_errors, archive_active)) => Ok(TauriCommittedCapture::Warm {
-                        capture,
-                        runtime_errors,
-                        archive_active,
-                    }),
+                    Ok((capture, runtime_errors, archive_active)) => {
+                        Ok(TauriCommittedCapture::Warm {
+                            capture,
+                            runtime_errors,
+                            archive_active,
+                        })
+                    }
                     Err(error)
                         if matches!(
                             &error,
                             RecorderError::EngineFailed(message)
                                 if message == "warm provisional capture was not armed"
-                        ) => {
+                        ) =>
+                    {
                         fallback_hub.begin_cold_capture()?;
                         fallback_hub.suspend_for_cold_capture();
-                        let cold = match Recorder::start_staged(
-                            fallback_device,
-                            STAGED_CAPTURE_MAX_BYTES,
-                        ) {
-                            Ok(cold) => cold,
-                            Err(error) => {
-                                fallback_hub.end_cold_capture();
-                                return Err(error);
-                            }
-                        };
+                        let cold =
+                            match Recorder::start_staged(fallback_device, STAGED_CAPTURE_MAX_BYTES)
+                            {
+                                Ok(cold) => cold,
+                                Err(error) => {
+                                    fallback_hub.end_cold_capture();
+                                    return Err(error);
+                                }
+                            };
                         let (recorder, runtime_errors, archive_active) = match cold.commit(
                             fallback_consumer,
                             fallback_level_handler,
@@ -2574,7 +2576,6 @@ struct TauriActiveRecording {
     archive: Option<Arc<TauriRecordingArchive>>,
     _mute: Option<crate::audio_mute::AudioMuteGuard>,
 }
-
 
 impl PendingAudioCapture for TauriPendingAudioCapture {
     fn commit(
@@ -2625,9 +2626,7 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
             let joined = tauri::async_runtime::spawn_blocking(move || {
                 let archive_path = archive_path
                     .map_err(|error| {
-                        log::warn!(
-                            "[recordings] archive unavailable; capture continues: {error}"
-                        )
+                        log::warn!("[recordings] archive unavailable; capture continues: {error}")
                     })
                     .ok()
                     .flatten();
@@ -2684,33 +2683,39 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                         return Err(error);
                     }
                 };
-                let (recorder, warm_capture, cold_capture_hub, runtime_errors, archive_active, resume_warm_hub) =
-                    match committed {
-                        TauriCommittedCapture::Cold {
-                            recorder,
-                            runtime_errors,
-                            archive_active,
-                        } => (
-                            Some(recorder),
-                            None,
-                            Some(Arc::clone(&warm_hub)),
-                            Some(runtime_errors),
-                            archive_active,
-                            Some(Arc::clone(&warm_hub)),
-                        ),
-                        TauriCommittedCapture::Warm {
-                            capture,
-                            runtime_errors,
-                            archive_active,
-                        } => (
-                            None,
-                            Some(capture),
-                            None,
-                            Some(runtime_errors),
-                            archive_active,
-                            None,
-                        ),
-                    };
+                let (
+                    recorder,
+                    warm_capture,
+                    cold_capture_hub,
+                    runtime_errors,
+                    archive_active,
+                    resume_warm_hub,
+                ) = match committed {
+                    TauriCommittedCapture::Cold {
+                        recorder,
+                        runtime_errors,
+                        archive_active,
+                    } => (
+                        Some(recorder),
+                        None,
+                        Some(Arc::clone(&warm_hub)),
+                        Some(runtime_errors),
+                        archive_active,
+                        Some(Arc::clone(&warm_hub)),
+                    ),
+                    TauriCommittedCapture::Warm {
+                        capture,
+                        runtime_errors,
+                        archive_active,
+                    } => (
+                        None,
+                        Some(capture),
+                        None,
+                        Some(runtime_errors),
+                        archive_active,
+                        None,
+                    ),
+                };
                 if recording_plan.archive_required && !archive_active {
                     let has_warm_capture = warm_capture.is_some();
                     if let Some(recorder) = recorder {
@@ -2743,12 +2748,12 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                         log::warn!("[recordings] prune after promoted capture failed: {error:#}");
                     }
                 }
-                    let recording = Box::new(TauriActiveRecording {
-                        recorder,
-                        warm_capture,
-                        cold_capture_hub,
-                        resume_warm_hub,
-                        archive: archive_path
+                let recording = Box::new(TauriActiveRecording {
+                    recorder,
+                    warm_capture,
+                    cold_capture_hub,
+                    resume_warm_hub,
+                    archive: archive_path
                         .map(|path| Arc::new(TauriRecordingArchive::new(path, archive_active))),
                     _mute: mute,
                 }) as Box<dyn ActiveRecording>;
@@ -2773,8 +2778,8 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                         return;
                     };
                     let error = map_recorder_error(runtime_error);
-                    let _ = fault_progress
-                        .publish(openless_core::RecordingEvent::Fatal(error.clone()));
+                    let _ =
+                        fault_progress.publish(openless_core::RecordingEvent::Fatal(error.clone()));
                     let backend = backend.lock().as_ref().and_then(std::sync::Weak::upgrade);
                     if let Some(backend) = backend {
                         if let Err(report_error) =
@@ -3046,9 +3051,7 @@ impl TauriAudioRecorder {
                     staged: Some(TauriStagedCapture::Warm(staged)),
                 }));
             }
-            log::warn!(
-                "[recorder] warm capture unavailable; falling back to press-time staging"
-            );
+            log::warn!("[recorder] warm capture unavailable; falling back to press-time staging");
         }
         if !request.low_latency {
             self.warm_hub.stop();
@@ -3116,9 +3119,7 @@ impl AudioRecorder for TauriAudioRecorder {
         let backend = Arc::clone(&self.backend);
         let warm_hub = Arc::clone(&self.warm_hub);
         Box::pin(async move {
-            warm_hub
-                .begin_cold_capture()
-                .map_err(map_recorder_error)?;
+            warm_hub.begin_cold_capture().map_err(map_recorder_error)?;
             #[cfg(not(mobile))]
             {
                 if let Some(app) = app.lock().clone() {
@@ -3211,12 +3212,12 @@ impl AudioRecorder for TauriAudioRecorder {
                         "速记录音文件无法创建，已阻止开始录音以避免丢失内容",
                     ));
                 }
-                    let recording = Box::new(TauriActiveRecording {
-                        recorder: Some(recorder),
-                        warm_capture: None,
-                        cold_capture_hub: Some(Arc::clone(&warm_hub)),
-                        resume_warm_hub: Some(worker_resume_warm_hub),
-                        archive: archive_path
+                let recording = Box::new(TauriActiveRecording {
+                    recorder: Some(recorder),
+                    warm_capture: None,
+                    cold_capture_hub: Some(Arc::clone(&warm_hub)),
+                    resume_warm_hub: Some(worker_resume_warm_hub),
+                    archive: archive_path
                         .map(|path| Arc::new(TauriRecordingArchive::new(path, archive_active))),
                     _mute: mute,
                 }) as Box<dyn ActiveRecording>;
@@ -3462,11 +3463,15 @@ where
 }
 
 impl CoreTextInserter for TauriTextInserter {
-    fn capture_target(&self) -> Option<Arc<dyn CoreTextInserter>> {
-        Some(Arc::new(Self {
-            insertion_target: Some(crate::selection::capture_selection_insertion_target()),
-            ..self.clone()
-        }))
+    fn capture_target(&self) -> Option<CapturedTextTarget> {
+        let insertion_target = crate::selection::capture_selection_insertion_target();
+        Some(CapturedTextTarget {
+            inserter: Arc::new(Self {
+                insertion_target: Some(insertion_target.clone()),
+                ..self.clone()
+            }),
+            host_context: Arc::new(TauriHostContextAdapter::for_target(insertion_target)),
+        })
     }
 
     fn begin(
@@ -4155,23 +4160,81 @@ fn map_insert_status(status: crate::types::InsertStatus) -> Result<InsertOutcome
     }
 }
 
-struct TauriHostContextAdapter;
+#[derive(Default)]
+struct TauriHostContextAdapter {
+    target: Option<crate::selection::SelectionInsertionTarget>,
+}
+
+impl TauriHostContextAdapter {
+    fn for_target(target: crate::selection::SelectionInsertionTarget) -> Self {
+        Self {
+            target: Some(target),
+        }
+    }
+}
 
 impl openless_core::HostContextAdapter for TauriHostContextAdapter {
     fn capture(
         &self,
         include_cursor: bool,
     ) -> BoxFuture<'static, Result<openless_core::HostContextCapture, BackendError>> {
+        let target = self.target.clone();
+
         Box::pin(async move {
-            let front_app = crate::coordinator::capture_frontmost_app();
+            let front_app = match target.as_ref() {
+                Some(target) => crate::selection::front_app_for_target(target),
+                None => crate::coordinator::capture_frontmost_app(),
+            };
+
             let cursor_context = if include_cursor {
-                crate::host_document::read_around_cursor(crate::host_document::DEFAULT_BUDGET_CHARS)
-                    .await
-                    .map(|window| {
-                        let before = window.text.chars().take(window.cursor).collect::<String>();
-                        let after = window.text.chars().skip(window.cursor).collect::<String>();
-                        openless_core::prompts::cursor_context_input(&before, &after)
-                    })
+                let started = std::time::Instant::now();
+                let window = match target {
+                    Some(target) => {
+                        #[cfg(any(target_os = "windows", target_os = "macos"))]
+                        {
+                            crate::host_document::read_around_cursor_for_target(
+                                crate::host_document::DEFAULT_BUDGET_CHARS,
+                                target,
+                            )
+                            .await
+                        }
+                        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                        {
+                            let _ = target;
+                            crate::host_document::read_around_cursor(
+                                crate::host_document::DEFAULT_BUDGET_CHARS,
+                            )
+                            .await
+                        }
+                    }
+                    None => {
+                        crate::host_document::read_around_cursor(
+                            crate::host_document::DEFAULT_BUDGET_CHARS,
+                        )
+                        .await
+                    }
+                };
+
+                // Metadata only — never the document body (design doc §18/§19). Do not include
+                // the foreground window title here; Windows titles can contain document paths,
+                // URLs, subjects, customer names, or account identifiers.
+                match &window {
+                    Some(window) => log::info!(
+                        "[cursor-context] status=ok chars_before={} chars_after={} elapsed_ms={}",
+                        window.before().chars().count(),
+                        window.after().chars().count(),
+                        started.elapsed().as_millis(),
+                    ),
+                    None => log::info!(
+                        "[cursor-context] status=none elapsed_ms={}",
+                        started.elapsed().as_millis(),
+                    ),
+                }
+                window.map(|window| {
+                    let before = window.text.chars().take(window.cursor).collect::<String>();
+                    let after = window.text.chars().skip(window.cursor).collect::<String>();
+                    openless_core::prompts::cursor_context_input(&before, &after)
+                })
             } else {
                 None
             };
@@ -4222,7 +4285,9 @@ impl HostActions for TauriHostActions {
                 self.qa_context.clear();
                 crate::hide_qa_window(&app);
             }
-            HostAction::ShowLessComputer => crate::show_less_computer_window(&app),
+            HostAction::ShowLessComputer => {
+                crate::show_less_computer_window(&app).map_err(map_tauri_error)?;
+            }
             HostAction::OpenExternalUrl(url) => {
                 use tauri_plugin_shell::ShellExt;
                 app.shell().open(url, None).map_err(map_tauri_error)?;

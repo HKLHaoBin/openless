@@ -2532,6 +2532,9 @@ pub(crate) mod less_computer_test_support {
             )),
             #[cfg(target_os = "windows")]
             selection_voice_capture: Mutex::new(None),
+            voice_edit_host: Arc::new(
+                Mutex::new(voice_edit_session::VoiceEditHostState::default()),
+            ),
             qa_hotkey: Mutex::new(None),
             coding_agent_modifier_hotkey: Mutex::new(None),
             coding_agent_combo_hotkey: Mutex::new(None),

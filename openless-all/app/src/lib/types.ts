@@ -35,7 +35,12 @@ export type PipelineMode = 'traditional' | 'multimodal';
 
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed' | 'notRequested';
 
-export type HistorySource = 'voice' | 'quick_note' | 'selection_polish' | 'selection_voice_edit';
+export type HistorySource =
+  | 'voice'
+  | 'quick_note'
+  | 'selection_polish'
+  | 'selection_voice_edit'
+  | 'voice_edit';
 
 /** Per-day count for the Overview yearly activity heatmap (date = local date YYYY-MM-DD). */
 export interface ActivityDay {
@@ -418,6 +423,8 @@ export interface UserPreferences {
   selectionPolishOutputMode: SelectionPolishOutputMode;
   /** Selection voice edit (issue #987 Windows MVP). Off by default. */
   selectionVoiceEnabled: boolean;
+  /** Standalone Voice Edit Session (issue #900). Off by default. */
+  voiceEditEnabled: boolean;
   /** Selection voice intent routing: auto / manual / keyword heuristic. */
   selectionVoiceIntentMode: SelectionVoiceIntentMode;
   /** Fixed intent in manual mode. */
@@ -510,8 +517,10 @@ export interface UserPreferences {
    *  When on, Cmd+V can re-paste that output, matching the one-shot path. Default true. */
   streamingInsertSaveClipboard: boolean;
   /** Whether to send the text near the cursor in the document the user is writing to LLM polish as context.
-   *  Default false — when on, every dictation reads the foreground app's body text and sends part of it to the LLM provider.
-   *  macOS only; password fields / Secure Input / password managers / terminals are always hard-blocked. */
+   *  Default false — when on, every dictation reads the foreground app's body text and the context
+   *  may be sent to the configured LLM provider. macOS and Windows only; password fields / Secure
+   *  Input (macOS) / UIA password controls (Windows) / known password managers / terminals are
+   *  always hard-blocked. */
   cursorContextEnabled: boolean;
   vocabularyLearningEnabled: boolean;
   vocabularyLearningSettings: {
@@ -802,4 +811,5 @@ export interface PlatformCapabilities {
   supportsLocalQwen3Mlx: boolean;
   supportsInAppDictation: boolean;
   supportsAutoUpdate: boolean;
+  supportsVoiceEdit: boolean;
 }

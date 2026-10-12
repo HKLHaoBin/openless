@@ -1,6 +1,45 @@
 import type { zhCN } from './zh-CN';
 
 export const de: typeof zhCN = {
+  voiceEdit: {
+    title: 'Sprachbearbeitung',
+    description:
+      'Diktieren Sie einen Entwurf oder laden Sie den Zieltext, bearbeiten Sie ihn per Sprache und bestätigen Sie die Übernahme.',
+    targetHint:
+      'Setzen Sie den Cursor in das Zielfeld oder markieren Sie den zu bearbeitenden Text.',
+    androidTargetHint: 'Weisen Sie einer Overlay-Wischgeste die Sprachbearbeitung zu. Nehmen Sie in der Ziel-App auf und wischen Sie zur Vorschau. Nach der Bestätigung wird das ursprüngliche Feld aktualisiert.',
+    startDraft: 'Entwurf diktieren',
+    status: 'Status: {{phase}}',
+    turns: 'Anweisungen: {{count}}',
+    draft: 'Entwurf',
+    preview: 'Aktuelle Vorschau',
+    history: 'Anweisungsverlauf',
+    turn: 'Anweisung {{count}}',
+    polishedInstruction: 'Überarbeitet: {{text}}',
+    turnPreview: 'Vorschau: {{text}}',
+    finishDraft: 'Entwurf abschließen',
+    nextInstruction: 'Nächste Anweisung aufnehmen',
+    finishInstruction: 'Anweisung abschließen',
+    commit: 'Bestätigen und übernehmen',
+    restart: 'Erneut starten',
+    openPanel: 'Panel öffnen',
+    errors: {
+      voiceEditFieldChanged:
+        'Der ursprüngliche Feldinhalt hat sich geändert. Starten Sie die Bearbeitung erneut.',
+      voiceEditTargetUnavailable:
+        'Das Zielfeld oder sein vollständiger Text konnte nicht gelesen werden. Wählen Sie das Ziel erneut.',
+    },
+    phase: {
+      dictating: 'Entwurf wird diktiert',
+      draft_ready: 'Entwurf bereit',
+      editing: 'Anweisung wird aufgenommen',
+      applying: 'Bearbeitungsplan wird angewendet',
+      preview: 'Bestätigung ausstehend',
+      committing: 'Text wird übernommen',
+      completed: 'Übernommen',
+      cancelled: 'Abgebrochen',
+    },
+  },
   cloudSyncE2ee: {
     protocolTitle: 'Cloud-Sync: Vereinbarung und Datenschutz',
     protocolIntro:
@@ -1298,7 +1337,7 @@ export const de: typeof zhCN = {
       desc: 'Gesprächsverlauf und Kontext, die auf diesem Gerät gespeichert werden.',
       cursorContextLabel: 'Cursorkontext (experimentell)',
       cursorContextDesc:
-        'Text rund um den Cursor zur Überarbeitung an das Modell senden (nur macOS). Diese Einstellung ist vom lokalen Lernen getrennt. Passwortfelder und bekannte sensible Apps sind ausgeschlossen.',
+        'Text rund um den Cursor zur Überarbeitung an das Modell senden (macOS / Windows). Diese Einstellung ist vom lokalen Lernen getrennt. Passwortfelder, Terminals und bekannte sensible Apps sind ausgeschlossen.',
     },
     codingConsole: {
       title: 'Claude-Konsole',
@@ -1688,6 +1727,7 @@ export const de: typeof zhCN = {
         stepfun: 'StepFun',
         custom: 'Benutzerdefiniert',
         asrVolcengine: 'Volcengine bigasr',
+        asrGemini: 'Google Gemini Transcribe',
         asrTencentCloud: 'Tencent Cloud Hunyuan Echtzeit-ASR',
         asrBailian: 'Alibaba Bailian Echtzeit-ASR',
         asrBailianQwen3: 'Bailian Qwen3 Realtime ASR',
@@ -1715,6 +1755,12 @@ export const de: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
+      geminiTranscribeNotice:
+        'gemini-3.5-transcribe transkribiert hier wortgetreu; danach verarbeitet das konfigurierte LLM den Text. Für Smart-Transkription wähle dieses Modell im multimodalen Modus. Audio wird nach Aufnahmeende hochgeladen; Live-Transkription wird nicht unterstützt. Basis-URL: https://generativelanguage.googleapis.com/v1beta (auch /v1beta/interactions möglich).',
+      geminiTranscribeOmniNotice:
+        'gemini-3.5-transcribe bietet Smart-Transkription: Füllwörter entfernen, gesprochene Korrekturen übernehmen und den Text nach Aufnahmeende formatieren. Arbeitssprachen und Wörterbucheinträge werden unterstützt. Stil-Prompts, Übersetzung, reine Textüberarbeitung und Fragen werden nicht unterstützt; verwende dafür den traditionellen Modus mit einem LLM.',
+      validateSuccessAudio:
+        'Audio-Verbindung mit einer kurzen Stilleprobe geprüft. Bestätige die Transkriptionsqualität mit einer kurzen Aufnahme.',
       elevenLabsUploadNotice:
         'ElevenLabs lädt die Audioaufnahme zur Stapeltranskription an den eingerichteten Endpunkt hoch.',
       zenmuxVocabularyNote:
@@ -2125,6 +2171,7 @@ export const de: typeof zhCN = {
         right: 'Nach rechts',
       },
       androidOverlayGestureAction: {
+        voice_edit: 'Sprachbearbeitung',
         none: 'Keine Aktion',
         quick_note: 'Schnellnotiz',
         translation: 'Übersetzung',

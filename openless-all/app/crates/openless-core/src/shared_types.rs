@@ -550,6 +550,9 @@ pub struct UserPreferences {
     /// Selection voice editing (issue #987 desktop MVP). Default off.
     #[serde(default)]
     pub selection_voice_enabled: bool,
+    /// Standalone Voice Edit Session (issue #900). Default off.
+    #[serde(default)]
+    pub voice_edit_enabled: bool,
     #[serde(default)]
     pub selection_voice_intent_mode: SelectionVoiceIntentMode,
     #[serde(default)]
@@ -1005,6 +1008,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     selection_voice_enabled: bool,
     #[serde(default)]
+    voice_edit_enabled: bool,
+    #[serde(default)]
     selection_voice_intent_mode: SelectionVoiceIntentMode,
     #[serde(default)]
     selection_voice_manual_intent: SelectionVoiceManualIntent,
@@ -1223,6 +1228,7 @@ impl Default for UserPreferencesWire {
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
             selection_polish_output_mode: prefs.selection_polish_output_mode,
             selection_voice_enabled: prefs.selection_voice_enabled,
+            voice_edit_enabled: prefs.voice_edit_enabled,
             selection_voice_intent_mode: prefs.selection_voice_intent_mode,
             selection_voice_manual_intent: prefs.selection_voice_manual_intent,
             selection_voice_edit_keywords: prefs.selection_voice_edit_keywords,
@@ -1427,6 +1433,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
             selection_polish_output_mode: wire.selection_polish_output_mode,
             selection_voice_enabled: wire.selection_voice_enabled,
+            voice_edit_enabled: wire.voice_edit_enabled,
             selection_voice_intent_mode: wire.selection_voice_intent_mode,
             selection_voice_manual_intent: wire.selection_voice_manual_intent,
             selection_voice_edit_keywords: wire.selection_voice_edit_keywords,
@@ -1796,6 +1803,7 @@ impl Default for UserPreferences {
             selection_polish_style_pack_id: default_active_style_pack_id(),
             selection_polish_output_mode: SelectionPolishOutputMode::default(),
             selection_voice_enabled: false,
+            voice_edit_enabled: false,
             selection_voice_intent_mode: SelectionVoiceIntentMode::default(),
             selection_voice_manual_intent: SelectionVoiceManualIntent::default(),
             selection_voice_edit_keywords: default_selection_voice_edit_keywords(),
@@ -2411,6 +2419,8 @@ pub struct PlatformCapabilities {
     pub supports_local_qwen3_mlx: bool,
     pub supports_in_app_dictation: bool,
     pub supports_auto_update: bool,
+    #[serde(default)]
+    pub supports_voice_edit: bool,
 }
 
 impl PlatformCapabilities {
@@ -2427,6 +2437,7 @@ impl PlatformCapabilities {
                 supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: true,
                 supports_auto_update: true,
+                supports_voice_edit: true,
             }
         }
 
@@ -2445,6 +2456,7 @@ impl PlatformCapabilities {
                 supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: false,
                 supports_auto_update: false,
+                supports_voice_edit: false,
             }
         }
 
@@ -2464,6 +2476,7 @@ impl PlatformCapabilities {
                 supports_local_qwen3_mlx: cfg!(all(target_os = "macos", target_arch = "aarch64")),
                 supports_in_app_dictation: false,
                 supports_auto_update: true,
+                supports_voice_edit: true,
             }
         }
     }
@@ -2481,6 +2494,7 @@ impl Default for PlatformCapabilities {
             supports_local_qwen3_mlx: false,
             supports_in_app_dictation: false,
             supports_auto_update: false,
+            supports_voice_edit: false,
         }
     }
 }

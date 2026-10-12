@@ -2,6 +2,41 @@ import type { zhCN } from './zh-CN';
 
 // Traditional Chinese resources, sharing the same copy keys as the other seven locales.
 export const zhTW: typeof zhCN = {
+  voiceEdit: {
+    title: '語音編輯工作階段',
+    description: '口述草稿或讀取目標文字，再以多輪語音指令修改，確認後寫回輸入欄位。',
+    targetHint: '請先將游標放入目標輸入欄位，或選取需要編輯的文字。',
+    androidTargetHint: '請將一個懸浮窗滑動動作設為「語音編輯」。在目標應用錄音後滑動進入預覽，確認後寫回原輸入欄位。',
+    startDraft: '開始口述草稿',
+    status: '狀態：{{phase}}',
+    turns: '回合：{{count}}',
+    draft: '草稿',
+    preview: '目前預覽',
+    history: '指令記錄',
+    turn: '第 {{count}} 輪',
+    polishedInstruction: '潤飾後：{{text}}',
+    turnPreview: '預覽：{{text}}',
+    finishDraft: '完成草稿',
+    nextInstruction: '錄製下一條語音指令',
+    finishInstruction: '完成語音指令',
+    commit: '確認並寫回',
+    restart: '再來一次',
+    openPanel: '開啟面板',
+    errors: {
+      voiceEditFieldChanged: '原輸入欄位內容已變更，請重新開始編輯。',
+      voiceEditTargetUnavailable: '無法讀取目標輸入欄位或完整文字，請重新選取目標。',
+    },
+    phase: {
+      dictating: '口述草稿',
+      draft_ready: '草稿就緒',
+      editing: '錄製指令',
+      applying: '套用編輯計畫',
+      preview: '等待確認',
+      committing: '寫回輸入欄位',
+      completed: '已寫回',
+      cancelled: '已取消',
+    },
+  },
   cloudSyncE2ee: {
     protocolTitle: '雲端同步協議與隱私提醒',
     protocolIntro:
@@ -1221,7 +1256,7 @@ export const zhTW: typeof zhCN = {
       desc: '本機保留的歷史會話與對話上下文。',
       cursorContextLabel: '遊標上下文（實驗）',
       cursorContextDesc:
-        '潤色時將游標附近文字傳給模型（僅 macOS）。此開關與本機手改學詞獨立；排除密碼欄位和已知敏感應用程式。',
+        '潤色時將游標附近文字傳給模型（macOS / Windows）。此開關與本機手改學詞獨立；排除密碼欄位、終端機及已知敏感應用程式。',
     },
     codingConsole: {
       title: 'Claude 主控臺',
@@ -1585,6 +1620,7 @@ export const zhTW: typeof zhCN = {
         asrXiaomiMimo: '小米 MiMo ASR',
         asrIflytek: '訊飛即時語音轉寫',
         asrTencentCloud: '騰訊雲混元即時 ASR',
+        asrGemini: 'Google Gemini 專用轉寫',
         asrElevenLabs: 'ElevenLabs Scribe',
         asrSherpaOnnxLocal: '本地 sherpa-onnx（實驗性）',
         asrFoundryLocalWhisper: '本地 Whisper（Foundry Local）',
@@ -1597,6 +1633,11 @@ export const zhTW: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: '阿里雲百煉 Omni',
       },
+      geminiTranscribeNotice:
+        'gemini-3.5-transcribe 在此使用逐字轉寫，再交給已設定的 LLM 處理。如需內建智慧轉寫，請在多模態模式中選擇此模型。錄音結束後上傳音訊，暫不支援即時轉寫。接口地址：https://generativelanguage.googleapis.com/v1beta，也相容 /v1beta/interactions。',
+      geminiTranscribeOmniNotice:
+        '使用 gemini-3.5-transcribe 可啟用智慧轉寫：錄音結束後去除口頭語、處理口述修正並整理排版。支援工作語言和詞典詞彙。此模型不使用風格提示詞，也不支援翻譯、純文字潤色或問答；這些任務請使用傳統模式搭配 LLM。',
+      validateSuccessAudio: '已通過短靜音音訊的連線驗證，請再用短錄音確認轉寫效果。',
       elevenLabsUploadNotice: 'ElevenLabs 會將錄音上傳至已設定的端點進行批次轉寫。',
       zenmuxVocabularyNote:
         'ZenMux 走 JSON 轉寫協定，不傳送詞典熱詞（prompt/hotwords）；詞典仍會進入潤色鏈路，但不會參與語音辨識偏置。',
@@ -1955,6 +1996,7 @@ export const zhTW: typeof zhCN = {
         right: '右',
       },
       androidOverlayGestureAction: {
+        voice_edit: '語音編輯',
         none: '無動作',
         quick_note: '速記',
         translation: '翻譯',

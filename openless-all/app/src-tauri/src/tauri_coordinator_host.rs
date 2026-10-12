@@ -1514,9 +1514,28 @@ impl TauriCoordinatorHost {
         )))
     }
 
-    pub(crate) fn show_less_computer(&self) {
+    pub(crate) fn show_less_computer(&self) -> Result<(), String> {
+        let app = self
+            .app()
+            .ok_or_else(|| "Tauri AppHandle is not bound yet".to_string())?;
+        crate::show_less_computer_window(&app)
+    }
+
+    pub(crate) fn set_voice_edit_interactive(&self, interactive: bool) {
         if let Some(app) = self.app() {
-            crate::show_less_computer_window(&app);
+            crate::set_voice_edit_interactive(&app, interactive);
+        }
+    }
+
+    pub(crate) fn show_voice_edit(&self) {
+        if let Some(app) = self.app() {
+            crate::show_voice_edit_window(&app);
+        }
+    }
+
+    pub(crate) fn hide_voice_edit(&self) {
+        if let Some(app) = self.app() {
+            crate::hide_voice_edit_window(&app);
         }
     }
 

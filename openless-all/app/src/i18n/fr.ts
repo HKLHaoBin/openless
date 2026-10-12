@@ -1,6 +1,43 @@
 import type { zhCN } from './zh-CN';
 
 export const fr: typeof zhCN = {
+  voiceEdit: {
+    title: 'Session de modification vocale',
+    description:
+      'Dictez un brouillon ou chargez le texte cible, modifiez-le par instructions vocales, puis confirmez son insertion.',
+    targetHint: 'Placez le curseur dans le champ cible ou sélectionnez le texte à modifier.',
+    androidTargetHint: "Attribuez l’édition vocale à un geste de la superposition. Enregistrez dans l’application cible, puis balayez pour ouvrir l’aperçu. La confirmation met à jour le champ d’origine.",
+    startDraft: 'Dicter un brouillon',
+    status: 'État : {{phase}}',
+    turns: 'Instructions : {{count}}',
+    draft: 'Brouillon',
+    preview: 'Aperçu actuel',
+    history: 'Historique des instructions',
+    turn: 'Instruction {{count}}',
+    polishedInstruction: 'Reformulation : {{text}}',
+    turnPreview: 'Aperçu : {{text}}',
+    finishDraft: 'Terminer le brouillon',
+    nextInstruction: 'Enregistrer la prochaine instruction',
+    finishInstruction: 'Terminer l’instruction',
+    commit: 'Confirmer et insérer',
+    restart: 'Recommencer',
+    openPanel: 'Ouvrir le panneau',
+    errors: {
+      voiceEditFieldChanged: 'Le texte du champ d’origine a changé. Recommencez la modification.',
+      voiceEditTargetUnavailable:
+        'Le champ cible ou son texte complet est inaccessible. Sélectionnez à nouveau la cible.',
+    },
+    phase: {
+      dictating: 'Dictée du brouillon',
+      draft_ready: 'Brouillon prêt',
+      editing: 'Enregistrement de l’instruction',
+      applying: 'Application du plan de modification',
+      preview: 'En attente de confirmation',
+      committing: 'Insertion dans le champ',
+      completed: 'Inséré',
+      cancelled: 'Annulé',
+    },
+  },
   cloudSyncE2ee: {
     protocolTitle: 'Accord de synchronisation et confidentialité',
     protocolIntro:
@@ -1313,7 +1350,7 @@ export const fr: typeof zhCN = {
       desc: 'Historique des conversations et contexte conservés sur cet appareil.',
       cursorContextLabel: 'Contexte du curseur (expérimental)',
       cursorContextDesc:
-        'Envoyer le texte autour du curseur au modèle pour la reformulation (macOS uniquement). Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe et les applications sensibles connues sont exclus.',
+        'Envoyer le texte autour du curseur au modèle pour la reformulation (macOS / Windows). Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe, les terminaux et les applications sensibles connues sont exclus.',
     },
     codingConsole: {
       title: 'Console Claude',
@@ -1704,6 +1741,7 @@ export const fr: typeof zhCN = {
         stepfun: 'StepFun',
         custom: 'Personnalisé',
         asrVolcengine: 'Volcengine bigasr',
+        asrGemini: 'Google Gemini Transcribe',
         asrTencentCloud: 'ASR temps réel Hunyuan de Tencent Cloud',
         asrBailian: 'Alibaba Bailian ASR en temps réel',
         asrBailianQwen3: 'Bailian Qwen3 ASR en temps réel',
@@ -1731,6 +1769,12 @@ export const fr: typeof zhCN = {
         omniGemini: 'Google Gemini',
         omniDashscope: 'Alibaba DashScope Omni',
       },
+      geminiTranscribeNotice:
+        'gemini-3.5-transcribe effectue ici une transcription mot à mot, suivie du LLM configuré. Pour la transcription intelligente, sélectionnez ce modèle en mode multimodal. L’audio est envoyé à la fin de l’enregistrement ; le direct n’est pas pris en charge. URL de base : https://generativelanguage.googleapis.com/v1beta (ou /v1beta/interactions).',
+      geminiTranscribeOmniNotice:
+        'gemini-3.5-transcribe permet la transcription intelligente : suppression des hésitations, application des corrections orales et mise en forme après l’enregistrement. Les langues de travail et le dictionnaire sont pris en charge. Ce modèle n’utilise pas les consignes de style et ne permet pas la traduction, la révision de texte ou les questions-réponses ; utilisez le mode traditionnel avec un LLM pour ces tâches.',
+      validateSuccessAudio:
+        'Connexion audio vérifiée avec un court échantillon de silence. Confirmez la qualité de transcription avec un court enregistrement.',
       elevenLabsUploadNotice:
         'ElevenLabs envoie l’audio enregistré à l’adresse configurée pour une transcription par lots.',
       zenmuxVocabularyNote:
@@ -2139,6 +2183,7 @@ export const fr: typeof zhCN = {
         right: 'Droite',
       },
       androidOverlayGestureAction: {
+        voice_edit: 'Édition vocale',
         none: 'Aucune action',
         quick_note: 'Note rapide',
         translation: 'Traduction',
