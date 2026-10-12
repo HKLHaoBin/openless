@@ -9,9 +9,9 @@ use std::time::Instant;
 use futures_util::future::BoxFuture;
 use openless_core::{
     ActiveRecording, AudioConsumer as CoreAudioConsumer, AudioRecorder, AudioRecorderRouter,
-    BackendError, BackendErrorCode, DictationContext, DictationEngine, EditObservationAdapter,
-    EditObservationSink, ExternalAudioRecorder, HostAction, HostActions, InsertOutcome,
-    InsertWriteResult, RecordingArchive, RecordingProgressSink, SessionId,
+    BackendError, BackendErrorCode, CapturedTextTarget, DictationContext, DictationEngine,
+    EditObservationAdapter, EditObservationSink, ExternalAudioRecorder, HostAction, HostActions,
+    InsertOutcome, InsertWriteResult, RecordingArchive, RecordingProgressSink, SessionId,
     TextInserter as CoreTextInserter, TextInsertionSession, TextPolisher, TextStreamChunk,
     TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
 };
@@ -258,7 +258,7 @@ pub(crate) fn backend_dependencies(
     }
     dependencies.services.platform =
         Arc::new(TauriPlatformApi::new(Arc::clone(&app), hotkey_status));
-    dependencies.services.host_context = Arc::new(TauriHostContextAdapter);
+    dependencies.services.host_context = Arc::new(TauriHostContextAdapter::default());
     dependencies.services.edit_observation = Arc::new(TauriEditObservationAdapter::default());
     dependencies.local_asr_runtime = Some(local_asr_runtime);
     #[cfg(not(mobile))]
@@ -1028,6 +1028,15 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
                 "selectionPolishNoSelection",
             )
         })?;
+        // A head/tail stand-in must never become the source of a paste. The
+        // final validation also compares against the full live selection, but
+        // refusing here avoids sending the omitted middle's absence to the model.
+        if selection.omits_middle {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "selectionPolishSelectionTooLong",
+            ));
+        }
         if !crate::selection::selection_insertion_target_is_captured(&target) {
             return Err(BackendError::new(
                 BackendErrorCode::Platform,
@@ -1054,6 +1063,12 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             return Err(BackendError::new(
                 BackendErrorCode::Platform,
                 "selectionPolishTargetUnavailable",
+            ));
+        }
+        if crate::selection::is_truncated_selection_stand_in(source_text) {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "selectionPolishSelectionTooLong",
             ));
         }
         let validation = crate::selection::validate_selection_insertion_target(target, source_text);
@@ -2954,11 +2969,15 @@ where
 }
 
 impl CoreTextInserter for TauriTextInserter {
-    fn capture_target(&self) -> Option<Arc<dyn CoreTextInserter>> {
-        Some(Arc::new(Self {
-            insertion_target: Some(crate::selection::capture_selection_insertion_target()),
-            ..self.clone()
-        }))
+    fn capture_target(&self) -> Option<CapturedTextTarget> {
+        let insertion_target = crate::selection::capture_selection_insertion_target();
+        Some(CapturedTextTarget {
+            inserter: Arc::new(Self {
+                insertion_target: Some(insertion_target.clone()),
+                ..self.clone()
+            }),
+            host_context: Arc::new(TauriHostContextAdapter::for_target(insertion_target)),
+        })
     }
 
     fn begin(
@@ -2978,24 +2997,6 @@ impl CoreTextInserter for TauriTextInserter {
             // whichever application happens to be focused at the end.
             let insertion_target = insertion_target
                 .unwrap_or_else(crate::selection::capture_selection_insertion_target);
-            #[cfg(target_os = "windows")]
-            let prepared = if context.insertion.windows_insertion_mode
-                == openless_core::shared_types::WindowsInsertionMode::Tsf
-            {
-                let controller = Arc::clone(&windows_ime);
-                Some(
-                    tauri::async_runtime::spawn_blocking(move || controller.prepare_session())
-                        .await
-                        .map_err(|error| {
-                            BackendError::new(
-                                BackendErrorCode::Internal,
-                                format!("join Windows IME prepare task: {error}"),
-                            )
-                        })?,
-                )
-            } else {
-                None
-            };
             #[cfg(target_os = "macos")]
             let (app_handle, mut previous_input_source, streaming_ready) = {
                 let app_handle = app.lock().clone().ok_or_else(|| {
@@ -3058,8 +3059,6 @@ impl CoreTextInserter for TauriTextInserter {
                 finished: Arc::new(AtomicBool::new(false)),
                 #[cfg(target_os = "windows")]
                 windows_ime,
-                #[cfg(target_os = "windows")]
-                prepared: Arc::new(Mutex::new(prepared)),
                 #[cfg(target_os = "macos")]
                 app: app_handle,
                 #[cfg(target_os = "macos")]
@@ -3086,8 +3085,6 @@ struct TauriTextInsertionSession {
     finished: Arc<AtomicBool>,
     #[cfg(target_os = "windows")]
     windows_ime: Arc<crate::windows_ime_session::WindowsImeSessionController>,
-    #[cfg(target_os = "windows")]
-    prepared: Arc<Mutex<Option<crate::windows_ime_session::PreparedWindowsImeSession>>>,
     #[cfg(target_os = "macos")]
     app: AppHandle,
     #[cfg(target_os = "macos")]
@@ -3190,23 +3187,16 @@ impl TauriTextInsertionSession {
         {
             let status = match self.context.insertion.windows_insertion_mode {
                 openless_core::shared_types::WindowsInsertionMode::Tsf => {
-                    let prepared = self.prepared.lock().take().ok_or_else(|| {
-                        BackendError::new(
-                            BackendErrorCode::InvalidState,
-                            "prepared Windows IME session is unavailable",
-                        )
-                    })?;
                     let request = crate::windows_ime_ipc::ImeSubmitRequest {
                         session_id: self.session_id.to_string(),
                         text: text.clone(),
                         created_at: chrono::Utc::now().to_rfc3339(),
                         target: crate::windows_ime_target::capture_ime_submit_target(),
                     };
-                    let status = match self.windows_ime.submit_prepared(&prepared, request).await {
+                    let status = match self.windows_ime.submit(request).await {
                         Ok(status) => status,
                         Err(error) if error.is_outcome_unknown() => {
                             log::warn!("[core-adapter] TSF outcome is unknown: {error}");
-                            self.windows_ime.restore_session(prepared);
                             return Err(BackendError::new(
                                 BackendErrorCode::OutcomeUnknown,
                                 error.to_string(),
@@ -3217,7 +3207,6 @@ impl TauriTextInsertionSession {
                             crate::types::InsertStatus::Failed
                         }
                     };
-                    self.windows_ime.restore_session(prepared);
                     if status == crate::types::InsertStatus::Failed
                         && self.context.insertion.allow_non_tsf_fallback
                     {
@@ -3302,10 +3291,6 @@ impl TauriTextInsertionSession {
     }
 
     async fn restore_platform_state(&self) -> Result<(), BackendError> {
-        #[cfg(target_os = "windows")]
-        if let Some(prepared) = self.prepared.lock().take() {
-            self.windows_ime.restore_session(prepared);
-        }
         #[cfg(target_os = "macos")]
         {
             let previous_input_source = self.previous_input_source.lock().take();
@@ -3681,23 +3666,81 @@ fn map_insert_status(status: crate::types::InsertStatus) -> Result<InsertOutcome
     }
 }
 
-struct TauriHostContextAdapter;
+#[derive(Default)]
+struct TauriHostContextAdapter {
+    target: Option<crate::selection::SelectionInsertionTarget>,
+}
+
+impl TauriHostContextAdapter {
+    fn for_target(target: crate::selection::SelectionInsertionTarget) -> Self {
+        Self {
+            target: Some(target),
+        }
+    }
+}
 
 impl openless_core::HostContextAdapter for TauriHostContextAdapter {
     fn capture(
         &self,
         include_cursor: bool,
     ) -> BoxFuture<'static, Result<openless_core::HostContextCapture, BackendError>> {
+        let target = self.target.clone();
+
         Box::pin(async move {
-            let front_app = crate::coordinator::capture_frontmost_app();
+            let front_app = match target.as_ref() {
+                Some(target) => crate::selection::front_app_for_target(target),
+                None => crate::coordinator::capture_frontmost_app(),
+            };
+
             let cursor_context = if include_cursor {
-                crate::host_document::read_around_cursor(crate::host_document::DEFAULT_BUDGET_CHARS)
-                    .await
-                    .map(|window| {
-                        let before = window.text.chars().take(window.cursor).collect::<String>();
-                        let after = window.text.chars().skip(window.cursor).collect::<String>();
-                        openless_core::prompts::cursor_context_input(&before, &after)
-                    })
+                let started = std::time::Instant::now();
+                let window = match target {
+                    Some(target) => {
+                        #[cfg(any(target_os = "windows", target_os = "macos"))]
+                        {
+                            crate::host_document::read_around_cursor_for_target(
+                                crate::host_document::DEFAULT_BUDGET_CHARS,
+                                target,
+                            )
+                            .await
+                        }
+                        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                        {
+                            let _ = target;
+                            crate::host_document::read_around_cursor(
+                                crate::host_document::DEFAULT_BUDGET_CHARS,
+                            )
+                            .await
+                        }
+                    }
+                    None => {
+                        crate::host_document::read_around_cursor(
+                            crate::host_document::DEFAULT_BUDGET_CHARS,
+                        )
+                        .await
+                    }
+                };
+
+                // Metadata only — never the document body (design doc §18/§19). Do not include
+                // the foreground window title here; Windows titles can contain document paths,
+                // URLs, subjects, customer names, or account identifiers.
+                match &window {
+                    Some(window) => log::info!(
+                        "[cursor-context] status=ok chars_before={} chars_after={} elapsed_ms={}",
+                        window.before().chars().count(),
+                        window.after().chars().count(),
+                        started.elapsed().as_millis(),
+                    ),
+                    None => log::info!(
+                        "[cursor-context] status=none elapsed_ms={}",
+                        started.elapsed().as_millis(),
+                    ),
+                }
+                window.map(|window| {
+                    let before = window.text.chars().take(window.cursor).collect::<String>();
+                    let after = window.text.chars().skip(window.cursor).collect::<String>();
+                    openless_core::prompts::cursor_context_input(&before, &after)
+                })
             } else {
                 None
             };
@@ -3748,7 +3791,9 @@ impl HostActions for TauriHostActions {
                 self.qa_context.clear();
                 crate::hide_qa_window(&app);
             }
-            HostAction::ShowLessComputer => crate::show_less_computer_window(&app),
+            HostAction::ShowLessComputer => {
+                crate::show_less_computer_window(&app).map_err(map_tauri_error)?;
+            }
             HostAction::OpenExternalUrl(url) => {
                 use tauri_plugin_shell::ShellExt;
                 app.shell().open(url, None).map_err(map_tauri_error)?;

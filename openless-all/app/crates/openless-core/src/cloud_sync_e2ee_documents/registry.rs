@@ -208,6 +208,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
+        rust_name: "sync_custom_server_origin",
+        key: "syncCustomServerOrigin",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::OptionalText,
+        reason: "local_consent_or_secret",
+    },
+    PreferenceField {
         rust_name: "restore_clipboard_after_paste",
         key: "restoreClipboardAfterPaste",
         class: PreferenceClass::DeviceProfile,
@@ -329,6 +336,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "selection_voice_enabled",
         key: "selectionVoiceEnabled",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "voice_edit_enabled",
+        key: "voiceEditEnabled",
         class: PreferenceClass::Portable,
         shape: PreferenceShape::Boolean,
         reason: "portable_setting",
@@ -912,6 +926,7 @@ pub const LLM_ACCOUNTS: &[&str] = &[
     "ark.messages_thinking",
     "ark.max_tokens",
     "ark.thinking_budget",
+    "ark.service_tier",
 ];
 pub const OMNI_ACCOUNTS: &[&str] = &[
     "omni.api_key",

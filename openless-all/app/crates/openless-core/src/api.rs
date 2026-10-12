@@ -25,8 +25,8 @@ use crate::events::{
 };
 use crate::ports::{
     ActiveRecording, AudioConsumer, CapturedPcm, EditObservationSink, EngineFailureStage,
-    EngineProgress, EngineProgressSink, EngineStage, HostAction, InsertOutcome, TextInserter,
-    TextInsertionSession, TextStreamChunk, TextStreamSink, TranscriptionSession,
+    EngineProgress, EngineProgressSink, EngineStage, HostAction, HostContextAdapter, InsertOutcome,
+    TextInserter, TextInsertionSession, TextStreamChunk, TextStreamSink, TranscriptionSession,
 };
 use crate::shared_types::{
     CredentialsStatus, PendingCorrection, UserPreferences, LEARNED_VOCAB_NOTE,
@@ -121,6 +121,7 @@ struct DictationReservation {
     session_id: SessionId,
     resources: Arc<crate::voice_session::VoiceResourceHold>,
     inserter: Arc<dyn TextInserter>,
+    host_context: Arc<dyn HostContextAdapter>,
 }
 
 /// Core-owned audio-to-Agent session shared by native hosts.
@@ -4390,13 +4391,34 @@ impl OpenLessBackend {
             Some(id.clone()),
             crate::llm_protocol::REQUEST_FORMAT_ACCOUNT,
         )?;
+        let service_tier_key = CredentialKey::new(
+            crate::CredentialNamespace::Llm,
+            Some(id.clone()),
+            crate::llm_protocol::SERVICE_TIER_ACCOUNT,
+        )?;
         let reset = kind == ChannelKind::Llm && previous.provider_type != provider_type;
-        let old_format = if reset {
-            let value = self.deps.credential_store.read(key.clone()).await?;
+        let (old_format, old_service_tier) = if reset {
+            let old_format = self.deps.credential_store.read(key.clone()).await?;
+            let old_service_tier = self
+                .deps
+                .credential_store
+                .read(service_tier_key.clone())
+                .await?;
             self.deps.credential_store.remove(key.clone()).await?;
-            value
+            if let Err(error) = self
+                .deps
+                .credential_store
+                .remove(service_tier_key.clone())
+                .await
+            {
+                if let Some(value) = old_format.clone() {
+                    self.deps.credential_store.write(key.clone(), value).await?;
+                }
+                return Err(error);
+            }
+            (old_format, old_service_tier)
         } else {
-            None
+            (None, None)
         };
         let result = self
             .deps
@@ -4411,6 +4433,12 @@ impl OpenLessBackend {
         if result.is_err() {
             if let Some(value) = old_format {
                 self.deps.credential_store.write(key, value).await?;
+            }
+            if let Some(value) = old_service_tier {
+                self.deps
+                    .credential_store
+                    .write(service_tier_key, value)
+                    .await?;
             }
         }
         result?;
@@ -5562,12 +5590,22 @@ impl OpenLessBackend {
             crate::voice_session::VoiceSessionKind::Dictation,
         )?;
         let starting_resources = self.voice_sessions.hold_resources(session_id)?;
-        // Freeze the destination before context/credential awaits or feedback
-        // can change foreground focus. No native preparation happens yet.
-        let inserter = insert_text
-            .then(|| self.deps.text_inserter.capture_target())
-            .flatten()
-            .unwrap_or_else(|| Arc::clone(&self.deps.text_inserter));
+        // Freeze the destination and its matching host-context reader before context/credential
+        // awaits or feedback can change foreground focus. No native preparation happens yet.
+        let (inserter, host_context) = if insert_text {
+            match self.deps.text_inserter.capture_target() {
+                Some(captured) => (captured.inserter, captured.host_context),
+                None => (
+                    Arc::clone(&self.deps.text_inserter),
+                    Arc::clone(&self.deps.services.host_context),
+                ),
+            }
+        } else {
+            (
+                Arc::clone(&self.deps.text_inserter),
+                Arc::clone(&self.deps.services.host_context),
+            )
+        };
         self.disarm_edit_observation();
         // Context capture can await AX, a keyring, or another host service.
         // Publish ownership before that first await so Esc/stop see Starting
@@ -5596,6 +5634,7 @@ impl OpenLessBackend {
             session_id,
             resources: starting_resources,
             inserter,
+            host_context,
         })
     }
 
@@ -5617,6 +5656,7 @@ impl OpenLessBackend {
             session_id,
             resources: starting_resources,
             inserter,
+            host_context,
         } = reservation;
         if options.output_target == DictationOutputTarget::CloudNote {
             if let Err(error) = self.set_dictation_cloud_note(session_id, true) {
@@ -5625,7 +5665,11 @@ impl OpenLessBackend {
             }
         }
         let context = match self
-            .capture_dictation_context(&options, DictationContextPurpose::Dictation)
+            .capture_dictation_context_with_host(
+                &options,
+                DictationContextPurpose::Dictation,
+                host_context.as_ref(),
+            )
             .await
         {
             Ok(context) => Arc::new(context),
@@ -6405,6 +6449,7 @@ impl OpenLessBackend {
         engine_result: &crate::ports::EngineResult,
     ) {
         if context.output_target == DictationOutputTarget::Qa
+            || context.output_target == DictationOutputTarget::VoiceEdit
             || context.output_target == DictationOutputTarget::CloudNote
             || self.is_cloud_note(result.session_id)
         {
@@ -6811,6 +6856,20 @@ impl OpenLessBackend {
         options: &DictationStartOptions,
         purpose: DictationContextPurpose,
     ) -> Result<DictationContext, BackendError> {
+        self.capture_dictation_context_with_host(
+            options,
+            purpose,
+            self.deps.services.host_context.as_ref(),
+        )
+        .await
+    }
+
+    async fn capture_dictation_context_with_host(
+        &self,
+        options: &DictationStartOptions,
+        purpose: DictationContextPurpose,
+        host_context: &dyn HostContextAdapter,
+    ) -> Result<DictationContext, BackendError> {
         let preferences = self.get_preferences();
         let mut captured_options = options.clone();
         if !preferences.cursor_context_enabled {
@@ -6822,10 +6881,7 @@ impl OpenLessBackend {
         if captured_options.front_app.is_none()
             || (preferences.cursor_context_enabled && captured_options.cursor_context.is_none())
         {
-            match self
-                .deps
-                .services
-                .host_context
+            match host_context
                 .capture(preferences.cursor_context_enabled)
                 .await
             {
@@ -8431,6 +8487,8 @@ mod tests {
             )
             .await
             .unwrap();
+        // Valid quiet PCM reaches ASR; an empty transcript is distinct from a missing microphone input.
+        silent.feed_pcm(&[1, 0]).unwrap();
         assert_eq!(
             silent.finish().await.unwrap(),
             LessComputerVoiceFinish::Dictated {
@@ -8481,6 +8539,40 @@ mod tests {
         ));
         assert!(runtime.request.lock().unwrap().is_none());
         assert_eq!(backend.less_computer_active_session(), None);
+    }
+
+    #[tokio::test]
+    async fn less_computer_missing_audio_fails_without_chat_errors_and_releases_capture() {
+        use crate::events::{LessComputerEventKind, LessComputerVoiceOutcome};
+        let (_data_dir, backend, _transcription, _runtime) =
+            dictation_backend("less-computer-dictation-missing-audio", "must not commit");
+        let mut events = backend.subscribe();
+        for pcm in [Vec::new(), vec![0; 640]] {
+            let capture = backend
+                .start_less_computer_voice_with(
+                    SessionId::new(),
+                    Arc::new(FakeRecordingControl::default()),
+                    DICTATE,
+                )
+                .await
+                .unwrap();
+            if !pcm.is_empty() {
+                capture.feed_pcm(&pcm).unwrap();
+            }
+            let error = capture.finish().await.unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+            assert!(!error.retryable);
+            let kinds = less_computer_event_kinds(&mut events);
+            assert!(!kinds
+                .iter()
+                .any(|kind| matches!(kind, LessComputerEventKind::Error { .. })));
+            assert!(
+                matches!(last_voice_state(&kinds), LessComputerEventKind::VoiceState {
+                outcome: Some(LessComputerVoiceOutcome::Failed), transcript, ..
+            } if transcript.is_empty())
+            );
+            assert_eq!(backend.less_computer_active_session(), None);
+        }
     }
 
     #[tokio::test]
@@ -10298,7 +10390,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn llm_protocol_mutations_reset_only_the_format_and_invalidate_tests() {
+    async fn llm_protocol_mutations_reset_protocol_overrides_and_invalidate_tests() {
         use crate::credentials::{CredentialNamespace, InMemoryCredentialStore, SecretValue};
         use crate::llm_protocol::*;
         let backend = OpenLessBackend::new(
@@ -10333,6 +10425,19 @@ mod tests {
             .set_credential(key(REQUEST_FORMAT_ACCOUNT), SecretValue::new("messages"))
             .await
             .unwrap();
+        backend
+            .set_credential(key(SERVICE_TIER_ACCOUNT), SecretValue::new("fast"))
+            .await
+            .unwrap();
+        assert_eq!(
+            backend
+                .read_credential(key(SERVICE_TIER_ACCOUNT))
+                .await
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            "fast"
+        );
         backend
             .set_credential(
                 key(crate::credentials::LLM_API_KEY_ACCOUNT),
@@ -10376,6 +10481,11 @@ mod tests {
             .unwrap();
         assert!(backend
             .read_credential(key(REQUEST_FORMAT_ACCOUNT))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(backend
+            .read_credential(key(SERVICE_TIER_ACCOUNT))
             .await
             .unwrap()
             .is_none());
@@ -11009,6 +11119,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn voice_edit_handoff_keeps_polish_without_inserting_or_recording_intermediate_history() {
+        let data_dir = TestDataDir::new("voice-edit-dictation-handoff");
+        let engine =
+            crate::testing::FixtureDictationEngine::successful("raw draft", "polished draft");
+        let backend =
+            backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine.clone()));
+        let mut preferences = backend.get_preferences();
+        preferences.streaming_insert = true;
+        backend.set_preferences(preferences).unwrap();
+        backend.start().await.unwrap();
+        let session = backend
+            .start_dictation_with_options(DictationStartOptions {
+                output_target: DictationOutputTarget::Undecided,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let result = backend
+            .stop_dictation_session_with_options(
+                Some(session),
+                DictationStopOptions::default(),
+                Some(DictationOutputTarget::VoiceEdit),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.raw_text, "raw draft");
+        assert_eq!(result.polished_text, "polished draft");
+        assert_eq!(result.inserted, crate::types::InsertStatus::NotRequested);
+        assert!(backend.list_history().unwrap().is_empty());
+        let contexts = engine.contexts();
+        let context = contexts.last().unwrap();
+        assert_eq!(context.output_target, DictationOutputTarget::VoiceEdit);
+        assert!(!context.insertion.enabled);
+        assert!(!context.insertion.streaming);
+        assert!(context.uses_llm_polisher());
+        // Later instructions use the same output contract without another foreground handoff.
+        let instruction = backend
+            .start_dictation_with_options(DictationStartOptions {
+                insert_text: false,
+                output_target: DictationOutputTarget::VoiceEdit,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            backend
+                .stop_dictation_session(instruction)
+                .await
+                .unwrap()
+                .inserted,
+            crate::types::InsertStatus::NotRequested
+        );
+        let contexts = engine.contexts();
+        assert!(!contexts.last().unwrap().insertion.streaming);
+        assert!(backend.list_history().unwrap().is_empty());
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn stop_time_translation_updates_only_the_frozen_polish_choice() {
         use crate::testing::FixtureEngineAction;
 
@@ -11558,6 +11727,114 @@ mod tests {
             assert!(!private_wav.exists());
             assert!(retained.exists());
             backend.shutdown().await.unwrap();
+            std::fs::remove_dir_all(data_dir).unwrap();
+        }
+    }
+
+    /// Android IME contract: the caret snapshot taken at start informs polish for
+    /// ordinary dictation, quick notes and cloud notes alike, yet the result carries
+    /// only the polished text and nothing on disk ever holds the snapshot.
+    #[tokio::test]
+    async fn cursor_context_informs_polish_for_every_target_but_is_never_persisted() {
+        struct ContextRecordingPolisher(Arc<Mutex<Vec<Option<String>>>>);
+        impl crate::ports::TextPolisher for ContextRecordingPolisher {
+            fn polish(
+                &self,
+                _session_id: SessionId,
+                context: Arc<DictationContext>,
+                _raw_text: String,
+                _partials: Arc<dyn crate::ports::TextStreamSink>,
+            ) -> BoxFuture<'static, Result<crate::ports::PolishOutput, BackendError>> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(context.polish.cursor_context.clone());
+                Box::pin(async { Ok(crate::ports::PolishOutput::text("polished words")) })
+            }
+
+            fn cancel(&self, _session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        fn files_containing(dir: &std::path::Path, needle: &str, found: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    files_containing(&path, needle, found);
+                } else if std::fs::read(&path)
+                    .map(|bytes| bytes.windows(needle.len()).any(|w| w == needle.as_bytes()))
+                    .unwrap_or(false)
+                {
+                    found.push(path);
+                }
+            }
+        }
+
+        const HOST_TEXT: &str = "host-document-text-7c1e";
+        for target in ["dictation", "quick_note", "cloud_note"] {
+            let data_dir = std::env::temp_dir()
+                .join(format!("openless-cursor-context-{}", uuid::Uuid::new_v4()));
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let engine = crate::PipelineDictationEngine::new(
+                Arc::new(crate::ExternalAudioRecorder::with_recordings_directory(
+                    data_dir.join("recordings"),
+                )),
+                Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
+                    "spoken words",
+                    1000,
+                )),
+                Arc::new(ContextRecordingPolisher(seen.clone())),
+            );
+            let backend = backend_with_dictation_engine(data_dir.clone(), Arc::new(engine));
+            backend.start().await.unwrap();
+            let mut prefs = backend.get_preferences();
+            prefs.cursor_context_enabled = true;
+            prefs.record_audio_for_debug = true;
+            backend.set_preferences(prefs).unwrap();
+            let id = backend
+                .start_external_dictation_with_options(DictationStartOptions {
+                    insert_text: false,
+                    front_app: Some("com.example.notes".into()),
+                    cursor_context: Some(crate::prompts::cursor_context_input(HOST_TEXT, "")),
+                    ..DictationStartOptions::default()
+                })
+                .await
+                .unwrap();
+            backend.feed_external_pcm(id, &vec![1; 32000]).unwrap();
+            if target == "cloud_note" {
+                backend.set_dictation_cloud_note(id, true).unwrap();
+            }
+            let result = backend
+                .stop_dictation_session_with_options(
+                    Some(id),
+                    DictationStopOptions {
+                        quick_note: (target != "cloud_note").then_some(target == "quick_note"),
+                        ..DictationStopOptions::default()
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.polished_text, "polished words", "{target}");
+            let seen = seen.lock().unwrap().clone();
+            assert_eq!(seen.len(), 1, "{target}");
+            assert!(
+                seen[0].as_deref().is_some_and(|context| context.contains(HOST_TEXT)),
+                "{target}: polish must still see the cursor context"
+            );
+            assert_eq!(
+                backend.list_history().unwrap().is_empty(),
+                target == "cloud_note",
+                "{target}"
+            );
+            backend.shutdown().await.unwrap();
+            let mut leaked = Vec::new();
+            files_containing(&data_dir, HOST_TEXT, &mut leaked);
+            assert!(leaked.is_empty(), "{target}: cursor context persisted in {leaked:?}");
+            // The scan is meaningful: what does get stored is readable the same way.
+            let mut stored = Vec::new();
+            files_containing(&data_dir, "polished words", &mut stored);
+            assert_eq!(stored.is_empty(), target == "cloud_note", "{target}");
             std::fs::remove_dir_all(data_dir).unwrap();
         }
     }
@@ -12222,7 +12499,10 @@ mod tests {
     async fn raw_style_runs_through_the_real_pipeline_without_a_polishing_stage() {
         let data_dir = TestDataDir::new("raw-real-pipeline");
         let polisher = crate::testing::FixtureTextPolisher::successful("must not run");
-        let recorder = Arc::new(crate::testing::FixtureAudioRecorder::default());
+        let recorder = Arc::new(crate::testing::FixtureAudioRecorder::new(
+            vec![vec![1, 0]],
+            Vec::new(),
+        ));
         let engine = Arc::new(crate::PipelineDictationEngine::new(
             recorder.clone(),
             Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
@@ -12280,7 +12560,10 @@ mod tests {
         let backend = backend_with_dictation_engine(
             data_dir.path().to_path_buf(),
             Arc::new(crate::PipelineDictationEngine::new(
-                Arc::new(crate::testing::FixtureAudioRecorder::default()),
+                Arc::new(crate::testing::FixtureAudioRecorder::new(
+                    vec![vec![1, 0]],
+                    Vec::new(),
+                )),
                 Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
                     "raw words",
                     80,
