@@ -159,6 +159,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
+        rust_name: "low_latency_dictation_enabled",
+        key: "lowLatencyDictationEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_only_microphone_capture",
+    },
+    PreferenceField {
         rust_name: "active_asr_provider",
         key: "activeAsrProvider",
         class: PreferenceClass::Excluded,
@@ -206,6 +213,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         class: PreferenceClass::DeviceProfile,
         shape: PreferenceShape::Boolean,
         reason: "device_bound",
+    },
+    PreferenceField {
+        rust_name: "sync_custom_server_origin",
+        key: "syncCustomServerOrigin",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::OptionalText,
+        reason: "local_consent_or_secret",
     },
     PreferenceField {
         rust_name: "restore_clipboard_after_paste",

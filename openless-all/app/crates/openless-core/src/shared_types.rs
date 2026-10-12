@@ -408,6 +408,10 @@ pub struct UserPreferences {
     /// Reconnect the current ASR after recording ends and submit the whole PCM. Default off.
     #[serde(default)]
     pub stable_transcription_enabled: bool,
+    /// Keep a native microphone stream warm and retain a bounded in-memory pre-roll.
+    /// This is opt-in because the OS microphone indicator remains active while enabled.
+    #[serde(default)]
+    pub low_latency_dictation_enabled: bool,
     /// Play an instantly synthesized cue when the recording hotkey enters the
     /// recording state ("recording started"). Default on; can be disabled in
     /// the "Recording & Input" settings. The cue is synthesized by the capsule
@@ -849,6 +853,12 @@ pub struct UserPreferences {
     /// saves can't wipe it.
     #[serde(default)]
     pub splash_seen_version: String,
+    /// Self-hosted encrypted-sync server origin (e.g. "https://sync.example.com/"),
+    /// overriding `DEFAULT_SYNC_SERVICE_ORIGIN`. `None` means use the default.
+    /// Validated against the same rules as the protocol's own `parse_origin`
+    /// (https-only, no userinfo/query/fragment, root path) before being saved.
+    #[serde(default)]
+    pub sync_custom_server_origin: Option<String>,
 }
 
 impl UserPreferences {
@@ -941,6 +951,8 @@ struct UserPreferencesWire {
     mute_during_recording: bool,
     #[serde(default)]
     stable_transcription_enabled: bool,
+    #[serde(default)]
+    low_latency_dictation_enabled: bool,
     #[serde(default = "default_true")]
     audio_cue_on_record: bool,
     #[serde(default)]
@@ -1130,6 +1142,8 @@ struct UserPreferencesWire {
     android_overlay_size_dp: u32,
     #[serde(default)]
     splash_seen_version: String,
+    #[serde(default)]
+    sync_custom_server_origin: Option<String>,
 }
 
 fn deserialize_selection_polish_hotkey<'de, D>(
@@ -1192,6 +1206,7 @@ impl Default for UserPreferencesWire {
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
             stable_transcription_enabled: prefs.stable_transcription_enabled,
+            low_latency_dictation_enabled: prefs.low_latency_dictation_enabled,
             audio_cue_on_record: prefs.audio_cue_on_record,
             silence_auto_stop_enabled: prefs.silence_auto_stop_enabled,
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
@@ -1291,6 +1306,7 @@ impl Default for UserPreferencesWire {
             android_overlay_gesture_actions: None,
             android_overlay_size_dp: prefs.android_overlay_size_dp,
             splash_seen_version: prefs.splash_seen_version,
+            sync_custom_server_origin: prefs.sync_custom_server_origin,
         }
     }
 }
@@ -1390,6 +1406,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
             stable_transcription_enabled: wire.stable_transcription_enabled,
+            low_latency_dictation_enabled: wire.low_latency_dictation_enabled,
             audio_cue_on_record: wire.audio_cue_on_record,
             silence_auto_stop_enabled: wire.silence_auto_stop_enabled,
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
@@ -1506,6 +1523,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
                 wire.android_overlay_size_dp,
             ),
             splash_seen_version: wire.splash_seen_version,
+            sync_custom_server_origin: wire.sync_custom_server_origin,
         })
     }
 }
@@ -1765,6 +1783,7 @@ impl Default for UserPreferences {
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
             stable_transcription_enabled: false,
+            low_latency_dictation_enabled: false,
             audio_cue_on_record: true,
             silence_auto_stop_enabled: false,
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
@@ -1862,6 +1881,7 @@ impl Default for UserPreferences {
             android_overlay_gesture_actions: default_android_overlay_gesture_actions(),
             android_overlay_size_dp: default_android_overlay_size_dp(),
             splash_seen_version: String::new(),
+            sync_custom_server_origin: None,
         }
     }
 }
