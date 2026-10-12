@@ -119,6 +119,7 @@ function context(native = true, embedded = false) {
       mode: [],
       preview: [],
       polishPreview: 0,
+      polishConfirm: [],
       confirm: [],
       revert: [],
       dismiss: 0,
@@ -174,7 +175,10 @@ function context(native = true, embedded = false) {
       calls.dismiss++;
       return pending.dismiss?.promise;
     },
-    confirmSelectionPolishPreview: async () => {},
+    confirmSelectionPolishPreview: async (text) => {
+      calls.polishConfirm.push(text);
+      return pending.polishConfirm?.promise;
+    },
     cancelSelectionPolishPreview: async () => {},
     getSelectionVoicePreview: async (session) => {
       calls.preview.push(session);
@@ -264,6 +268,53 @@ await test('polish preview expands native window after payload arrives', async (
         n.props.children.includes('selectionPolishPreview.confirmReplace'),
     ),
   );
+  c.hooks.unmount();
+});
+await test('polish confirmation submits edited text and retains it after a failed insert', async () => {
+  const c = context();
+  c.pending.polishPreview = () => ({ text: 'model result', sourceText: 'source text' });
+  c.render();
+  await tick();
+  const editor = () =>
+    find(c.render(), (n) => n.type === 'textarea' && n.props.className === 'qa-polish-text').props;
+  const confirm = () =>
+    find(
+      c.render(),
+      (n) =>
+        n.type === 'button' &&
+        Array.isArray(n.props.children) &&
+        n.props.children.includes('selectionPolishPreview.confirmReplace'),
+    ).props;
+  assert.equal(editor().value, 'model result');
+  assert.equal(editor().readOnly, false);
+  editor().onChange({ currentTarget: { value: ' \n ' } });
+  assert.equal(confirm().disabled, true);
+  confirm().onClick();
+  assert.deepEqual(c.calls.polishConfirm, []);
+  const edited = '  用户修改后的文字\n第二行🙂  ';
+  editor().onChange({ currentTarget: { value: edited } });
+  assert.equal(editor().value, edited);
+  assert.equal(confirm().disabled, false);
+  const first = deferred();
+  c.pending.polishConfirm = first;
+  confirm().onClick();
+  assert.deepEqual(c.calls.polishConfirm, [edited]);
+  assert.equal(editor().readOnly, true);
+  assert.equal(confirm().disabled, true);
+  first.reject(new Error('insert failed'));
+  await tick();
+  assert.equal(editor().value, edited);
+  assert.equal(editor().readOnly, false);
+  assert.equal(c.calls.dismiss, 0);
+  c.pending.polishConfirm = undefined;
+  confirm().onClick();
+  await tick();
+  assert.deepEqual(c.calls.polishConfirm, [edited, edited]);
+  assert.equal(
+    nodes(c.render()).some((n) => n.props.className === 'qa-polish-text'),
+    false,
+  );
+  assert.equal(c.calls.dismiss, 1);
   c.hooks.unmount();
 });
 await test('native text waits for expansion and excludes repeated clicks; keeps a newer draft', async () => {

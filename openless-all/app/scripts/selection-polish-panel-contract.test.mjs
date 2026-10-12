@@ -1,5 +1,5 @@
 // 「划词润色结果」不再有独立窗口：它复用选区助手（qa）面板显示第二套 UI
-// （只读结果 + 「确认并替换」）。本契约锁住这次合并，防止有人把独立窗口加回来
+// （可编辑结果 + 「确认并替换」）。本契约锁住这次合并，防止有人把独立窗口加回来
 // 或把 /qa 面板拆回去。
 //
 // 为什么需要它：
@@ -81,7 +81,7 @@ if (!/fn cancel_selection_polish_preview[\s\S]{0,200}?clear_selection_polish_pre
   violations.push('cancel_selection_polish_preview no longer clears the pending flag');
 }
 
-// 5. 面板侧：认事件、只读渲染、提供「确认并替换」。
+// 5. 面板侧：认事件、编辑结果、提供「确认并替换」。
 for (const eventName of ['selection-polish-preview:shown', 'selection-polish-preview:hide']) {
   if (!qaPanel.includes(`'${eventName}'`)) {
     violations.push(`QaPanel.tsx does not listen for ${eventName}`);
@@ -90,8 +90,10 @@ for (const eventName of ['selection-polish-preview:shown', 'selection-polish-pre
 if (!qaPanel.includes('selectionPolishPreview.confirmReplace')) {
   violations.push('QaPanel.tsx dropped the 「确认并替换」 button of the polish-result mode');
 }
-if (!qaPanel.includes('aria-readonly="true"')) {
-  violations.push('QaPanel.tsx polish-result box is no longer read-only');
+if (
+  !/<textarea[\s\S]*?className="qa-polish-text"[\s\S]*?value=\{polishResult.text\}/.test(qaPanel)
+) {
+  violations.push('QaPanel.tsx polish-result box is no longer an editable controlled textarea');
 }
 const expandedStart = qaPanel.indexOf('const expanded');
 if (
