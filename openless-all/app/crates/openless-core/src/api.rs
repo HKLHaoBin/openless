@@ -11475,8 +11475,7 @@ mod tests {
         let contexts = engine.contexts();
         assert_eq!(contexts.len(), 2);
         assert!(!contexts[0].polish.translation_active);
-        let mut expected = (*contexts[0]).clone();
-        expected.polish.translation_active = true;
+        let expected = contexts[0].with_translation_requested(true);
         assert_eq!(*contexts[1], expected);
         assert_eq!(
             contexts[1].recording.microphone_device_name.as_deref(),
