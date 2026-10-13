@@ -17,7 +17,14 @@ HRESULT ReadOpenLessRangeText(TfEditCookie edit_cookie, ITfRange *range, std::ws
 
   LONG range_start = 0;
   LONG range_length = 0;
-  HRESULT hr = range->GetExtent(&range_start, &range_length);
+  ITfRangeACP *range_acp = nullptr;
+  HRESULT hr = range->QueryInterface(IID_ITfRangeACP,
+                                     reinterpret_cast<void **>(&range_acp));
+  if (FAILED(hr)) {
+    return hr;
+  }
+  hr = range_acp->GetExtent(&range_start, &range_length);
+  range_acp->Release();
   if (FAILED(hr)) {
     return hr;
   }
@@ -232,25 +239,12 @@ HRESULT OpenLessEditSession::UpdateComposition(TfEditCookie edit_cookie) {
       return hr;
     }
 
-    LONG range_start = 0;
-    LONG range_length = 0;
-    hr = selection_range->GetExtent(&range_start, &range_length);
-    if (FAILED(hr) || range_length < 0 || range_length > 16 * 1024 * 1024) {
+    std::wstring original_text;
+    hr = ReadOpenLessRangeText(edit_cookie, selection_range, &original_text);
+    if (FAILED(hr)) {
       selection_range->Release();
       context_composition->Release();
-      return FAILED(hr) ? hr : E_INVALIDARG;
-    }
-    std::wstring original_text(static_cast<size_t>(range_length), L'\0');
-    if (range_length > 0) {
-      ULONG copied = 0;
-      hr = selection_range->GetText(edit_cookie, 0, original_text.data(),
-                                    static_cast<ULONG>(range_length), &copied);
-      if (FAILED(hr)) {
-        selection_range->Release();
-        context_composition->Release();
-        return hr;
-      }
-      original_text.resize(copied);
+      return hr;
     }
     composition_->original_text = std::move(original_text);
     composition_->original_text_captured = false;
