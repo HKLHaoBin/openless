@@ -4087,11 +4087,15 @@ impl TauriTextInsertionSession {
                 // A composition update that was rejected before dispatch leaves no native range,
                 // but retrying a plain TSF commit could select an unrelated same-process thread.
                 // Reactivate the captured target and use the configured Windows fallback instead.
-                if let Err(error) = self.restore_insertion_target() {
-                    if self.context.insertion.allow_non_tsf_fallback {
-                        return self.copy_fallback(text).await;
+                match self.restore_insertion_target() {
+                    Ok(()) => {}
+                    Err(error) => {
+                        #[cfg(target_os = "windows")]
+                        if self.context.insertion.allow_non_tsf_fallback {
+                            return self.copy_fallback(text).await;
+                        }
+                        return Err(error);
                     }
-                    return Err(error);
                 }
                 if self.context.insertion.allow_non_tsf_fallback {
                     return map_insert_status(windows_unicode_fallback(&self.context, &text));
