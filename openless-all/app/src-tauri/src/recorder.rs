@@ -342,7 +342,10 @@ impl WarmCaptureSink {
     ) {
         let even_len = pcm.len() & !1;
         let incoming = &pcm[..even_len];
-        let excess = buffer.len().saturating_add(incoming.len()).saturating_sub(max_bytes);
+        let excess = buffer
+            .len()
+            .saturating_add(incoming.len())
+            .saturating_sub(max_bytes);
         let evictable = excess.min(*pre_roll_bytes);
         for _ in 0..(evictable / 2) {
             let _ = buffer.pop_front();
@@ -389,10 +392,7 @@ impl WarmCaptureSink {
                     "warm provisional capture was not armed".into(),
                 ));
             };
-            let WarmCaptureClaim::Staging {
-                pcm, max_level, ..
-            } = claim
-            else {
+            let WarmCaptureClaim::Staging { pcm, max_level, .. } = claim else {
                 return Err(RecorderError::EngineFailed(
                     "warm provisional capture was already promoted".into(),
                 ));
@@ -501,10 +501,7 @@ impl AudioConsumer for WarmCaptureSink {
         let mut targets = Vec::new();
         {
             let mut state = self.state.lock();
-            let WarmCaptureSinkState::Ring {
-                pcm: ring,
-                claims,
-            } = &mut *state;
+            let WarmCaptureSinkState::Ring { pcm: ring, claims } = &mut *state;
             Self::append_bounded(ring, pcm, self.max_bytes);
             for claim in claims.values_mut() {
                 match claim {
@@ -580,13 +577,15 @@ impl WarmStagedRecorder {
         audio_archive_path: Option<PathBuf>,
     ) -> Result<(WarmActiveCapture, Receiver<RecorderError>, bool), RecorderError> {
         let archive_path = audio_archive_path;
-        let archive_writer = archive_path.as_ref().and_then(|path| match WavArchiveWriter::create(path) {
-            Ok(writer) => Some(Arc::new(writer)),
-            Err(error) => {
-                log::warn!("[recorder] wav archive create failed at {path:?}: {error}");
-                None
-            }
-        });
+        let archive_writer = archive_path
+            .as_ref()
+            .and_then(|path| match WavArchiveWriter::create(path) {
+                Ok(writer) => Some(Arc::new(writer)),
+                Err(error) => {
+                    log::warn!("[recorder] wav archive create failed at {path:?}: {error}");
+                    None
+                }
+            });
         let archive_active = archive_writer.is_some();
         let result = self.hub.promote(
             self.press_id,
@@ -692,9 +691,7 @@ impl WarmCaptureHub {
         }
         if (device_changed || !enabled) && self.sink.has_promoted_claims() {
             let staging_claims = self.sink.staging_claim_ids();
-            self.runtime_fallback_claims
-                .lock()
-                .extend(staging_claims);
+            self.runtime_fallback_claims.lock().extend(staging_claims);
             *self.pending_configuration.lock() = Some((enabled, device_name));
             self.sink.invalidate_staging();
             return;
@@ -706,9 +703,7 @@ impl WarmCaptureHub {
             let staging_claims = self.sink.staging_claim_ids();
             let recorder = self.recorder.lock().take();
             let archives = self.sink.clear();
-            self.runtime_fallback_claims
-                .lock()
-                .extend(staging_claims);
+            self.runtime_fallback_claims.lock().extend(staging_claims);
             self.notify_runtime_error(RecorderError::EngineFailed(
                 "warm capture configuration changed".into(),
             ));
@@ -728,9 +723,7 @@ impl WarmCaptureHub {
             let staging_claims = self.sink.staging_claim_ids();
             let recorder = self.recorder.lock().take();
             let archives = self.sink.clear();
-            self.runtime_fallback_claims
-                .lock()
-                .extend(staging_claims);
+            self.runtime_fallback_claims.lock().extend(staging_claims);
             self.notify_runtime_error(RecorderError::EngineFailed(
                 "warm capture configuration changed".into(),
             ));
@@ -800,9 +793,7 @@ impl WarmCaptureHub {
         self.stream_generation.fetch_add(1, Ordering::AcqRel);
         let recorder = self.recorder.lock().take();
         let staging_claims = self.sink.staging_claim_ids();
-        self.runtime_fallback_claims
-            .lock()
-            .extend(staging_claims);
+        self.runtime_fallback_claims.lock().extend(staging_claims);
         let archives = self.sink.clear();
         self.notify_runtime_error(error);
         for archive in archives {
@@ -841,7 +832,9 @@ impl WarmCaptureHub {
             return Err(error);
         }
         self.runtime_fallback_claims.lock().remove(&press_id);
-        self.runtime_errors.lock().insert(press_id, runtime_error_tx);
+        self.runtime_errors
+            .lock()
+            .insert(press_id, runtime_error_tx);
         Ok(runtime_error_rx)
     }
 
@@ -942,8 +935,7 @@ impl WarmCaptureHub {
     pub(crate) fn end_preview(&self) {
         let _lifecycle = self.lifecycle_gate.lock();
         self.preview_active.store(false, Ordering::Release);
-        if !self.enabled.load(Ordering::Acquire)
-            || self.cold_capture_active.load(Ordering::Acquire)
+        if !self.enabled.load(Ordering::Acquire) || self.cold_capture_active.load(Ordering::Acquire)
         {
             return;
         }
@@ -961,9 +953,7 @@ impl WarmCaptureHub {
         let recorder = self.recorder.lock().take();
         let archives = self.sink.clear();
         self.runtime_fallback_claims.lock().clear();
-        self.notify_runtime_error(RecorderError::EngineFailed(
-            "warm capture stopped".into(),
-        ));
+        self.notify_runtime_error(RecorderError::EngineFailed("warm capture stopped".into()));
         *self.device_name.lock() = None;
         for archive in archives {
             archive.finish();
@@ -1166,12 +1156,8 @@ impl Recorder {
         let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
             sink_for_level.publish_level(level);
         });
-        let (recorder, runtime_errors, _) = Self::start(
-            microphone_device_name,
-            consumer,
-            level_handler,
-            None,
-        )?;
+        let (recorder, runtime_errors, _) =
+            Self::start(microphone_device_name, consumer, level_handler, None)?;
         Ok(StagedRecorder {
             recorder: Some(recorder),
             runtime_errors: Some(runtime_errors),
@@ -1188,13 +1174,15 @@ impl StagedRecorder {
         audio_archive_path: Option<PathBuf>,
     ) -> Result<(Recorder, Receiver<RecorderError>, bool), RecorderError> {
         let archive_path = audio_archive_path;
-        let archive_writer = archive_path.as_ref().and_then(|path| match WavArchiveWriter::create(path) {
-            Ok(writer) => Some(Arc::new(writer)),
-            Err(error) => {
-                log::warn!("[recorder] wav archive create failed at {path:?}: {error}");
-                None
-            }
-        });
+        let archive_writer = archive_path
+            .as_ref()
+            .and_then(|path| match WavArchiveWriter::create(path) {
+                Ok(writer) => Some(Arc::new(writer)),
+                Err(error) => {
+                    log::warn!("[recorder] wav archive create failed at {path:?}: {error}");
+                    None
+                }
+            });
         let archive_active = archive_writer.is_some();
         if let Err(error) = self
             .sink
@@ -1216,7 +1204,9 @@ impl StagedRecorder {
         })?;
         recorder.archive_writer = archive_writer;
         let runtime_errors = self.runtime_errors.take().ok_or_else(|| {
-            RecorderError::EngineFailed("provisional recorder runtime channel was unavailable".into())
+            RecorderError::EngineFailed(
+                "provisional recorder runtime channel was unavailable".into(),
+            )
         })?;
         Ok((recorder, runtime_errors, archive_active))
     }
@@ -2272,7 +2262,10 @@ mod tests {
             panic!("sink was promoted unexpectedly");
         };
         assert_eq!(pcm.len(), 6);
-        assert_eq!(pcm.iter().copied().collect::<Vec<_>>(), vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(
+            pcm.iter().copied().collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5, 6]
+        );
     }
 
     #[test]

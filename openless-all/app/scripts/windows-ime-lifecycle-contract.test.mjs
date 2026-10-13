@@ -7,6 +7,8 @@ const appRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const imeRoot = join(appRoot, 'windows-ime', 'src');
 const textService = readFileSync(join(imeRoot, 'text_service.cpp'), 'utf8');
 const editSession = readFileSync(join(imeRoot, 'edit_session.cpp'), 'utf8');
+const displayAttribute = readFileSync(join(imeRoot, 'display_attribute.cpp'), 'utf8');
+const registry = readFileSync(join(imeRoot, 'registry.cpp'), 'utf8');
 const protocol = readFileSync(join(appRoot, 'src-tauri', 'src', 'windows_ime_protocol.rs'), 'utf8');
 
 // The IME runs inside every host process. It must not own threads or block the
@@ -67,11 +69,17 @@ assert.match(
 const sharedConstants = [
   ['kCopyDataSubmit', 'IME_COPYDATA_SUBMIT'],
   ['kCopyDataQuery', 'IME_COPYDATA_QUERY'],
+  ['kCopyDataUpdate', 'IME_COPYDATA_UPDATE'],
+  ['kCopyDataFinish', 'IME_COPYDATA_FINISH'],
+  ['kCopyDataCancel', 'IME_COPYDATA_CANCEL'],
   ['kStatusAccepted', 'IME_STATUS_ACCEPTED'],
   ['kStatusPending', 'IME_STATUS_PENDING'],
   ['kStatusCommitted', 'IME_STATUS_COMMITTED'],
   ['kStatusUnknownToken', 'IME_STATUS_UNKNOWN_TOKEN'],
   ['kStatusBadRequest', 'IME_STATUS_BAD_REQUEST'],
+  ['kStatusNotDispatched', 'IME_STATUS_NOT_DISPATCHED'],
+  ['kStatusCompositionConflict', 'IME_STATUS_COMPOSITION_CONFLICT'],
+  ['kStatusCompositionRecoveryRequired', 'IME_STATUS_COMPOSITION_RECOVERY_REQUIRED'],
 ];
 for (const [nativeName, rustName] of sharedConstants) {
   const nativeValue = textService.match(new RegExp(`${nativeName} = (0x[0-9A-Fa-f]+)`));
@@ -100,4 +108,97 @@ assert.match(
   editSession,
   /InterlockedDecrement\(&g_object_count\)/,
   'IME edit sessions should release the COM DLL lifetime count when destroyed',
+);
+
+// Live transcript composition: TSF owns the composition, so the IME must start,
+// update, and end it inside edit sessions, underline it, and learn when TSF ends it.
+assert.match(
+  editSession,
+  /context_composition->StartComposition\(/,
+  'IME should open the live transcript as a TSF composition',
+);
+assert.match(
+  editSession,
+  /composition_->composition->EndComposition\(/,
+  'IME should end the composition when the final text replaces it',
+);
+assert.match(
+  editSession,
+  /ApplyOpenLessInputDisplayAttribute\(/,
+  'IME composition text should carry the OpenLess input display attribute (underline)',
+);
+assert.match(
+  displayAttribute,
+  /TF_LS_SOLID[\s\S]*TF_ATTR_INPUT/,
+  'IME display attribute should paint a solid input underline',
+);
+assert.match(
+  displayAttribute,
+  /InterlockedIncrement\(&g_object_count\)/,
+  'IME display attribute COM objects should keep the DLL alive while hosts hold them',
+);
+assert.match(
+  textService,
+  /IID_ITfDisplayAttributeProvider/,
+  'IME should expose the display attribute provider for composition underline painting',
+);
+assert.match(
+  registry,
+  /GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER/,
+  'IME registration should advertise the display attribute provider category',
+);
+assert.match(
+  textService,
+  /STDMETHODIMP OpenLessTextService::OnCompositionTerminated\(/,
+  'IME should learn when TSF ends the composition',
+);
+assert.match(
+  textService,
+  /kCopyDataUpdate[\s\S]*AcceptSubmit\(copy_data, OpenLessEditOp::kUpdate\)/,
+  'IME should route composition updates through the submit pipeline',
+);
+assert.match(
+  textService,
+  /submit_composition_owner_[\s\S]*CommitTextOnOwnerThread\([\s\S]*submit_composition_owner_/,
+  'IME should carry a stable composition owner across submit requests',
+);
+assert.match(
+  editSession,
+  /owner_token[\s\S]*composition_owner_/,
+  'IME edit sessions should associate composition state with its insertion owner',
+);
+assert.match(
+  textService,
+  /submit_composition_process_id_[\s\S]*CommitTextOnOwnerThread\([\s\S]*submit_composition_process_id_/,
+  'IME should carry the sender process instance for restart recovery',
+);
+assert.match(
+  textService,
+  /kCommitHeaderBytes[\s\S]*composition_process_id[\s\S]*target_window/,
+  'plain commits should carry sender process and captured focus for restart recovery',
+);
+assert.match(
+  protocol,
+  /encode_commit_submit_payload[\s\S]*sender_process[\s\S]*target_window/,
+  'Rust should encode plain-commit recovery metadata',
+);
+assert.match(
+  textService,
+  /restart_recovery[\s\S]*kStatusCompositionRecoveryRequired/,
+  'IME should require an explicit recovery cancel before restarting a composition',
+);
+assert.match(
+  textService,
+  /update_failed_before_composition[\s\S]*dispatched = false/,
+  'IME should classify pre-StartComposition update failures as not dispatched',
+);
+assert.match(
+  textService,
+  /op == OpenLessEditOp::kCancel[\s\S]*op == OpenLessEditOp::kFinish[\s\S]*accepted async update[\s\S]*dispatched = false/,
+  'IME cleanup should clear a latch when async composition never started',
+);
+assert.doesNotMatch(
+  textService,
+  /ITfComposition[^\n]*\bWait/,
+  'IME composition handling must not wait on the host',
 );

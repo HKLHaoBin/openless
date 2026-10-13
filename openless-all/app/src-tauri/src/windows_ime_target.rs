@@ -46,6 +46,7 @@ pub(crate) fn capture_ime_submit_target() -> Option<ImeSubmitTarget> {
     Some(ImeSubmitTarget {
         process_id,
         thread_id,
+        window_handle: target_window.0 as usize,
     })
 }
 

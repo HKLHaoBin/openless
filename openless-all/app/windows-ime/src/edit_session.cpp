@@ -2,18 +2,55 @@
 
 #include <utility>
 
+#include "display_attribute.h"
+
 extern LONG g_object_count;
 
+void OpenLessCompositionState::Reset() {
+  if (composition != nullptr) {
+    composition->Release();
+    composition = nullptr;
+  }
+  if (context != nullptr) {
+    context->Release();
+    context = nullptr;
+  }
+  if (terminated_range != nullptr) {
+    terminated_range->Release();
+    terminated_range = nullptr;
+  }
+  started = false;
+  terminated = false;
+  original_text.clear();
+  original_text_captured = false;
+  owner_token = 0;
+  owner_process_id = 0;
+}
+
 OpenLessEditSession::OpenLessEditSession(ITfContext *context, std::wstring text,
+                                         OpenLessEditOp op, uint32_t composition_owner,
+                                         uint32_t composition_process_id,
+                                         std::shared_ptr<OpenLessCompositionState> composition,
+                                         ITfCompositionSink *composition_sink,
                                          std::shared_ptr<OpenLessAsyncEditState> async_state)
-    : context_(context), text_(std::move(text)), async_state_(std::move(async_state)) {
+    : context_(context), text_(std::move(text)), op_(op),
+      composition_owner_(composition_owner), composition_process_id_(composition_process_id),
+      composition_(std::move(composition)),
+      composition_sink_(composition_sink), async_state_(std::move(async_state)) {
   InterlockedIncrement(&g_object_count);
   if (context_ != nullptr) {
     context_->AddRef();
   }
+  if (composition_sink_ != nullptr) {
+    composition_sink_->AddRef();
+  }
 }
 
 OpenLessEditSession::~OpenLessEditSession() {
+  if (composition_sink_ != nullptr) {
+    composition_sink_->Release();
+    composition_sink_ = nullptr;
+  }
   if (context_ != nullptr) {
     context_->Release();
     context_ = nullptr;
@@ -49,8 +86,28 @@ STDMETHODIMP_(ULONG) OpenLessEditSession::Release() {
 }
 
 STDMETHODIMP OpenLessEditSession::DoEditSession(TfEditCookie edit_cookie) {
-  const HRESULT hr = async_state_ && async_state_->cancelled ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
-                                                             : InsertText(edit_cookie);
+  HRESULT hr = S_OK;
+  if (async_state_) {
+    async_state_->started = true;
+  }
+  if (async_state_ && async_state_->cancelled) {
+    hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+  } else {
+    switch (op_) {
+    case OpenLessEditOp::kCommit:
+      hr = InsertText(edit_cookie);
+      break;
+    case OpenLessEditOp::kUpdate:
+      hr = UpdateComposition(edit_cookie);
+      break;
+    case OpenLessEditOp::kFinish:
+      hr = FinishComposition(edit_cookie);
+      break;
+    case OpenLessEditOp::kCancel:
+      hr = CancelComposition(edit_cookie);
+      break;
+    }
+  }
   if (async_state_) {
     async_state_->result = hr;
     async_state_->completed = true;
@@ -90,5 +147,211 @@ HRESULT OpenLessEditSession::InsertText(TfEditCookie edit_cookie) {
   }
 
   insert_at_selection->Release();
+  return hr;
+}
+
+HRESULT OpenLessEditSession::GetSelectionRange(TfEditCookie edit_cookie, ITfRange **range) {
+  *range = nullptr;
+  TF_SELECTION selection = {};
+  ULONG fetched = 0;
+  const HRESULT hr =
+      context_->GetSelection(edit_cookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
+  if (FAILED(hr)) {
+    return hr;
+  }
+  if (fetched == 0 || selection.range == nullptr) {
+    return E_FAIL;
+  }
+  *range = selection.range; // Owned by the caller.
+  return S_OK;
+}
+
+HRESULT OpenLessEditSession::UpdateComposition(TfEditCookie edit_cookie) {
+  if (!composition_) {
+    return E_UNEXPECTED;
+  }
+  // Once TSF has ended our composition, the raw text it left behind is
+  // already in the document. Starting a new one would stack a second
+  // transcript after it, so refuse and let the caller stop streaming.
+  if (composition_->terminated) {
+    return HRESULT_FROM_WIN32(ERROR_OPERATION_ABORTED);
+  }
+
+  if (composition_->composition == nullptr) {
+    if (context_ == nullptr || composition_sink_ == nullptr) {
+      return E_UNEXPECTED;
+    }
+    ITfContextComposition *context_composition = nullptr;
+    HRESULT hr = context_->QueryInterface(IID_ITfContextComposition,
+                                          reinterpret_cast<void **>(&context_composition));
+    if (FAILED(hr)) {
+      return hr;
+    }
+
+    ITfRange *selection_range = nullptr;
+    hr = GetSelectionRange(edit_cookie, &selection_range);
+    if (FAILED(hr)) {
+      context_composition->Release();
+      return hr;
+    }
+
+    LONG range_start = 0;
+    LONG range_length = 0;
+    hr = selection_range->GetExtent(&range_start, &range_length);
+    if (FAILED(hr) || range_length < 0 || range_length > 16 * 1024 * 1024) {
+      selection_range->Release();
+      context_composition->Release();
+      return FAILED(hr) ? hr : E_INVALIDARG;
+    }
+    std::wstring original_text(static_cast<size_t>(range_length), L'\0');
+    if (range_length > 0) {
+      ULONG copied = 0;
+      hr = selection_range->GetText(edit_cookie, 0, original_text.data(),
+                                    static_cast<ULONG>(range_length), &copied);
+      if (FAILED(hr)) {
+        selection_range->Release();
+        context_composition->Release();
+        return hr;
+      }
+      original_text.resize(copied);
+    }
+    composition_->original_text = std::move(original_text);
+    composition_->original_text_captured = false;
+
+    ITfComposition *composition = nullptr;
+    hr = context_composition->StartComposition(edit_cookie, selection_range, composition_sink_,
+                                               &composition);
+    selection_range->Release();
+    context_composition->Release();
+    if (FAILED(hr) || composition == nullptr) {
+      return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    composition_->composition = composition;
+    composition_->context = context_;
+    composition_->context->AddRef();
+    composition_->started = true;
+    composition_->owner_token = composition_owner_;
+    composition_->owner_process_id = composition_process_id_;
+    composition_->original_text_captured = true;
+  }
+
+  ITfRange *range = nullptr;
+  HRESULT hr = composition_->composition->GetRange(&range);
+  if (FAILED(hr)) {
+    return hr;
+  }
+  hr = range->SetText(edit_cookie, 0, text_.c_str(), static_cast<LONG>(text_.size()));
+  if (SUCCEEDED(hr)) {
+    ApplyOpenLessInputDisplayAttribute(edit_cookie, context_, range);
+  }
+  range->Release();
+  return hr;
+}
+
+HRESULT OpenLessEditSession::CancelComposition(TfEditCookie edit_cookie) {
+  if (!composition_) {
+    return E_UNEXPECTED;
+  }
+  if (!composition_->started) {
+    composition_->Reset();
+    return S_OK;
+  }
+  if (!composition_->original_text_captured) {
+    return E_UNEXPECTED;
+  }
+
+  ITfRange *range = nullptr;
+  const bool active = composition_->composition != nullptr;
+  HRESULT hr = S_OK;
+  if (active) {
+    hr = composition_->composition->GetRange(&range);
+  } else if (composition_->terminated && composition_->terminated_range != nullptr) {
+    range = composition_->terminated_range;
+    range->AddRef();
+  } else {
+    return HRESULT_FROM_WIN32(ERROR_OPERATION_ABORTED);
+  }
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  hr = range->SetText(edit_cookie, 0, composition_->original_text.c_str(),
+                      static_cast<LONG>(composition_->original_text.size()));
+  bool composition_ended = !active;
+  if (SUCCEEDED(hr) && active) {
+    hr = composition_->composition->EndComposition(edit_cookie);
+    composition_ended = SUCCEEDED(hr);
+  }
+  HRESULT selection_hr = S_OK;
+  if (SUCCEEDED(hr)) {
+    TF_SELECTION selection = {};
+    selection.range = range;
+    selection.style.ase = TF_AE_NONE;
+    selection.style.fInterimChar = FALSE;
+    selection_hr = context_->SetSelection(edit_cookie, 1, &selection);
+  }
+  range->Release();
+  // EndComposition has already released the native composition even when parking the caret fails.
+  // Do not retain its pointer as live ownership and make later cleanup retry a dead composition.
+  if (composition_ended && SUCCEEDED(hr)) {
+    composition_->Reset();
+  }
+  return FAILED(hr) ? hr : selection_hr;
+}
+
+HRESULT OpenLessEditSession::FinishComposition(TfEditCookie edit_cookie) {
+  if (!composition_) {
+    return E_UNEXPECTED;
+  }
+  if (composition_->composition == nullptr) {
+    if (composition_->terminated && composition_->terminated_range != nullptr) {
+      HRESULT hr = composition_->terminated_range->SetText(
+          edit_cookie, 0, text_.c_str(), static_cast<LONG>(text_.size()));
+      if (SUCCEEDED(hr) &&
+          SUCCEEDED(composition_->terminated_range->Collapse(edit_cookie, TF_ANCHOR_END))) {
+        TF_SELECTION selection = {};
+        selection.range = composition_->terminated_range;
+        selection.style.ase = TF_AE_END;
+        selection.style.fInterimChar = FALSE;
+        (void)context_->SetSelection(edit_cookie, 1, &selection);
+      }
+      if (SUCCEEDED(hr)) {
+        composition_->Reset();
+      }
+      return hr;
+    }
+    // Terminated without a usable range: inserting the final text would either
+    // duplicate the raw partial or target the wrong document.
+    if (composition_->started || composition_->terminated) {
+      return HRESULT_FROM_WIN32(ERROR_OPERATION_ABORTED);
+    }
+    // Nothing was ever composed for this dictation: a plain commit.
+    return InsertText(edit_cookie);
+  }
+
+  ITfRange *range = nullptr;
+  HRESULT hr = composition_->composition->GetRange(&range);
+  if (FAILED(hr)) {
+    return hr;
+  }
+  hr = range->SetText(edit_cookie, 0, text_.c_str(), static_cast<LONG>(text_.size()));
+  if (SUCCEEDED(hr)) {
+    hr = composition_->composition->EndComposition(edit_cookie);
+  }
+  if (SUCCEEDED(hr)) {
+    // Park the caret after the committed text.
+    if (SUCCEEDED(range->Collapse(edit_cookie, TF_ANCHOR_END))) {
+      TF_SELECTION selection = {};
+      selection.range = range;
+      selection.style.ase = TF_AE_END;
+      selection.style.fInterimChar = FALSE;
+      (void)context_->SetSelection(edit_cookie, 1, &selection);
+    }
+  }
+  range->Release();
+  if (SUCCEEDED(hr)) {
+    composition_->Reset();
+  }
   return hr;
 }

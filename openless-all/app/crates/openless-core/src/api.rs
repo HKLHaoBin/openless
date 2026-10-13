@@ -1,6 +1,6 @@
 mod cloud_note;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::activity::ActivityDay;
@@ -1793,11 +1793,17 @@ struct ActiveTextInsertion {
     streaming: bool,
     script: crate::shared_types::ChineseScriptPreference,
     save_streamed_text_to_clipboard: bool,
+    /// Live ASR partials are shown as an in-place composition in the target.
+    composition_input: bool,
     state: Mutex<ActiveTextInsertionState>,
     drained: tokio::sync::Notify,
     task_spawner: Arc<dyn TaskSpawner>,
-    _resources: Arc<crate::voice_session::VoiceResourceHold>,
-    cancel_result: std::sync::OnceLock<Result<(), BackendError>>,
+    _resources: Mutex<Option<Arc<crate::voice_session::VoiceResourceHold>>>,
+    cancel_result: Mutex<Option<Result<(), BackendError>>>,
+    /// Only one native-cleanup retry worker may operate on an insertion at a time. The resource
+    /// hold remains retained until native cleanup succeeds, while the worker keeps retrying with
+    /// a bounded backoff rather than leaving the session with no cleanup path.
+    cleanup_retry_running: AtomicBool,
     // 0: open, 1: native finalization in flight, 2: cancellation owns cleanup,
     // 3: native finalization settled, 4: cancellation cleanup settled.
     // Cancellation must join state 1 or 2 rather
@@ -1809,6 +1815,13 @@ struct ActiveTextInsertion {
 struct ActiveTextInsertionState {
     stream: crate::streaming_insert::StreamingInsertState,
     scheduled: bool,
+    /// Newest transcript partial not yet sent as a composition update.
+    partial_pending: Option<String>,
+    partial_running: bool,
+    /// A composition update failed; the host can no longer show partials.
+    partial_failed: bool,
+    /// The dictation is finishing or cancelling; no further partials are sent.
+    partial_closed: bool,
 }
 
 impl ActiveTextInsertion {
@@ -1822,9 +1835,14 @@ impl ActiveTextInsertion {
             && context.insertion.windows_insertion_mode
                 != crate::shared_types::WindowsInsertionMode::SendInput;
         let platform_streaming = platform.supports_streaming();
+        // Composition already owns the target text until finish replaces it. Streaming
+        // polish chunks would type alongside (or into) that composition and leave the
+        // raw transcript behind, so the two paths are mutually exclusive.
+        let composition_input = context.insertion.composition_input;
         Arc::new(Self {
             platform,
-            streaming: context.uses_llm_polisher()
+            streaming: !composition_input
+                && context.uses_llm_polisher()
                 && platform_streaming
                 && crate::streaming_insert::streaming_insert_eligible(
                     context.insertion.streaming,
@@ -1835,13 +1853,36 @@ impl ActiveTextInsertion {
                 ),
             script: context.polish.chinese_script_preference,
             save_streamed_text_to_clipboard: context.insertion.save_streamed_text_to_clipboard,
+            composition_input,
             state: Mutex::new(ActiveTextInsertionState::default()),
             drained: tokio::sync::Notify::new(),
             task_spawner,
-            _resources: resources,
-            cancel_result: std::sync::OnceLock::new(),
+            _resources: Mutex::new(Some(resources)),
+            cancel_result: Mutex::new(None),
+            cleanup_retry_running: AtomicBool::new(false),
             terminal: AtomicU8::new(0),
         })
+    }
+
+    fn try_start_cleanup_retry(&self) -> bool {
+        self.cleanup_retry_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    fn finish_cleanup_retry(&self) {
+        self.cleanup_retry_running.store(false, Ordering::Release);
+    }
+
+    fn abandon_cleanup_retry(&self) {
+        // The target can disappear permanently (for example, after its process exits). Release
+        // this insertion's resource hold once the bounded cleanup window is exhausted; retaining
+        // it forever would make every later dictation appear busy until restart.
+        self._resources
+            .lock()
+            .expect("text insertion resources lock poisoned")
+            .take();
+        self.finish_cleanup_retry();
     }
 
     fn push(self: &Arc<Self>, delta: &crate::types::PolishDelta) {
@@ -1923,9 +1964,91 @@ impl ActiveTextInsertion {
         }
     }
 
+    /// Coalesces transcript partials: only the newest one matters, so a slow host
+    /// never builds a backlog of stale compositions.
+    fn push_partial(self: &Arc<Self>, text: String) {
+        if !self.composition_input {
+            return;
+        }
+        let should_spawn = {
+            let mut state = self.state.lock().expect("text insertion lock poisoned");
+            if state.partial_closed || state.partial_failed {
+                return;
+            }
+            state.partial_pending = Some(text);
+            if state.partial_running {
+                false
+            } else {
+                state.partial_running = true;
+                true
+            }
+        };
+        if should_spawn {
+            let insertion = Arc::clone(self);
+            self.task_spawner
+                .spawn(Box::pin(async move { insertion.partial_loop().await }));
+        }
+    }
+
+    async fn partial_loop(self: Arc<Self>) {
+        loop {
+            let next = {
+                let mut state = self.state.lock().expect("text insertion lock poisoned");
+                let next = if state.partial_closed {
+                    None
+                } else {
+                    state.partial_pending.take()
+                };
+                match next {
+                    Some(text) => text,
+                    None => {
+                        state.partial_pending = None;
+                        state.partial_running = false;
+                        self.drained.notify_waiters();
+                        return;
+                    }
+                }
+            };
+            if let Err(error) = self.platform.update_composition(next).await {
+                log::warn!("[insertion] composition update stopped: {error}");
+                let mut state = self.state.lock().expect("text insertion lock poisoned");
+                state.partial_failed = true;
+                state.partial_pending = None;
+                state.partial_running = false;
+                self.drained.notify_waiters();
+                return;
+            }
+        }
+    }
+
+    fn close_partials(&self) {
+        let mut state = self.state.lock().expect("text insertion lock poisoned");
+        state.partial_closed = true;
+        state.partial_pending = None;
+    }
+
+    async fn wait_for_partial_drain(&self) {
+        loop {
+            let notified = self.drained.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if !self
+                .state
+                .lock()
+                .expect("text insertion lock poisoned")
+                .partial_running
+            {
+                break;
+            }
+            notified.await;
+        }
+    }
+
     async fn wait_for_stream_drain(&self) {
         loop {
             let notified = self.drained.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if !self
                 .state
                 .lock()
@@ -1940,6 +2063,10 @@ impl ActiveTextInsertion {
 
     async fn finish(self: &Arc<Self>, final_text: String) -> Result<InsertOutcome, BackendError> {
         self.wait_for_stream_drain().await;
+        // The final text must replace the composition only after the last
+        // partial update has landed, or that update would overwrite it.
+        self.close_partials();
+        self.wait_for_partial_drain().await;
         self.terminal
             .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| {
@@ -1956,7 +2083,11 @@ impl ActiveTextInsertion {
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         self.task_spawner.spawn(Box::pin(async move {
             let result = insertion.finish_committed(final_text).await;
-            insertion.terminal.store(3, Ordering::Release);
+            // A failed finalization must return to the active state so the caller's
+            // cancellation path can clear a possibly live native composition.
+            insertion
+                .terminal
+                .store(if result.is_ok() { 3 } else { 0 }, Ordering::Release);
             insertion.drained.notify_waiters();
             let _ = result_tx.send(result);
         }));
@@ -2014,42 +2145,69 @@ impl ActiveTextInsertion {
     }
 
     async fn cancel(self: &Arc<Self>) -> Result<(), BackendError> {
+        self.close_partials();
         {
             let mut state = self.state.lock().expect("text insertion lock poisoned");
             state.stream.pending.clear();
             state.stream.failed = Some("text insertion session was cancelled".to_string());
         }
-        if self
-            .terminal
-            .compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            // A native write may already be sending an indivisible chunk.
-            // Discarding queued text cannot stop that effect. Drain it
-            // before restoring TIS/focus, as the 1.x typer join did; otherwise
-            // the remaining keys can be interpreted by the restored IME.
-            let insertion = Arc::clone(self);
-            self.task_spawner.spawn(Box::pin(async move {
-                insertion.wait_for_stream_drain().await;
-                let result = insertion.platform.cancel().await;
-                let _ = insertion.cancel_result.set(result);
-                insertion.terminal.store(4, Ordering::Release);
-                insertion.drained.notify_waiters();
-            }));
-        }
         // A late starter and an explicit cancel can reach this same session.
         // Both must await the single cleanup; treating the second call as an
         // immediate success would admit B while A still restores its source.
+        // A failed finalization returns terminal to 0, so cancellation must
+        // retry ownership instead of treating that transition as success.
+        let mut cleanup_retries = 0;
         loop {
             let notified = self.drained.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             match self.terminal.load(Ordering::Acquire) {
+                0 => {
+                    if self
+                        .terminal
+                        .compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                    {
+                        let insertion = Arc::clone(self);
+                        self.task_spawner.spawn(Box::pin(async move {
+                            insertion.wait_for_stream_drain().await;
+                            // An in-flight composition update must land before the cancel clears
+                            // the composition, or it would leave the transcript behind.
+                            insertion.wait_for_partial_drain().await;
+                            let result = insertion.platform.cancel().await;
+                            *insertion
+                                .cancel_result
+                                .lock()
+                                .expect("cancel result lock poisoned") = Some(result);
+                            insertion.terminal.store(4, Ordering::Release);
+                            insertion.drained.notify_waiters();
+                        }));
+                    }
+                }
                 1 | 2 => notified.await,
+                3 => return Ok(()),
                 4 => {
-                    return self
+                    let mut cancel_result = self
                         .cancel_result
-                        .get()
-                        .expect("cleanup result precedes terminal")
-                        .clone()
+                        .lock()
+                        .expect("cancel result lock poisoned");
+                    let Some(result) = cancel_result.clone() else {
+                        continue;
+                    };
+                    match result {
+                        Ok(()) => return Ok(()),
+                        Err(_error) if cleanup_retries < 2 => {
+                            if self
+                                .terminal
+                                .compare_exchange(4, 0, Ordering::AcqRel, Ordering::Acquire)
+                                .is_ok()
+                            {
+                                cleanup_retries += 1;
+                                *cancel_result = None;
+                            }
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
                 _ => return Ok(()),
             }
@@ -2199,12 +2357,26 @@ impl EngineProgressSink for BackendEngineProgress {
                         "transcript delta arrived after transcription completed",
                     ));
                 }
-                state
-                    .transcripts
-                    .entry(session_id)
-                    .or_default()
-                    .apply(&delta)?;
+                let transcript = {
+                    let accumulator = state.transcripts.entry(session_id).or_default();
+                    accumulator.apply(&delta)?;
+                    accumulator.text().to_string()
+                };
+                let is_partial = !delta.is_final;
                 drop(state);
+                if is_partial {
+                    if let Some(insertion) = self
+                        .text_insertions
+                        .lock()
+                        .expect("text insertion registry lock poisoned")
+                        .get(&session_id)
+                        .and_then(|preparation| preparation.peek())
+                        .and_then(|result| result.as_ref().ok())
+                        .cloned()
+                    {
+                        insertion.push_partial(transcript);
+                    }
+                }
                 self.events
                     .publish(Some(session_id), BackendEventKind::TranscriptDelta(delta));
             }
@@ -5963,18 +6135,15 @@ impl OpenLessBackend {
                 .session_id
                 == Some(session_id);
             if !still_active {
-                if let Ok(insertion) = prepared {
-                    let _ = insertion.cancel().await;
-                }
-                self.text_insertions
-                    .lock()
-                    .expect("text insertion registry lock poisoned")
-                    .remove(&session_id);
+                let cleanup_result = self.cancel_text_insertion(session_id).await;
                 self.schedule_pending_audio_capture_discard(pending_capture.take());
-                return Err(BackendError::new(
-                    BackendErrorCode::Cancelled,
-                    "dictation session was cancelled while insertion was starting",
-                ));
+                return match cleanup_result {
+                    Ok(()) => Err(BackendError::new(
+                        BackendErrorCode::Cancelled,
+                        "dictation session was cancelled while insertion was starting",
+                    )),
+                    Err(error) => Err(error),
+                };
             }
             match prepared {
                 Ok(_) => {}
@@ -6903,16 +7072,18 @@ impl OpenLessBackend {
             })?;
         let insertion = insertion.await?;
         let result = insertion.finish(final_text).await;
+        let keep_for_cleanup = result.is_err();
         let mut insertions = self
             .text_insertions
             .lock()
             .expect("text insertion registry lock poisoned");
-        if insertions
-            .get(&session_id)
-            .and_then(|preparation| preparation.peek())
-            .is_some_and(
-                |current| matches!(current, Ok(current) if Arc::ptr_eq(current, &insertion)),
-            )
+        if !keep_for_cleanup
+            && insertions
+                .get(&session_id)
+                .and_then(|preparation| preparation.peek())
+                .is_some_and(
+                    |current| matches!(current, Ok(current) if Arc::ptr_eq(current, &insertion)),
+                )
         {
             insertions.remove(&session_id);
         }
@@ -6923,16 +7094,118 @@ impl OpenLessBackend {
         &self,
         session_id: SessionId,
     ) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
-        let insertion = self
+        let preparation = self
             .text_insertions
             .lock()
             .expect("text insertion registry lock poisoned")
-            .remove(&session_id);
+            .get(&session_id)
+            .cloned();
+        let text_insertions = Arc::clone(&self.text_insertions);
+        let task_spawner = Arc::clone(&self.deps.task_spawner);
         Box::pin(async move {
-            match insertion {
-                Some(preparation) => preparation.await?.cancel().await,
-                None => Ok(()),
+            let Some(preparation) = preparation else {
+                return Ok(());
+            };
+            let insertion = match preparation.await {
+                Ok(insertion) => insertion,
+                Err(error) => {
+                    // Preparation never created a native session, so there is nothing to retry.
+                    let mut insertions = text_insertions
+                        .lock()
+                        .expect("text insertion registry lock poisoned");
+                    if insertions
+                        .get(&session_id)
+                        .and_then(|current| current.peek())
+                        .is_some_and(|current| {
+                            matches!(current, Err(current_error) if current_error == &error)
+                        })
+                    {
+                        insertions.remove(&session_id);
+                    }
+                    return Err(error);
+                }
+            };
+            let result = insertion.cancel().await;
+            if result.is_ok() {
+                // Keep a failed cancellation in the registry so a later cleanup attempt can
+                // reach the same native session. Never remove a newer replacement session.
+                let mut insertions = text_insertions
+                    .lock()
+                    .expect("text insertion registry lock poisoned");
+                if insertions
+                    .get(&session_id)
+                    .and_then(|current| current.peek())
+                    .is_some_and(
+                        |current| matches!(current, Ok(current) if Arc::ptr_eq(current, &insertion)),
+                    )
+                {
+                    insertions.remove(&session_id);
+                }
+            } else if insertion.try_start_cleanup_retry() {
+                let retry_insertion = Arc::clone(&insertion);
+                let retry_map = Arc::clone(&text_insertions);
+                let retry_session_id = session_id;
+                task_spawner.spawn(Box::pin(async move {
+                    const CLEANUP_RETRY_WINDOW: std::time::Duration =
+                        std::time::Duration::from_secs(30);
+                    let mut target_unavailable_since = None;
+                    let mut delay_ms = 50u64;
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        match retry_insertion.cancel().await {
+                            Ok(()) => {
+                                let mut insertions = retry_map
+                                    .lock()
+                                    .expect("text insertion registry lock poisoned");
+                                if insertions
+                                    .get(&retry_session_id)
+                                    .and_then(|current| current.peek())
+                                    .is_some_and(|current| {
+                                        matches!(current, Ok(current) if Arc::ptr_eq(current, &retry_insertion))
+                                    })
+                                {
+                                    insertions.remove(&retry_session_id);
+                                }
+                                retry_insertion.finish_cleanup_retry();
+                                return;
+                            }
+                            Err(error) if error.is_target_unavailable() => {
+                                let unavailable_since = *target_unavailable_since
+                                    .get_or_insert_with(std::time::Instant::now);
+                                if unavailable_since.elapsed() < CLEANUP_RETRY_WINDOW {
+                                    delay_ms = delay_ms.saturating_mul(2).min(30_000);
+                                    continue;
+                                }
+                                log::error!(
+                                    "[insertion] abandoning native cleanup after target remained unavailable"
+                                );
+                                let mut insertions = retry_map
+                                    .lock()
+                                    .expect("text insertion registry lock poisoned");
+                                if insertions
+                                    .get(&retry_session_id)
+                                    .and_then(|current| current.peek())
+                                    .is_some_and(|current| {
+                                        matches!(current, Ok(current) if Arc::ptr_eq(current, &retry_insertion))
+                                    })
+                                {
+                                    insertions.remove(&retry_session_id);
+                                }
+                                retry_insertion.abandon_cleanup_retry();
+                                return;
+                            }
+                            Err(_) => {
+                                // A native cleanup failure may still represent a live composition.
+                                // Keep its resource hold and retry indefinitely rather than releasing
+                                // it beside a composition that the host may still own.
+                                target_unavailable_since = None;
+                                delay_ms = delay_ms.saturating_mul(2).min(30_000);
+                            }
+                        }
+                    }
+                }));
             }
+            result
         })
     }
 
@@ -11963,11 +12236,18 @@ mod tests {
                 Box::pin(async { Ok(crate::ports::PolishOutput::text("polished words")) })
             }
 
-            fn cancel(&self, _session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            fn cancel(
+                &self,
+                _session_id: SessionId,
+            ) -> BoxFuture<'static, Result<(), BackendError>> {
                 Box::pin(async { Ok(()) })
             }
         }
-        fn files_containing(dir: &std::path::Path, needle: &str, found: &mut Vec<std::path::PathBuf>) {
+        fn files_containing(
+            dir: &std::path::Path,
+            needle: &str,
+            found: &mut Vec<std::path::PathBuf>,
+        ) {
             for entry in std::fs::read_dir(dir).unwrap().flatten() {
                 let path = entry.path();
                 if path.is_dir() {
@@ -12030,7 +12310,9 @@ mod tests {
             let seen = seen.lock().unwrap().clone();
             assert_eq!(seen.len(), 1, "{target}");
             assert!(
-                seen[0].as_deref().is_some_and(|context| context.contains(HOST_TEXT)),
+                seen[0]
+                    .as_deref()
+                    .is_some_and(|context| context.contains(HOST_TEXT)),
                 "{target}: polish must still see the cursor context"
             );
             assert_eq!(
@@ -12041,7 +12323,10 @@ mod tests {
             backend.shutdown().await.unwrap();
             let mut leaked = Vec::new();
             files_containing(&data_dir, HOST_TEXT, &mut leaked);
-            assert!(leaked.is_empty(), "{target}: cursor context persisted in {leaked:?}");
+            assert!(
+                leaked.is_empty(),
+                "{target}: cursor context persisted in {leaked:?}"
+            );
             // The scan is meaningful: what does get stored is readable the same way.
             let mut stored = Vec::new();
             files_containing(&data_dir, "polished words", &mut stored);
@@ -13616,6 +13901,145 @@ mod tests {
             InsertOutcome::Inserted
         );
         assert_eq!(*delivered.lock().unwrap(), ["final text"]);
+    }
+
+    struct CompositionRecorder(Arc<Mutex<Vec<String>>>);
+    impl TextInsertionSession for CompositionRecorder {
+        fn supports_streaming(&self) -> bool {
+            false
+        }
+        fn write(&self, _: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
+            panic!("composition display must never stream chunks");
+        }
+        fn copy(&self, _: String) -> BoxFuture<'static, Result<(), BackendError>> {
+            boxed(async { Ok(()) })
+        }
+        fn update_composition(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.0.lock().unwrap().push(format!("update:{text}"));
+            boxed(async { Ok(()) })
+        }
+        fn finish(&self, text: String) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
+            self.0.lock().unwrap().push(format!("finish:{text}"));
+            boxed(async { Ok(InsertOutcome::Inserted) })
+        }
+        fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+            boxed(async { Ok(()) })
+        }
+    }
+
+    fn composition_test_insertion(
+        context: &DictationContext,
+        log: Arc<Mutex<Vec<String>>>,
+    ) -> Arc<ActiveTextInsertion> {
+        let gate = Arc::new(crate::voice_session::VoiceSessionGate::default());
+        let session_id = SessionId::new();
+        gate.acquire(
+            session_id,
+            crate::voice_session::VoiceSessionKind::Dictation,
+        )
+        .unwrap();
+        ActiveTextInsertion::new(
+            Arc::new(CompositionRecorder(log)),
+            context,
+            Arc::new(TokioTaskSpawner),
+            gate.hold_resources(session_id).unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn composition_partials_are_replaced_by_the_final_text() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut context = DictationContext::default();
+        context.insertion.composition_input = true;
+        let insertion = composition_test_insertion(&context, log.clone());
+        insertion.push_partial("你".into());
+        insertion.push_partial("你好".into());
+        assert_eq!(
+            insertion.finish("你好。".into()).await.unwrap(),
+            InsertOutcome::Inserted
+        );
+        let entries = log.lock().unwrap().clone();
+        // Partials may be coalesced or dropped at close, but the final text always comes last
+        // and never before an update that was already in flight.
+        assert_eq!(entries.last().map(String::as_str), Some("finish:你好。"));
+        assert!(entries[..entries.len() - 1]
+            .iter()
+            .all(|entry| entry == "update:你" || entry == "update:你好"));
+    }
+
+    #[tokio::test]
+    async fn partial_transcripts_stay_local_unless_composition_is_enabled() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let context = DictationContext::default();
+        let insertion = composition_test_insertion(&context, log.clone());
+        insertion.push_partial("你好".into());
+        assert_eq!(
+            insertion.finish("你好。".into()).await.unwrap(),
+            InsertOutcome::Inserted
+        );
+        assert_eq!(*log.lock().unwrap(), ["finish:你好。"]);
+    }
+
+    #[tokio::test]
+    async fn composition_input_disables_streaming_polish_chunks() {
+        struct StreamingProbe;
+        impl TextInsertionSession for StreamingProbe {
+            fn supports_streaming(&self) -> bool {
+                true
+            }
+            fn write(
+                &self,
+                _: String,
+            ) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
+                panic!("composition sessions must not stream polish chunks");
+            }
+            fn copy(&self, _: String) -> BoxFuture<'static, Result<(), BackendError>> {
+                boxed(async { Ok(()) })
+            }
+            fn update_composition(
+                &self,
+                _: String,
+            ) -> BoxFuture<'static, Result<(), BackendError>> {
+                boxed(async { Ok(()) })
+            }
+            fn finish(&self, _: String) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
+                boxed(async { Ok(InsertOutcome::Inserted) })
+            }
+            fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+                boxed(async { Ok(()) })
+            }
+        }
+
+        let mut context = DictationContext::default();
+        context.insertion.composition_input = true;
+        context.insertion.streaming = true;
+        // SendInput would otherwise allow streaming; composition must still win.
+        context.insertion.windows_insertion_mode =
+            crate::shared_types::WindowsInsertionMode::SendInput;
+        context.polish.mode = crate::types::PolishMode::Formal;
+        let gate = Arc::new(crate::voice_session::VoiceSessionGate::default());
+        let session_id = SessionId::new();
+        gate.acquire(
+            session_id,
+            crate::voice_session::VoiceSessionKind::Dictation,
+        )
+        .unwrap();
+        let insertion = ActiveTextInsertion::new(
+            Arc::new(StreamingProbe),
+            &context,
+            Arc::new(TokioTaskSpawner),
+            gate.hold_resources(session_id).unwrap(),
+        );
+        assert!(context.uses_llm_polisher());
+        insertion.push(&crate::types::PolishDelta {
+            text: "should not type".into(),
+            offset: 0,
+            is_final: false,
+        });
+        assert_eq!(
+            insertion.finish("final".into()).await.unwrap(),
+            InsertOutcome::Inserted
+        );
     }
 
     #[tokio::test]

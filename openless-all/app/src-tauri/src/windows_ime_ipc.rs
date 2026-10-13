@@ -3,8 +3,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use crate::windows_ime_protocol::{
-    is_failed_hresult, ImeSubmitStatus, IME_STATUS_ACCEPTED, IME_STATUS_BAD_REQUEST,
-    IME_STATUS_COMMITTED, IME_STATUS_PENDING,
+    is_failed_hresult, ImeSubmitOp, ImeSubmitStatus, IME_STATUS_ACCEPTED, IME_STATUS_BAD_REQUEST,
+    IME_STATUS_COMMITTED, IME_STATUS_COMPOSITION_CONFLICT,
+    IME_STATUS_COMPOSITION_RECOVERY_REQUIRED, IME_STATUS_NOT_DISPATCHED, IME_STATUS_PENDING,
 };
 
 pub const IME_CLIENT_WAIT_TIMEOUT: Duration = Duration::from_millis(700);
@@ -86,6 +87,11 @@ fn classify_query_reply(reply: u32) -> WindowsImeIpcResult<Option<ImeSubmitStatu
     match reply {
         IME_STATUS_PENDING => Ok(None),
         IME_STATUS_COMMITTED => Ok(Some(ImeSubmitStatus::Committed)),
+        IME_STATUS_COMPOSITION_CONFLICT => Ok(Some(ImeSubmitStatus::CompositionConflict)),
+        IME_STATUS_COMPOSITION_RECOVERY_REQUIRED => {
+            Ok(Some(ImeSubmitStatus::CompositionRecoveryRequired))
+        }
+        IME_STATUS_NOT_DISPATCHED => Ok(Some(ImeSubmitStatus::NotDispatched)),
         HRESULT_TIMEOUT | HRESULT_CANCELLED => {
             // Keep the 1.x classification: a native timeout/cancel reply
             // does not prove InsertTextAtSelection never committed. R01's
@@ -121,21 +127,27 @@ struct ImeWindow {
     thread_id: u32,
 }
 
-/// Prefer the IME window on the target thread; otherwise use another one in
-/// the same process (the focused control can live on a different thread than
-/// the one TSF activated the IME on).
-fn select_ime_window(target: ImeSubmitTarget, windows: &[ImeWindow]) -> Option<ImeWindow> {
-    windows
-        .iter()
-        .find(|window| {
-            window.process_id == target.process_id && window.thread_id == target.thread_id
-        })
-        .or_else(|| {
-            windows
-                .iter()
-                .find(|window| window.process_id == target.process_id)
-        })
-        .copied()
+/// Prefer the IME window on the target thread. Ordinary commits may use another window in the
+/// same process, but composition operations must stay on the captured TSF thread because the
+/// native service resolves its focused document manager from its own thread manager.
+fn select_ime_window(
+    target: ImeSubmitTarget,
+    windows: &[ImeWindow],
+    allow_same_process_fallback: bool,
+) -> Option<ImeWindow> {
+    let exact = windows.iter().find(|window| {
+        window.process_id == target.process_id && window.thread_id == target.thread_id
+    });
+    exact.copied().or_else(|| {
+        allow_same_process_fallback
+            .then(|| {
+                windows
+                    .iter()
+                    .find(|window| window.process_id == target.process_id)
+                    .copied()
+            })
+            .flatten()
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -144,12 +156,24 @@ pub struct ImeSubmitRequest {
     pub text: String,
     pub created_at: String,
     pub target: Option<ImeSubmitTarget>,
+    pub op: ImeSubmitOp,
+    /// Stable owner for the live composition across submit/query tokens.
+    pub composition_owner: u32,
+    /// OpenLess process instance that owns the composition. A changed value permits native
+    /// recovery after the process that created an orphaned composition has exited.
+    pub composition_process_id: u32,
+    /// Allow a recovery Cancel to use another same-process IME window when the original target
+    /// thread has no registered OpenLess service. This is only safe for native recovery because
+    /// owner checks still reject a same-process composition owned by another insertion.
+    pub allow_same_process_fallback: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImeSubmitTarget {
     pub process_id: u32,
     pub thread_id: u32,
+    /// Focused control captured with the target, used by the native prime guard.
+    pub window_handle: usize,
 }
 
 #[derive(Clone)]
@@ -229,8 +253,8 @@ mod windows_message {
         IME_SEND_TIMEOUT_MS, IME_SUBMIT_TIMEOUT, IME_WINDOW_RETRY_INTERVAL,
     };
     use crate::windows_ime_protocol::{
-        encode_query_payload, encode_submit_payload, ImeSubmitStatus, IME_COPYDATA_QUERY,
-        IME_COPYDATA_SUBMIT, IME_MAX_SUBMIT_BYTES, OPENLESS_IME_MESSAGE_WINDOW_CLASS,
+        encode_composition_submit_payload, encode_query_payload, ImeSubmitStatus, IME_COPYDATA_QUERY,
+        IME_MAX_SUBMIT_BYTES, OPENLESS_IME_MESSAGE_WINDOW_CLASS,
     };
 
     const HWND_MESSAGE: isize = -3;
@@ -279,7 +303,22 @@ mod windows_message {
     ) -> WindowsImeIpcResult<ImeSubmitStatus> {
         let target = request.target.ok_or(WindowsImeIpcError::NoReadyClient)?;
         let token = next_submit_token();
-        let payload = encode_submit_payload(token, &request.text);
+        let payload = if request.op == crate::windows_ime_protocol::ImeSubmitOp::Commit {
+            crate::windows_ime_protocol::encode_commit_submit_payload(
+                token,
+                request.composition_process_id,
+                request.target.map_or(0, |target| target.window_handle as u64),
+                &request.text,
+            )
+        } else {
+            encode_composition_submit_payload(
+                token,
+                request.composition_owner,
+                request.composition_process_id,
+                request.target.map_or(0, |target| target.window_handle as u64),
+                &request.text,
+            )
+        };
         if payload.len() > IME_MAX_SUBMIT_BYTES {
             return Err(WindowsImeIpcError::Protocol(format!(
                 "text is too large for one IME submit ({} bytes)",
@@ -287,7 +326,11 @@ mod windows_message {
             )));
         }
 
-        let window = find_ime_window_with_retry(target)?;
+        let window = find_ime_window_with_retry(
+            target,
+            request.op == crate::windows_ime_protocol::ImeSubmitOp::Commit
+                || request.allow_same_process_fallback,
+        )?;
         log::debug!(
             "[windows-ime] submitting text to IME window pid={} tid={}",
             window.process_id,
@@ -296,7 +339,7 @@ mod windows_message {
 
         let reply = send_copy_data(
             window.hwnd,
-            IME_COPYDATA_SUBMIT,
+            request.op.copydata_tag(),
             &payload,
             IME_SEND_TIMEOUT_MS,
         )
@@ -345,10 +388,17 @@ mod windows_message {
         }
     }
 
-    fn find_ime_window_with_retry(target: ImeSubmitTarget) -> WindowsImeIpcResult<ImeWindow> {
+    fn find_ime_window_with_retry(
+        target: ImeSubmitTarget,
+        allow_same_process_fallback: bool,
+    ) -> WindowsImeIpcResult<ImeWindow> {
         let deadline = Instant::now() + IME_CLIENT_WAIT_TIMEOUT;
         loop {
-            if let Some(window) = select_ime_window(target, &enumerate_ime_windows()) {
+            if let Some(window) = select_ime_window(
+                target,
+                &enumerate_ime_windows(),
+                allow_same_process_fallback,
+            ) {
                 if window.thread_id != target.thread_id {
                     log::info!(
                         "[windows-ime] no IME window on target thread {}; using same-process thread {}",
@@ -478,13 +528,14 @@ mod tests {
         let target = ImeSubmitTarget {
             process_id: 1234,
             thread_id: 5678,
+            window_handle: 0,
         };
         let windows = [
             window(1, 4321, 1111),
             window(2, 1234, 9999),
             window(3, 1234, 5678),
         ];
-        assert_eq!(select_ime_window(target, &windows), Some(windows[2]));
+        assert_eq!(select_ime_window(target, &windows, true), Some(windows[2]));
     }
 
     #[test]
@@ -492,10 +543,22 @@ mod tests {
         let target = ImeSubmitTarget {
             process_id: 1234,
             thread_id: 5678,
+            window_handle: 0,
         };
         let windows = [window(1, 4321, 5678), window(2, 1234, 9999)];
-        assert_eq!(select_ime_window(target, &windows), Some(windows[1]));
-        assert_eq!(select_ime_window(target, &windows[..1]), None);
+        assert_eq!(select_ime_window(target, &windows, true), Some(windows[1]));
+        assert_eq!(select_ime_window(target, &windows[..1], true), None);
+    }
+
+    #[test]
+    fn composition_requires_a_window_on_the_captured_thread() {
+        let target = ImeSubmitTarget {
+            process_id: 1234,
+            thread_id: 5678,
+            window_handle: 0,
+        };
+        let windows = [window(1, 4321, 5678), window(2, 1234, 9999)];
+        assert_eq!(select_ime_window(target, &windows, false), None);
     }
 
     #[test]
