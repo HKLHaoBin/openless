@@ -638,6 +638,17 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.audio_enhancement_label"),
+                tr_l10n(lang, "settings.recording.audio_enhancement_desc"),
+                vm.settings.audio_enhancement,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::AudioEnhancement,
+                    ));
+                },
+            );
             // #5：提示音开关旁的「试听」按钮（Tauri `audioCuePreview`）。
             row_desc(
                 ui,

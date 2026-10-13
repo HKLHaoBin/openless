@@ -1,4 +1,6 @@
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use futures_util::future::BoxFuture;
 use openless_core::{
@@ -31,6 +33,81 @@ impl LinuxCpalRecorder {
     }
 }
 
+#[cfg(target_os = "linux")]
+const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 64;
+
+#[cfg(target_os = "linux")]
+struct RawAudioFrame {
+    samples: Vec<f32>,
+    channels: usize,
+    input_sample_rate: u32,
+}
+
+#[cfg(target_os = "linux")]
+struct AudioProcessingWorker {
+    join_handle: Option<JoinHandle<()>>,
+}
+
+#[cfg(target_os = "linux")]
+impl AudioProcessingWorker {
+    fn start(
+        processing: openless_core::AudioProcessingConfig,
+        consumer: Arc<dyn AudioConsumer>,
+        progress: Arc<dyn RecordingProgressSink>,
+        writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+    ) -> Result<(Self, SyncSender<RawAudioFrame>), BackendError> {
+        let (sender, receiver) = sync_channel::<RawAudioFrame>(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        let started = std::time::Instant::now();
+        let join_handle = std::thread::Builder::new()
+            .name("openless-linux-audio-processor".to_string())
+            .spawn(move || {
+                let mut processor = openless_core::AudioProcessor::new(processing);
+                while let Ok(frame) = receiver.recv() {
+                    if let Some(chunk) =
+                        processor.process(&frame.samples, frame.channels, frame.input_sample_rate)
+                    {
+                        consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
+                        if let Some(writer) = &writer {
+                            if let Err(error) = writer
+                                .lock()
+                                .expect("Linux WAV writer lock poisoned")
+                                .append(&chunk.pcm_i16_le)
+                            {
+                                log::warn!("Linux recording archive write failed: {error}");
+                            }
+                        }
+                        let _ = progress
+                            .publish_level(started.elapsed().as_millis() as u64, chunk.level);
+                    }
+                }
+            })
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Platform,
+                    format!("failed to spawn Linux audio processor: {error}"),
+                )
+            })?;
+        Ok((
+            Self {
+                join_handle: Some(join_handle),
+            },
+            sender,
+        ))
+    }
+
+    fn finish(mut self) -> Result<(), BackendError> {
+        if let Some(handle) = self.join_handle.take() {
+            handle.join().map_err(|_| {
+                BackendError::new(
+                    BackendErrorCode::Platform,
+                    "Linux audio processor thread panicked while stopping",
+                )
+            })?;
+        }
+        Ok(())
+    }
+}
+
 impl AudioRecorder for LinuxCpalRecorder {
     fn start(
         &self,
@@ -47,6 +124,7 @@ impl AudioRecorder for LinuxCpalRecorder {
         // Platform effect, applied by the host recorder exactly like the Tauri
         // audio adapter. Never owned by Core; restore is the guard's Drop.
         let mute_during_recording = context.recording.mute_during_recording;
+        let audio_processing = context.recording.audio_processing;
         let recordings_dir = self.recordings_dir.clone();
         let require_archive =
             context.output_target == openless_core::DictationOutputTarget::QuickNote;
@@ -60,6 +138,7 @@ impl AudioRecorder for LinuxCpalRecorder {
                         recordings_dir,
                         require_archive,
                         mute_during_recording,
+                        audio_processing,
                         consumer,
                         progress,
                     )
@@ -198,6 +277,7 @@ fn start_linux_recording(
     recordings_dir: Option<std::path::PathBuf>,
     require_archive: bool,
     mute_during_recording: bool,
+    audio_processing: openless_core::AudioProcessingConfig,
     consumer: Arc<dyn AudioConsumer>,
     progress: Arc<dyn RecordingProgressSink>,
 ) -> Result<Box<dyn ActiveRecording>, BackendError> {
@@ -256,6 +336,7 @@ fn start_linux_recording(
                 consumer,
                 progress,
                 writer,
+                audio_processing,
                 stop_for_thread,
                 runtime_error_for_thread,
                 startup_tx,
@@ -298,10 +379,19 @@ fn run_audio_thread(
     consumer: Arc<dyn AudioConsumer>,
     progress: Arc<dyn RecordingProgressSink>,
     writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+    audio_processing: openless_core::AudioProcessingConfig,
     stop: Arc<std::sync::atomic::AtomicBool>,
     runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
     startup: std::sync::mpsc::SyncSender<Result<(), BackendError>>,
 ) {
+    let (processor, frame_tx) =
+        match AudioProcessingWorker::start(audio_processing, consumer, progress, writer) {
+            Ok(worker) => worker,
+            Err(error) => {
+                let _ = startup.send(Err(error));
+                return;
+            }
+        };
     let mut result = Err(BackendError::new(
         BackendErrorCode::Platform,
         "no Linux audio backend is available",
@@ -328,9 +418,7 @@ fn run_audio_thread(
             &host,
             backend,
             preferred_device_name.as_deref(),
-            &consumer,
-            &progress,
-            &writer,
+            &frame_tx,
             &stop,
             &runtime_error,
         ) {
@@ -351,6 +439,8 @@ fn run_audio_thread(
             stream
         }
         Err(error) => {
+            drop(frame_tx);
+            let _ = processor.finish();
             let _ = startup.send(Err(error));
             return;
         }
@@ -359,6 +449,8 @@ fn run_audio_thread(
         std::thread::park_timeout(std::time::Duration::from_millis(25));
     }
     drop(stream);
+    drop(frame_tx);
+    let _ = processor.finish();
 }
 
 #[cfg(target_os = "linux")]
@@ -374,9 +466,7 @@ fn try_start_audio_stream(
     host: &cpal::Host,
     backend: &str,
     preferred_device_name: Option<&str>,
-    consumer: &Arc<dyn AudioConsumer>,
-    progress: &Arc<dyn RecordingProgressSink>,
-    writer: &Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+    frame_tx: &SyncSender<RawAudioFrame>,
     stop: &Arc<std::sync::atomic::AtomicBool>,
     runtime_error: &Arc<std::sync::Mutex<Option<BackendError>>>,
 ) -> Result<cpal::Stream, BackendError> {
@@ -398,9 +488,7 @@ fn try_start_audio_stream(
         sample_format,
         input_sample_rate,
         channels,
-        Arc::clone(consumer),
-        Arc::clone(progress),
-        writer.clone(),
+        frame_tx.clone(),
         Arc::clone(stop),
         Arc::clone(runtime_error),
     )?;
@@ -446,9 +534,7 @@ fn build_input_stream(
     sample_format: cpal::SampleFormat,
     input_sample_rate: u32,
     channels: usize,
-    consumer: Arc<dyn AudioConsumer>,
-    progress: Arc<dyn RecordingProgressSink>,
-    writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+    frame_tx: SyncSender<RawAudioFrame>,
     stop: Arc<std::sync::atomic::AtomicBool>,
     runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
 ) -> Result<cpal::Stream, BackendError> {
@@ -456,38 +542,45 @@ fn build_input_stream(
 
     macro_rules! make_stream {
         ($sample:ty, $to_f32:expr) => {{
-            let consumer = Arc::clone(&consumer);
-            let progress = Arc::clone(&progress);
+            let frame_tx = frame_tx.clone();
             let stop_for_error = Arc::clone(&stop);
-            let runtime_error = Arc::clone(&runtime_error);
-            let writer = writer.clone();
-            let started = std::time::Instant::now();
-            let mut normalizer = openless_core::PcmNormalizer::default();
+            let stop_for_callback = Arc::clone(&stop);
+            let runtime_error_for_callback = Arc::clone(&runtime_error);
+            let runtime_error_for_error = Arc::clone(&runtime_error);
             device
                 .build_input_stream::<$sample, _, _>(
                     *config,
                     move |data: &[$sample], _| {
+                        if stop_for_callback.load(std::sync::atomic::Ordering::Acquire) {
+                            return;
+                        }
                         let samples = data.iter().copied().map($to_f32).collect::<Vec<f32>>();
-                        if let Some(chunk) =
-                            normalizer.process(&samples, channels, input_sample_rate)
-                        {
-                            consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                            if let Some(writer) = &writer {
-                                if let Err(error) = writer
+                        match frame_tx.try_send(RawAudioFrame {
+                            samples,
+                            channels,
+                            input_sample_rate,
+                        }) {
+                            Ok(()) => {}
+                            Err(TrySendError::Disconnected(_)) => {
+                                stop_for_callback.store(true, std::sync::atomic::Ordering::Release);
+                            }
+                            Err(TrySendError::Full(_)) => {
+                                stop_for_callback.store(true, std::sync::atomic::Ordering::Release);
+                                let mut slot = runtime_error_for_callback
                                     .lock()
-                                    .expect("Linux WAV writer lock poisoned")
-                                    .append(&chunk.pcm_i16_le)
-                                {
-                                    log::warn!("Linux recording archive write failed: {error}");
+                                    .expect("Linux recorder error lock poisoned");
+                                if slot.is_none() {
+                                    *slot = Some(BackendError::new(
+                                        BackendErrorCode::Platform,
+                                        "Linux audio processing queue overflow",
+                                    ));
                                 }
                             }
-                            let _ = progress
-                                .publish_level(started.elapsed().as_millis() as u64, chunk.level);
                         }
                     },
                     move |error| {
                         let error = classify_audio_error("input stream", error.to_string());
-                        let mut slot = runtime_error
+                        let mut slot = runtime_error_for_error
                             .lock()
                             .expect("Linux recorder error lock poisoned");
                         if slot.is_none() {

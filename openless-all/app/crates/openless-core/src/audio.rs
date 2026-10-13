@@ -9,6 +9,95 @@ pub struct NormalizedPcmChunk {
     pub level: f32,
 }
 
+/// Session-frozen processing choices for native microphone input.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AudioProcessingConfig {
+    pub enhancement_enabled: bool,
+}
+
+/// Small, deterministic microphone enhancement that does not require a model
+/// or a platform-specific audio dependency.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AudioEnhancer {
+    enabled: bool,
+}
+
+impl AudioEnhancer {
+    const INPUT_GAIN: f32 = 1.5;
+    const SOFT_CLIP_KNEE: f32 = 0.75;
+
+    pub fn new(config: AudioProcessingConfig) -> Self {
+        Self {
+            enabled: config.enhancement_enabled,
+        }
+    }
+
+    pub fn reset(&mut self) {}
+
+    pub fn process_in_place(&mut self, samples: &mut [f32]) {
+        if !self.enabled {
+            return;
+        }
+        for sample in samples {
+            let boosted = if sample.is_finite() {
+                *sample * Self::INPUT_GAIN
+            } else {
+                0.0
+            };
+            *sample = Self::soft_clip(boosted);
+        }
+    }
+
+    fn soft_clip(sample: f32) -> f32 {
+        let sample = sample.clamp(-1.0, 1.0);
+        let magnitude = sample.abs();
+        if magnitude <= Self::SOFT_CLIP_KNEE {
+            return sample;
+        }
+        let normalized = (magnitude - Self::SOFT_CLIP_KNEE) / (1.0 - Self::SOFT_CLIP_KNEE);
+        let eased = normalized * normalized * (3.0 - 2.0 * normalized);
+        sample.signum() * (Self::SOFT_CLIP_KNEE + (1.0 - Self::SOFT_CLIP_KNEE) * eased)
+    }
+}
+
+/// Shared stateful processor used by native microphone hosts.
+#[derive(Debug)]
+pub struct AudioProcessor {
+    normalizer: PcmNormalizer,
+    enhancer: AudioEnhancer,
+}
+
+impl AudioProcessor {
+    pub fn new(config: AudioProcessingConfig) -> Self {
+        Self {
+            normalizer: PcmNormalizer::default(),
+            enhancer: AudioEnhancer::new(config),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.normalizer = PcmNormalizer::default();
+        self.enhancer.reset();
+    }
+
+    pub fn process(
+        &mut self,
+        interleaved: &[f32],
+        channels: usize,
+        input_sample_rate: u32,
+    ) -> Option<NormalizedPcmChunk> {
+        if !self.enhancer.enabled {
+            return self
+                .normalizer
+                .process(interleaved, channels, input_sample_rate);
+        }
+        let mut enhanced = interleaved.to_vec();
+        self.enhancer.process_in_place(&mut enhanced);
+        self.normalizer
+            .process(&enhanced, channels, input_sample_rate)
+    }
+}
+
 /// Stateful interleaved-audio normalizer.
 ///
 /// Native adapters convert their device sample format to `f32` and pass each
@@ -178,6 +267,68 @@ mod tests {
         assert!(normalizer.process(&[], 1, 48_000).is_none());
         assert!(normalizer.process(&[0.0], 0, 48_000).is_none());
         assert!(normalizer.process(&[0.0], 1, 0).is_none());
+    }
+
+    #[test]
+    fn enhancement_boosts_quiet_samples_and_soft_clips_loud_samples() {
+        let mut enhancer = AudioEnhancer::new(AudioProcessingConfig {
+            enhancement_enabled: true,
+        });
+        let mut samples = [0.5, -0.5, 1.0, -1.0];
+        enhancer.process_in_place(&mut samples);
+        assert_eq!(samples[0], 0.75);
+        assert_eq!(samples[1], -0.75);
+        assert_eq!(samples[2], 1.0);
+        assert_eq!(samples[3], -1.0);
+    }
+
+    #[test]
+    fn enhancement_replaces_non_finite_samples_and_stays_in_range() {
+        let mut enhancer = AudioEnhancer::new(AudioProcessingConfig {
+            enhancement_enabled: true,
+        });
+        let mut samples = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 2.0, -2.0];
+        enhancer.process_in_place(&mut samples);
+        assert!(samples.iter().all(|sample| sample.is_finite()));
+        assert!(samples.iter().all(|sample| (-1.0..=1.0).contains(sample)));
+        assert_eq!(samples[0], 0.0);
+    }
+
+    #[test]
+    fn processor_disabled_output_matches_normalizer() {
+        let input = [0.0, 1.0, 0.5, -0.5];
+        let mut processor = AudioProcessor::new(AudioProcessingConfig::default());
+        let mut normalizer = PcmNormalizer::default();
+        assert_eq!(
+            processor.process(&input, 2, DICTATION_SAMPLE_RATE),
+            normalizer.process(&input, 2, DICTATION_SAMPLE_RATE)
+        );
+    }
+
+    #[test]
+    fn processor_enhancement_preserves_canonical_output_contract() {
+        let mut processor = AudioProcessor::new(AudioProcessingConfig {
+            enhancement_enabled: true,
+        });
+        let output = processor
+            .process(&[0.25, -0.25, 0.5, -0.5], 1, DICTATION_SAMPLE_RATE)
+            .unwrap();
+        assert!(output.pcm_i16_le.len().is_multiple_of(2));
+        assert!(output.level.is_finite());
+        assert!((0.0..=1.0).contains(&output.level));
+        assert_eq!(
+            decode(&output.pcm_i16_le),
+            vec![12287, -12287, 24575, -24575]
+        );
+    }
+
+    #[test]
+    fn processor_reset_discards_resampling_state() {
+        let mut processor = AudioProcessor::new(AudioProcessingConfig::default());
+        let _ = processor.process(&[0.0, 1.0], 1, 8_000);
+        processor.reset();
+        let output = processor.process(&[0.0, 1.0], 1, 8_000).unwrap();
+        assert_eq!(decode(&output.pcm_i16_le), vec![0, 16383, 32767]);
     }
 
     #[test]
