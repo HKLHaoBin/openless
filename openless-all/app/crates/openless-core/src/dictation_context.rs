@@ -200,6 +200,10 @@ pub struct DictationContext {
     /// preserve the start-time resolution failure instead of using a disabled
     /// channel or silently selecting a newly configured provider.
     pub deferred_llm_error: Option<crate::errors::BackendError>,
+    /// Preserve the selected polish style while plain dictation temporarily
+    /// uses Raw because its LLM channel is not configured. The capture can be
+    /// retargeted to a destination that still requires polish before stopping.
+    pub(crate) unconfigured_llm_raw: Option<(PolishMode, String)>,
     pub omni: ProviderInvocation,
     pub polish: DictationPolishContext,
     pub insertion: DictationInsertionContext,
@@ -321,6 +325,7 @@ impl DictationContext {
             asr,
             llm,
             deferred_llm_error: None,
+            unconfigured_llm_raw: None,
             omni,
             polish: DictationPolishContext {
                 mode: style_pack.base_mode,
@@ -427,11 +432,26 @@ impl DictationContext {
                 next.recording.archive_required = true;
             }
         }
+        next.restore_or_apply_unconfigured_llm_raw();
         next
     }
 
     fn normal_archive_successful_recording(&self) -> bool {
         self.normal_archive_successful_recording
+    }
+
+    fn restore_or_apply_unconfigured_llm_raw(&mut self) {
+        let Some((mode, prompt)) = self.unconfigured_llm_raw.clone() else {
+            return;
+        };
+        if self.is_plain_dictation_output() && !self.polish.translation_active {
+            self.polish.mode = PolishMode::Raw;
+            self.polish.style_system_prompt =
+                crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw);
+        } else {
+            self.polish.mode = mode;
+            self.polish.style_system_prompt = prompt;
+        }
     }
 
     pub fn effective_polish_prompts(&self, raw_text: &str) -> (String, String) {
@@ -516,6 +536,22 @@ impl DictationContext {
             &updated.polish.translation_target_language,
             &updated.polish.working_languages,
         );
+        updated.restore_or_apply_unconfigured_llm_raw();
+        updated
+    }
+
+    /// Mark this session as using Raw only because its LLM channel is not
+    /// configured. Keep the original style so a later destination change can
+    /// restore the polish path.
+    pub(crate) fn with_unconfigured_llm_raw(&self) -> Self {
+        let mut updated = self.clone();
+        if updated.unconfigured_llm_raw.is_none() {
+            updated.unconfigured_llm_raw = Some((
+                updated.polish.mode,
+                updated.polish.style_system_prompt.clone(),
+            ));
+        }
+        updated.restore_or_apply_unconfigured_llm_raw();
         updated
     }
 
@@ -789,6 +825,45 @@ mod tests {
         assert!(quick_note.recording.archive_successful_recording);
         assert!(ordinary.insertion.enabled);
         assert_eq!(ordinary.output_target, DictationOutputTarget::ForegroundApp);
+    }
+
+    #[test]
+    fn missing_llm_raw_fallback_restores_polish_for_retargeted_cloud_note() {
+        let context = DictationContext::default();
+        let original_mode = context.polish.mode;
+        let original_prompt = context.polish.style_system_prompt.clone();
+
+        let raw = context.with_unconfigured_llm_raw();
+        assert_eq!(raw.polish.mode, PolishMode::Raw);
+        assert!(!raw.uses_llm_polisher());
+
+        let cloud_note = raw.with_output_target(DictationOutputTarget::CloudNote);
+        assert_eq!(cloud_note.polish.mode, original_mode);
+        assert_eq!(cloud_note.polish.style_system_prompt, original_prompt);
+        assert!(cloud_note.uses_llm_polisher());
+
+        let ordinary = cloud_note.with_output_target(DictationOutputTarget::ForegroundApp);
+        assert_eq!(ordinary.polish.mode, PolishMode::Raw);
+        assert!(!ordinary.uses_llm_polisher());
+    }
+
+    #[test]
+    fn missing_llm_raw_fallback_restores_polish_for_translation() {
+        let mut context = DictationContext::default();
+        context.polish.translation_target_language = "English".to_string();
+        context.polish.working_languages = vec!["中文".to_string(), "English".to_string()];
+        let original_mode = context.polish.mode;
+        let raw = context.with_unconfigured_llm_raw();
+
+        let translated = raw.with_translation_requested(true);
+        assert!(translated.polish.translation_active);
+        assert_eq!(translated.polish.mode, original_mode);
+        assert!(translated.uses_llm_polisher());
+
+        let ordinary = translated.with_translation_requested(false);
+        assert!(!ordinary.polish.translation_active);
+        assert_eq!(ordinary.polish.mode, PolishMode::Raw);
+        assert!(!ordinary.uses_llm_polisher());
     }
 
     #[test]

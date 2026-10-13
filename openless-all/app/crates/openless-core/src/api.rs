@@ -7194,16 +7194,16 @@ impl OpenLessBackend {
             options,
         );
         context.pipeline_mode = pipeline_mode;
-        // Issue #1032: when the LLM channel is not configured, run the dictation
-        // as Raw instead of dispatching a polish request that cannot succeed. This
-        // skips polish, streaming and the polishFailed record. A configured channel
-        // whose call fails still takes the polish fallback path below.
+        // Issue #1032: when the LLM channel is not configured, mark the
+        // session as eligible for the Raw fallback instead of dispatching a
+        // polish request that cannot succeed. The context keeps its original
+        // style until the destination is known, so a later Cloud Note or
+        // translation choice can still take the polish path. A configured
+        // channel whose call fails still takes the polish fallback path below.
         if purpose == DictationContextPurpose::Dictation
             && traditional
             && deferred_llm_error.is_none()
             && context.uses_llm_polisher()
-            && context.is_plain_dictation_output()
-            && !context.polish.translation_active
             && !crate::cloud_providers::llm_channel_configured(
                 self.deps.credential_store.as_ref(),
                 &context.llm.provider_id,
@@ -7212,7 +7212,7 @@ impl OpenLessBackend {
             )
             .await
         {
-            context = context.with_raw_requested(true);
+            context = context.with_unconfigured_llm_raw();
         }
         if let Some(error) = deferred_llm_error {
             if purpose != DictationContextPurpose::Dictation || context.uses_llm_polisher() {
