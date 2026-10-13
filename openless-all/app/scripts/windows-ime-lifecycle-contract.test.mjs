@@ -153,6 +153,32 @@ assert.match(
   'IME should learn when TSF ends the composition',
 );
 assert.match(
+  editSession,
+  /terminated_text_captured[\s\S]*current_text[\s\S]*!= composition_->terminated_text/,
+  'IME must preserve user edits made after TSF terminates a composition',
+);
+assert.match(
+  textService,
+  /ReadOpenLessRangeText\(edit_cookie, composition_->terminated_range[\s\S]*terminated_text/,
+  'IME must snapshot the terminated composition text before finalization',
+);
+assert.match(
+  textService,
+  /OnCompositionTerminated[\s\S]*terminated_text_captured = true/,
+  'IME must record whether the terminated composition snapshot was readable',
+);
+assert.match(
+  editSession,
+  /if \(!composition_->terminated_text_captured\)[\s\S]*ReadOpenLessRangeText\(edit_cookie, composition_->terminated_range[\s\S]*current_text != composition_->terminated_text[\s\S]*composition_->terminated_range->SetText\(/,
+  'IME must verify terminated-range ownership before replacing it with final text',
+);
+assert.match(
+  editSession,
+  /if \(!composition_->terminated_text_captured\)[\s\S]*?return kStatusCompositionConflict;/,
+  'IME must reject finalization when the terminated-range ownership snapshot is unavailable',
+);
+
+assert.match(
   textService,
   /kCopyDataUpdate[\s\S]*AcceptSubmit\(copy_data, OpenLessEditOp::kUpdate\)/,
   'IME should route composition updates through the submit pipeline',

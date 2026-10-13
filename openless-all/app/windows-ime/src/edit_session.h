@@ -15,6 +15,8 @@ struct OpenLessAsyncEditState {
   HRESULT result = E_PENDING;
 };
 
+HRESULT ReadOpenLessRangeText(TfEditCookie edit_cookie, ITfRange *range, std::wstring *text);
+
 // Owner-thread state of the live composition that shows the ASR transcript
 // while the user is still speaking. TSF can end the composition at any time
 // (the user clicks elsewhere), so `terminated` tells the next operation that
@@ -29,6 +31,10 @@ struct OpenLessCompositionState {
   // Range captured when TSF terminated the composition externally. It lets the
   // final edit replace the raw partial instead of appending a duplicate.
   ITfRange *terminated_range = nullptr;
+  // Text in the retained range when TSF terminated the composition. Finalization must not
+  // overwrite the range if the user changed it after termination.
+  std::wstring terminated_text;
+  bool terminated_text_captured = false;
   // Text covered by the selection when the composition was first primed. Cancel restores it.
   std::wstring original_text;
   bool original_text_captured = false;

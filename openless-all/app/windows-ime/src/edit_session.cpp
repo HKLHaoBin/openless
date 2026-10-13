@@ -6,6 +6,41 @@
 
 extern LONG g_object_count;
 
+namespace {
+constexpr HRESULT kStatusCompositionConflict = static_cast<HRESULT>(0x4F4C0007);
+}
+
+HRESULT ReadOpenLessRangeText(TfEditCookie edit_cookie, ITfRange *range, std::wstring *text) {
+  if (range == nullptr || text == nullptr) {
+    return E_INVALIDARG;
+  }
+
+  LONG range_start = 0;
+  LONG range_length = 0;
+  HRESULT hr = range->GetExtent(&range_start, &range_length);
+  if (FAILED(hr)) {
+    return hr;
+  }
+  UNREFERENCED_PARAMETER(range_start);
+  if (range_length < 0 || range_length > 16 * 1024 * 1024) {
+    return E_INVALIDARG;
+  }
+
+  text->assign(static_cast<size_t>(range_length), L'\0');
+  if (range_length == 0) {
+    return S_OK;
+  }
+
+  ULONG copied = 0;
+  hr = range->GetText(edit_cookie, 0, text->data(), static_cast<ULONG>(range_length), &copied);
+  if (FAILED(hr)) {
+    text->clear();
+    return hr;
+  }
+  text->resize(copied);
+  return S_OK;
+}
+
 void OpenLessCompositionState::Reset() {
   if (composition != nullptr) {
     composition->Release();
@@ -21,6 +56,8 @@ void OpenLessCompositionState::Reset() {
   }
   started = false;
   terminated = false;
+  terminated_text.clear();
+  terminated_text_captured = false;
   original_text.clear();
   original_text_captured = false;
   owner_token = 0;
@@ -275,6 +312,27 @@ HRESULT OpenLessEditSession::CancelComposition(TfEditCookie edit_cookie) {
   if (FAILED(hr)) {
     return hr;
   }
+  if (!active) {
+    if (!composition_->terminated_text_captured) {
+      range->Release();
+      // The range contents are unknown, so preserve them rather than restoring over them.
+      composition_->Reset();
+      return S_OK;
+    }
+    std::wstring current_text;
+    hr = ReadOpenLessRangeText(edit_cookie, range, &current_text);
+    if (FAILED(hr)) {
+      range->Release();
+      return hr;
+    }
+    if (current_text != composition_->terminated_text) {
+      // The user edited the range after TSF terminated the composition. Preserve their edit
+      // instead of restoring the original selection over it.
+      range->Release();
+      composition_->Reset();
+      return S_OK;
+    }
+  }
 
   hr = range->SetText(edit_cookie, 0, composition_->original_text.c_str(),
                       static_cast<LONG>(composition_->original_text.size()));
@@ -306,8 +364,25 @@ HRESULT OpenLessEditSession::FinishComposition(TfEditCookie edit_cookie) {
   }
   if (composition_->composition == nullptr) {
     if (composition_->terminated && composition_->terminated_range != nullptr) {
-      HRESULT hr = composition_->terminated_range->SetText(
-          edit_cookie, 0, text_.c_str(), static_cast<LONG>(text_.size()));
+      if (!composition_->terminated_text_captured) {
+        // The final text cannot safely replace a range whose ownership snapshot could not be read.
+        // Keep the retained range for an explicit Cancel cleanup and report a composition conflict;
+        // returning success here would make the caller believe the final text was committed.
+        return kStatusCompositionConflict;
+      }
+      std::wstring current_text;
+      HRESULT hr = ReadOpenLessRangeText(edit_cookie, composition_->terminated_range, &current_text);
+      if (FAILED(hr)) {
+        return hr;
+      }
+      if (current_text != composition_->terminated_text) {
+        // TSF ended the composition and the user changed the retained range. Their edit now
+        // owns the document, so preserve it and treat finalization as already settled.
+        composition_->Reset();
+        return S_OK;
+      }
+      hr = composition_->terminated_range->SetText(edit_cookie, 0, text_.c_str(),
+                                                   static_cast<LONG>(text_.size()));
       if (SUCCEEDED(hr) &&
           SUCCEEDED(composition_->terminated_range->Collapse(edit_cookie, TF_ANCHOR_END))) {
         TF_SELECTION selection = {};

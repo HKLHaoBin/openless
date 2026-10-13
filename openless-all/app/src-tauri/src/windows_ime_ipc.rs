@@ -127,9 +127,9 @@ struct ImeWindow {
     thread_id: u32,
 }
 
-/// Prefer the IME window on the target thread. Ordinary commits may use another window in the
-/// same process, but composition operations must stay on the captured TSF thread because the
-/// native service resolves its focused document manager from its own thread manager.
+/// Prefer the IME window on the captured target thread. A request cannot use another UI thread's
+/// service: the native service resolves its focused document manager from its own thread manager,
+/// so a same-process fallback could insert into the wrong document.
 fn select_ime_window(
     target: ImeSubmitTarget,
     windows: &[ImeWindow],
@@ -326,11 +326,7 @@ mod windows_message {
             )));
         }
 
-        let window = find_ime_window_with_retry(
-            target,
-            request.op == crate::windows_ime_protocol::ImeSubmitOp::Commit
-                || request.allow_same_process_fallback,
-        )?;
+        let window = find_ime_window_with_retry(target, request.allow_same_process_fallback)?;
         log::debug!(
             "[windows-ime] submitting text to IME window pid={} tid={}",
             window.process_id,
@@ -539,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn same_process_window_is_used_when_target_thread_has_none() {
+    fn same_process_window_is_used_only_for_explicit_recovery() {
         let target = ImeSubmitTarget {
             process_id: 1234,
             thread_id: 5678,
@@ -547,6 +543,7 @@ mod tests {
         };
         let windows = [window(1, 4321, 5678), window(2, 1234, 9999)];
         assert_eq!(select_ime_window(target, &windows, true), Some(windows[1]));
+        assert_eq!(select_ime_window(target, &windows, false), None);
         assert_eq!(select_ime_window(target, &windows[..1], true), None);
     }
 

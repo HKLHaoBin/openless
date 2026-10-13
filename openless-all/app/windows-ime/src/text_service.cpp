@@ -173,15 +173,22 @@ STDMETHODIMP OpenLessTextService::Deactivate() {
 
 STDMETHODIMP OpenLessTextService::OnCompositionTerminated(TfEditCookie edit_cookie,
                                                           ITfComposition *composition) {
-  UNREFERENCED_PARAMETER(edit_cookie);
   if (composition_ && composition_->composition == composition) {
     if (composition_->terminated_range != nullptr) {
       composition_->terminated_range->Release();
       composition_->terminated_range = nullptr;
     }
+    composition_->terminated_text.clear();
+    composition_->terminated_text_captured = false;
     // Keep the range and context alive so the final edit can replace the raw
-    // partial after TSF terminates the composition externally.
-    (void)composition->GetRange(&composition_->terminated_range);
+    // partial after TSF terminates the composition externally. Snapshot the
+    // text as an ownership check: a later user edit must not be overwritten.
+    if (SUCCEEDED(composition->GetRange(&composition_->terminated_range)) &&
+        composition_->terminated_range != nullptr &&
+        SUCCEEDED(ReadOpenLessRangeText(edit_cookie, composition_->terminated_range,
+                                        &composition_->terminated_text))) {
+      composition_->terminated_text_captured = true;
+    }
     composition_->composition->Release();
     composition_->composition = nullptr;
     composition_->terminated = true;
