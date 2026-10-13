@@ -301,6 +301,10 @@ HRESULT OpenLessEditSession::CancelComposition(TfEditCookie edit_cookie) {
     range = composition_->terminated_range;
     range->AddRef();
   } else {
+    // TSF already ended the composition but did not leave a usable range. There is no safe
+    // document edit to reconcile; release the stale native ownership so a later cleanup attempt
+    // can observe a fresh state instead of retrying this permanently latched one.
+    composition_->Reset();
     return HRESULT_FROM_WIN32(ERROR_OPERATION_ABORTED);
   }
   if (FAILED(hr)) {

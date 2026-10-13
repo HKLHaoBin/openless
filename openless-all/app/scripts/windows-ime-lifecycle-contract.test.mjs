@@ -174,6 +174,11 @@ assert.match(
 );
 assert.match(
   editSession,
+  /else if \(composition_->terminated && composition_->terminated_range != nullptr\)[\s\S]*?else \{[\s\S]*?composition_->Reset\(\);[\s\S]*?return HRESULT_FROM_WIN32\(ERROR_OPERATION_ABORTED\);/,
+  'IME cancellation must release latched native state when TSF terminates without a usable range',
+);
+assert.match(
+  editSession,
   /if \(!composition_->terminated_text_captured\)[\s\S]*?return kStatusCompositionConflict;/,
   'IME must reject finalization when the terminated-range ownership snapshot is unavailable',
 );
