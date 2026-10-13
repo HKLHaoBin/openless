@@ -18,7 +18,7 @@ import {
   getCapsuleTranscriptRailHeight,
   parseCapsuleStyle,
 } from '../lib/capsuleLayout';
-import { isTauri } from '../lib/ipc';
+import { getCapsuleSnapshot, isTauri } from '../lib/ipc';
 import type {
   CapsulePayload,
   CapsuleState,
@@ -31,6 +31,7 @@ import { VocabSuggestionCard } from './VocabSuggestionCard';
 import { InsertFallbackCard } from './InsertFallbackCard';
 import {
   applyTranscriptEvent,
+  applyTranscriptSnapshot,
   beginTranscriptGeneration,
   clearTranscriptText,
   createTranscriptViewState,
@@ -765,8 +766,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     let cancelled = false;
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
-      const handle = await listen<CapsulePayload>('capsule:state', (event) => {
-        const p = event.payload;
+      const applyPayload = (p: CapsulePayload) => {
         if (!capsuleStateFirstLogged) {
           capsuleStateFirstLogged = true;
           // #470 diagnostics v2: confirm the capsule webview really received the backend
@@ -805,7 +805,21 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         if (style && !stylePreferenceReadyRef.current) setCapsuleStyle(style);
         if (p.insertedChars != null) insertedCharsRef.current = p.insertedChars;
         operatingRef.current = p.operating === true;
+      };
+      const handle = await listen<CapsulePayload>('capsule:state', (event) => {
+        applyPayload(event.payload);
       });
+      // Mirror windows (one per extra monitor) are created lazily and can mount after the
+      // last state event, so replay the native snapshot once subscribed to render current state.
+      const snapshot = await getCapsuleSnapshot().catch(() => null);
+      if (!cancelled && snapshot) {
+        applyPayload(snapshot);
+        const nextTranscript = applyTranscriptSnapshot(transcriptViewRef.current, snapshot);
+        if (nextTranscript !== transcriptViewRef.current) {
+          transcriptViewRef.current = nextTranscript;
+          setLocalAsrText(nextTranscript.text);
+        }
+      }
       const transcriptHandle = await listen<BackendEvent>('backend:event', (event) => {
         const next = applyTranscriptEvent(transcriptViewRef.current, event.payload);
         transcriptViewRef.current = next;
