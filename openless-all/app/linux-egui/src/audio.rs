@@ -44,6 +44,27 @@ struct RawAudioFrame {
 }
 
 #[cfg(target_os = "linux")]
+struct LinuxRecordingOptions {
+    preferred_device_name: Option<String>,
+    recordings_dir: Option<std::path::PathBuf>,
+    require_archive: bool,
+    mute_during_recording: bool,
+    audio_processing: openless_core::AudioProcessingConfig,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxAudioThreadArgs {
+    preferred_device_name: Option<String>,
+    consumer: Arc<dyn AudioConsumer>,
+    progress: Arc<dyn RecordingProgressSink>,
+    writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
+    audio_processing: openless_core::AudioProcessingConfig,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
+    startup: std::sync::mpsc::SyncSender<Result<(), BackendError>>,
+}
+
+#[cfg(target_os = "linux")]
 struct AudioProcessingWorker {
     join_handle: Option<JoinHandle<()>>,
 }
@@ -134,11 +155,13 @@ impl AudioRecorder for LinuxCpalRecorder {
                 tokio::task::spawn_blocking(move || {
                     start_linux_recording(
                         session_id,
-                        preferred_device_name,
-                        recordings_dir,
-                        require_archive,
-                        mute_during_recording,
-                        audio_processing,
+                        LinuxRecordingOptions {
+                            preferred_device_name,
+                            recordings_dir,
+                            require_archive,
+                            mute_during_recording,
+                            audio_processing,
+                        },
                         consumer,
                         progress,
                     )
@@ -273,15 +296,19 @@ impl ActiveRecording for LinuxActiveRecording {
 #[cfg(target_os = "linux")]
 fn start_linux_recording(
     session_id: SessionId,
-    preferred_device_name: Option<String>,
-    recordings_dir: Option<std::path::PathBuf>,
-    require_archive: bool,
-    mute_during_recording: bool,
-    audio_processing: openless_core::AudioProcessingConfig,
+    options: LinuxRecordingOptions,
     consumer: Arc<dyn AudioConsumer>,
     progress: Arc<dyn RecordingProgressSink>,
 ) -> Result<Box<dyn ActiveRecording>, BackendError> {
     use std::sync::atomic::AtomicBool;
+
+    let LinuxRecordingOptions {
+        preferred_device_name,
+        recordings_dir,
+        require_archive,
+        mute_during_recording,
+        audio_processing,
+    } = options;
 
     // Mute is best-effort and independent of capture availability (mirrors the
     // Tauri reference): if it fails we log and continue recording. If capture
@@ -331,16 +358,16 @@ fn start_linux_recording(
     let thread = std::thread::Builder::new()
         .name("openless-linux-recorder".to_string())
         .spawn(move || {
-            run_audio_thread(
+            run_audio_thread(LinuxAudioThreadArgs {
                 preferred_device_name,
                 consumer,
                 progress,
                 writer,
                 audio_processing,
-                stop_for_thread,
-                runtime_error_for_thread,
-                startup_tx,
-            );
+                stop: stop_for_thread,
+                runtime_error: runtime_error_for_thread,
+                startup: startup_tx,
+            });
         })
         .map_err(|error| {
             BackendError::new(
@@ -374,16 +401,17 @@ fn start_linux_recording(
 }
 
 #[cfg(target_os = "linux")]
-fn run_audio_thread(
-    preferred_device_name: Option<String>,
-    consumer: Arc<dyn AudioConsumer>,
-    progress: Arc<dyn RecordingProgressSink>,
-    writer: Option<Arc<std::sync::Mutex<LinuxWavWriter>>>,
-    audio_processing: openless_core::AudioProcessingConfig,
-    stop: Arc<std::sync::atomic::AtomicBool>,
-    runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
-    startup: std::sync::mpsc::SyncSender<Result<(), BackendError>>,
-) {
+fn run_audio_thread(args: LinuxAudioThreadArgs) {
+    let LinuxAudioThreadArgs {
+        preferred_device_name,
+        consumer,
+        progress,
+        writer,
+        audio_processing,
+        stop,
+        runtime_error,
+        startup,
+    } = args;
     let (processor, frame_tx) =
         match AudioProcessingWorker::start(audio_processing, consumer, progress, writer) {
             Ok(worker) => worker,
