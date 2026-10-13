@@ -114,6 +114,16 @@ assert.match(
 // update, and end it inside edit sessions, underline it, and learn when TSF ends it.
 assert.match(
   editSession,
+  /HRESULT OpenLessEditSession::GetSelectionRange[\s\S]*?InsertTextAtSelection\([\s\S]*?TF_IAS_QUERYONLY/,
+  'IME should obtain a host-adjusted insertion range without modifying the document',
+);
+assert.match(
+  editSession,
+  /UpdateComposition[\s\S]*?SetText\([\s\S]*?Collapse\(edit_cookie, TF_ANCHOR_END\)[\s\S]*?context_->SetSelection/,
+  'IME composition updates should keep the host selection at the end of the live text',
+);
+assert.match(
+  editSession,
   /context_composition->StartComposition\(/,
   'IME should open the live transcript as a TSF composition',
 );
@@ -181,6 +191,11 @@ assert.match(
   editSession,
   /if \(!composition_->terminated_text_captured\)[\s\S]*?return kStatusCompositionConflict;/,
   'IME must reject finalization when the terminated-range ownership snapshot is unavailable',
+);
+assert.match(
+  editSession,
+  /current_text != composition_->terminated_text[\s\S]*?return kStatusCompositionConflict;/,
+  'IME must reject finalization when the user edits a terminated composition range',
 );
 
 assert.match(

@@ -3582,6 +3582,12 @@ impl CoreTextInserter for TauriTextInserter {
             });
             #[cfg(target_os = "windows")]
             if session.context.insertion.composition_input {
+                log::info!(
+                    "[core-adapter] TSF composition enabled mode={:?} target={:?} stable_transcription={}",
+                    session.context.insertion.windows_insertion_mode,
+                    session.composition_target(),
+                    session.context.recording.transcribe_after_stop,
+                );
                 // Re-activate the captured control immediately before the posted native prime. The
                 // DLL also validates the captured focus handle at dispatch time, so a focus change
                 // during the IPC round-trip cannot prime a different document.
@@ -3589,7 +3595,15 @@ impl CoreTextInserter for TauriTextInserter {
                     log::warn!("[core-adapter] could not reactivate TSF composition target: {error}");
                 } else if let Err(error) = session.update_composition_text(String::new()).await {
                     log::warn!("[core-adapter] could not prime TSF composition context: {error}");
+                } else {
+                    log::info!("[core-adapter] TSF composition context primed");
                 }
+            } else {
+                log::info!(
+                    "[core-adapter] TSF composition disabled mode={:?} stable_transcription={}",
+                    session.context.insertion.windows_insertion_mode,
+                    session.context.recording.transcribe_after_stop,
+                );
             }
             Ok(session as Arc<dyn TextInsertionSession>)
         })
@@ -3866,7 +3880,7 @@ impl TauriTextInsertionSession {
         if self.composition.broken.load(Ordering::Acquire) {
             return Err(BackendError::new(
                 BackendErrorCode::Platform,
-                "the host ended the composition",
+                "the previous TSF composition submit failed",
             ));
         }
         if self.composition_conflicted() {

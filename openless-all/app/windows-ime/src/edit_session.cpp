@@ -196,18 +196,25 @@ HRESULT OpenLessEditSession::InsertText(TfEditCookie edit_cookie) {
 
 HRESULT OpenLessEditSession::GetSelectionRange(TfEditCookie edit_cookie, ITfRange **range) {
   *range = nullptr;
-  TF_SELECTION selection = {};
-  ULONG fetched = 0;
-  const HRESULT hr =
-      context_->GetSelection(edit_cookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
+  if (context_ == nullptr) {
+    return E_UNEXPECTED;
+  }
+
+  ITfInsertAtSelection *insert_at_selection = nullptr;
+  HRESULT hr = context_->QueryInterface(IID_ITfInsertAtSelection,
+                                        reinterpret_cast<void **>(&insert_at_selection));
   if (FAILED(hr)) {
     return hr;
   }
-  if (fetched == 0 || selection.range == nullptr) {
+
+  // Ask the host text store for the insertion range without changing its contents. This is more
+  // reliable than using the raw selection for controls that normalize or virtualize selections.
+  hr = insert_at_selection->InsertTextAtSelection(edit_cookie, TF_IAS_QUERYONLY, nullptr, 0, range);
+  insert_at_selection->Release();
+  if (SUCCEEDED(hr) && *range == nullptr) {
     return E_FAIL;
   }
-  *range = selection.range; // Owned by the caller.
-  return S_OK;
+  return hr;
 }
 
 HRESULT OpenLessEditSession::UpdateComposition(TfEditCookie edit_cookie) {
@@ -275,6 +282,14 @@ HRESULT OpenLessEditSession::UpdateComposition(TfEditCookie edit_cookie) {
   hr = range->SetText(edit_cookie, 0, text_.c_str(), static_cast<LONG>(text_.size()));
   if (SUCCEEDED(hr)) {
     ApplyOpenLessInputDisplayAttribute(edit_cookie, context_, range);
+    hr = range->Collapse(edit_cookie, TF_ANCHOR_END);
+    if (SUCCEEDED(hr)) {
+      TF_SELECTION selection = {};
+      selection.range = range;
+      selection.style.ase = TF_AE_END;
+      selection.style.fInterimChar = FALSE;
+      hr = context_->SetSelection(edit_cookie, 1, &selection);
+    }
   }
   range->Release();
   return hr;
@@ -374,10 +389,9 @@ HRESULT OpenLessEditSession::FinishComposition(TfEditCookie edit_cookie) {
         return hr;
       }
       if (current_text != composition_->terminated_text) {
-        // TSF ended the composition and the user changed the retained range. Their edit now
-        // owns the document, so preserve it and treat finalization as already settled.
-        composition_->Reset();
-        return S_OK;
+        // TSF ended the composition and the user changed the retained range. Preserve their edit;
+        // the final transcript was not committed, so report a conflict instead of false success.
+        return kStatusCompositionConflict;
       }
       hr = composition_->terminated_range->SetText(edit_cookie, 0, text_.c_str(),
                                                    static_cast<LONG>(text_.size()));

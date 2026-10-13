@@ -268,13 +268,18 @@ assert.match(
 const insertAtSelectionCalls = imeEditSession.match(/\bInsertTextAtSelection\s*\(/g) ?? [];
 assert.equal(
   insertAtSelectionCalls.length,
-  1,
-  'IME should submit the dictated text to the host exactly once',
+  2,
+  'IME should query the host insertion range once and submit dictated text once',
 );
-assert.doesNotMatch(
+assert.match(
   imeEditSession,
-  /TF_IAS_QUERYONLY/,
-  'IME should not preflight the full text through host text stores before committing it',
+  /InsertTextAtSelection\(edit_cookie, TF_IAS_QUERYONLY, nullptr, 0, range\)/,
+  'IME should use the host-adjusted query-only range for composition start',
+);
+assert.match(
+  imeEditSession,
+  /InsertTextAtSelection\(\s*edit_cookie, 0, text_\.c_str\(\)/,
+  'IME should submit dictated text exactly once without a preflight write',
 );
 
 assert.match(

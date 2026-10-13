@@ -1647,6 +1647,12 @@ struct TranscriptProgressForwarder {
 
 impl TextStreamSink for TranscriptProgressForwarder {
     fn publish(&self, chunk: TextStreamChunk) -> Result<(), BackendError> {
+        log::info!(
+            "[transcript] partial emitted session={} offset={} chars={}",
+            self.session_id,
+            chunk.offset,
+            chunk.text.chars().count(),
+        );
         self.progress.publish(
             self.session_id,
             EngineProgress::TranscriptDelta(TranscriptDelta {

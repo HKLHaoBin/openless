@@ -20,37 +20,40 @@ void FillOpenLessInputDisplayAttribute(TF_DISPLAYATTRIBUTE *attribute) {
   attribute->bAttr = TF_ATTR_INPUT;
 }
 
-void ApplyOpenLessInputDisplayAttribute(TfEditCookie edit_cookie, ITfContext *context,
-                                        ITfRange *range) {
+HRESULT ApplyOpenLessInputDisplayAttribute(TfEditCookie edit_cookie, ITfContext *context,
+                                           ITfRange *range) {
   if (context == nullptr || range == nullptr) {
-    return;
+    return E_INVALIDARG;
   }
 
   ITfCategoryMgr *category_mgr = nullptr;
-  if (FAILED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_ITfCategoryMgr, reinterpret_cast<void **>(&category_mgr))) ||
-      category_mgr == nullptr) {
-    return;
+  HRESULT hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_ITfCategoryMgr,
+                                reinterpret_cast<void **>(&category_mgr));
+  if (FAILED(hr) || category_mgr == nullptr) {
+    return FAILED(hr) ? hr : E_UNEXPECTED;
   }
 
   TfGuidAtom atom = TF_INVALID_GUIDATOM;
   const HRESULT register_hr = category_mgr->RegisterGUID(GUID_OpenLessDisplayAttribute, &atom);
   category_mgr->Release();
   if (FAILED(register_hr) || atom == TF_INVALID_GUIDATOM) {
-    return;
+    return FAILED(register_hr) ? register_hr : E_FAIL;
   }
 
   ITfProperty *property = nullptr;
-  if (FAILED(context->GetProperty(GUID_PROP_ATTRIBUTE, &property)) || property == nullptr) {
-    return;
+  hr = context->GetProperty(GUID_PROP_ATTRIBUTE, &property);
+  if (FAILED(hr) || property == nullptr) {
+    return FAILED(hr) ? hr : E_UNEXPECTED;
   }
 
   VARIANT value;
   VariantInit(&value);
   value.vt = VT_I4;
   value.lVal = static_cast<LONG>(atom);
-  property->SetValue(edit_cookie, range, &value);
+  hr = property->SetValue(edit_cookie, range, &value);
   property->Release();
+  return hr;
 }
 
 OpenLessDisplayAttributeInfo::OpenLessDisplayAttributeInfo() {

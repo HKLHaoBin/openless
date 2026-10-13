@@ -47,6 +47,15 @@ impl ImeSubmitOp {
             Self::Cancel => IME_COPYDATA_CANCEL,
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Commit => "commit",
+            Self::Update => "update",
+            Self::Finish => "finish",
+            Self::Cancel => "cancel",
+        }
+    }
 }
 pub const IME_MAX_SUBMIT_BYTES: usize = 1024 * 1024;
 

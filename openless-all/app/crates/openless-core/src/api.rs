@@ -1967,12 +1967,19 @@ impl ActiveTextInsertion {
     /// Coalesces transcript partials: only the newest one matters, so a slow host
     /// never builds a backlog of stale compositions.
     fn push_partial(self: &Arc<Self>, text: String) {
+        let chars = text.chars().count();
         if !self.composition_input {
+            log::debug!("[insertion] partial ignored composition_disabled chars={chars}");
             return;
         }
         let should_spawn = {
             let mut state = self.state.lock().expect("text insertion lock poisoned");
             if state.partial_closed || state.partial_failed {
+                log::warn!(
+                    "[insertion] partial ignored closed={} failed={} chars={chars}",
+                    state.partial_closed,
+                    state.partial_failed,
+                );
                 return;
             }
             state.partial_pending = Some(text);
@@ -1983,6 +1990,7 @@ impl ActiveTextInsertion {
                 true
             }
         };
+        log::info!("[insertion] partial accepted chars={chars} scheduled={should_spawn}");
         if should_spawn {
             let insertion = Arc::clone(self);
             self.task_spawner
@@ -2009,8 +2017,10 @@ impl ActiveTextInsertion {
                     }
                 }
             };
+            let chars = next.chars().count();
+            log::info!("[insertion] composition update begin chars={chars}");
             if let Err(error) = self.platform.update_composition(next).await {
-                log::warn!("[insertion] composition update stopped: {error}");
+                log::warn!("[insertion] composition update stopped chars={chars}: {error}");
                 let mut state = self.state.lock().expect("text insertion lock poisoned");
                 state.partial_failed = true;
                 state.partial_pending = None;
@@ -2018,6 +2028,7 @@ impl ActiveTextInsertion {
                 self.drained.notify_waiters();
                 return;
             }
+            log::info!("[insertion] composition update complete chars={chars}");
         }
     }
 
@@ -2363,17 +2374,26 @@ impl EngineProgressSink for BackendEngineProgress {
                     accumulator.text().to_string()
                 };
                 let is_partial = !delta.is_final;
+                let transcript_chars = transcript.chars().count();
                 drop(state);
                 if is_partial {
-                    if let Some(insertion) = self
+                    let insertion = self
                         .text_insertions
                         .lock()
                         .expect("text insertion registry lock poisoned")
                         .get(&session_id)
                         .and_then(|preparation| preparation.peek())
                         .and_then(|result| result.as_ref().ok())
-                        .cloned()
-                    {
+                        .cloned();
+                    log::info!(
+                        "[transcript] partial routed session={} offset={} delta_chars={} accumulated_chars={} insertion_ready={}",
+                        session_id,
+                        delta.offset,
+                        delta.text.chars().count(),
+                        transcript_chars,
+                        insertion.is_some(),
+                    );
+                    if let Some(insertion) = insertion {
                         insertion.push_partial(transcript);
                     }
                 }

@@ -69,7 +69,8 @@ fn classify_submit_reply(reply: u32) -> WindowsImeIpcResult<()> {
                 .to_string(),
         )),
         IME_STATUS_BAD_REQUEST => Err(WindowsImeIpcError::Protocol(
-            "IME rejected the submit payload".to_string(),
+            "IME rejected the submit payload; the target process may still have an older OpenLessIme.dll loaded; restart the target app after updating OpenLess"
+                .to_string(),
         )),
         code if is_failed_hresult(code) => Err(WindowsImeIpcError::Io(format!(
             "IME could not queue the submit: hresult:0x{code:08X}"
@@ -327,10 +328,18 @@ mod windows_message {
         }
 
         let window = find_ime_window_with_retry(target, request.allow_same_process_fallback)?;
-        log::debug!(
-            "[windows-ime] submitting text to IME window pid={} tid={}",
+        log::info!(
+            "[windows-ime] submit begin op={} target_pid={} target_tid={} target_hwnd=0x{:X} ime_pid={} ime_tid={} owner={} process={} payload_bytes={} same_process_fallback={}",
+            request.op.label(),
+            target.process_id,
+            target.thread_id,
+            target.window_handle,
             window.process_id,
-            window.thread_id
+            window.thread_id,
+            request.composition_owner,
+            request.composition_process_id,
+            payload.len(),
+            request.allow_same_process_fallback,
         );
 
         let reply = send_copy_data(
@@ -351,6 +360,11 @@ mod windows_message {
                 WindowsImeIpcError::Io(format!("sending to the IME window failed: OS error {code}"))
             }
         })?;
+        log::info!(
+            "[windows-ime] submit ack op={} raw_status=0x{:08X}",
+            request.op.label(),
+            reply,
+        );
         classify_submit_reply(reply)?;
 
         let deadline = Instant::now() + IME_SUBMIT_TIMEOUT;
@@ -364,7 +378,17 @@ mod windows_message {
                 IME_QUERY_SEND_TIMEOUT_MS,
             ) {
                 Ok(reply) => {
+                    log::debug!(
+                        "[windows-ime] submit query op={} raw_status=0x{:08X}",
+                        request.op.label(),
+                        reply,
+                    );
                     if let Some(status) = classify_query_reply(reply)? {
+                        log::info!(
+                            "[windows-ime] submit complete op={} status={:?}",
+                            request.op.label(),
+                            status,
+                        );
                         return Ok(status);
                     }
                 }
@@ -390,16 +414,26 @@ mod windows_message {
     ) -> WindowsImeIpcResult<ImeWindow> {
         let deadline = Instant::now() + IME_CLIENT_WAIT_TIMEOUT;
         loop {
-            if let Some(window) = select_ime_window(
-                target,
-                &enumerate_ime_windows(),
+            let windows = enumerate_ime_windows();
+            log::debug!(
+                "[windows-ime] discover target_pid={} target_tid={} candidates={} same_process_fallback={}",
+                target.process_id,
+                target.thread_id,
+                windows.len(),
                 allow_same_process_fallback,
-            ) {
+            );
+            if let Some(window) = select_ime_window(target, &windows, allow_same_process_fallback) {
                 if window.thread_id != target.thread_id {
                     log::info!(
                         "[windows-ime] no IME window on target thread {}; using same-process thread {}",
                         target.thread_id,
                         window.thread_id
+                    );
+                } else {
+                    log::debug!(
+                        "[windows-ime] selected exact target thread pid={} tid={}",
+                        window.process_id,
+                        window.thread_id,
                     );
                 }
                 return Ok(window);
@@ -407,6 +441,12 @@ mod windows_message {
 
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
+                log::warn!(
+                    "[windows-ime] no message window for target_pid={} target_tid={} after {:?}",
+                    target.process_id,
+                    target.thread_id,
+                    IME_CLIENT_WAIT_TIMEOUT,
+                );
                 return Err(WindowsImeIpcError::NoReadyClient);
             }
             std::thread::sleep(remaining.min(IME_WINDOW_RETRY_INTERVAL));

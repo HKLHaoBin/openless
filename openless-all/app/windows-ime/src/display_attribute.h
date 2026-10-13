@@ -10,8 +10,8 @@ void FillOpenLessInputDisplayAttribute(TF_DISPLAYATTRIBUTE *attribute);
 
 // Sets GUID_PROP_ATTRIBUTE on `range` to the OpenLess input display attribute.
 // Failures only affect appearance; the composition text is still written.
-void ApplyOpenLessInputDisplayAttribute(TfEditCookie edit_cookie, ITfContext *context,
-                                        ITfRange *range);
+HRESULT ApplyOpenLessInputDisplayAttribute(TfEditCookie edit_cookie, ITfContext *context,
+                                           ITfRange *range);
 
 class OpenLessDisplayAttributeInfo final : public ITfDisplayAttributeInfo {
 public:
