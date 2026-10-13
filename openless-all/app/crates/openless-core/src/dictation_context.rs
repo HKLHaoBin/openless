@@ -135,6 +135,9 @@ pub struct DictationPolishContext {
     pub output_language_preference: OutputLanguagePreference,
     pub llm_thinking_enabled: bool,
     pub context_window_minutes: u32,
+    /// Transcripts with at most this many non-whitespace characters skip
+    /// polish (0 = off). See `DictationContext::skips_polish_for_short_text`.
+    pub polish_skip_max_chars: u32,
     pub front_app: Option<String>,
     pub cursor_context: Option<String>,
     /// Newest-first turns captured when the session starts.
@@ -333,6 +336,7 @@ impl DictationContext {
                 output_language_preference: preferences.output_language_preference,
                 llm_thinking_enabled: preferences.llm_thinking_enabled,
                 context_window_minutes: preferences.polish_context_window_minutes,
+                polish_skip_max_chars: preferences.polish_skip_max_chars,
                 front_app: options.front_app.clone().and_then(non_blank_owned),
                 cursor_context: options.cursor_context.clone().and_then(non_blank_owned),
                 prior_turns,
@@ -475,6 +479,34 @@ impl DictationContext {
                 || self.polish.mode != PolishMode::Raw
                 || self.polish.style_system_prompt
                     != crate::style_packs::default_style_system_prompt_for_mode(PolishMode::Raw))
+    }
+
+    /// Plain dictation whose polished text is simply inserted or saved. Voice Edit
+    /// needs the LLM's draft, Cloud Note delivers polished output, and Q&A never
+    /// polishes; those keep their existing LLM semantics (issue #1032).
+    pub(crate) fn is_plain_dictation_output(&self) -> bool {
+        matches!(
+            self.output_target,
+            DictationOutputTarget::ForegroundApp
+                | DictationOutputTarget::QuickNote
+                | DictationOutputTarget::Undecided
+        ) && !self.polish.edit_plan_input
+            && !self.polish.selection_input
+    }
+
+    /// Issue #1032: a short transcript (at most `polish_skip_max_chars`
+    /// non-whitespace characters) is inserted as raw ASR text without an LLM
+    /// call. Translation is never skipped because its output language differs
+    /// from the transcript. A threshold of 0 disables the rule.
+    pub fn skips_polish_for_short_text(&self, transcript: &str) -> bool {
+        if self.polish.polish_skip_max_chars == 0
+            || self.polish.translation_active
+            || !self.is_plain_dictation_output()
+        {
+            return false;
+        }
+        let chars = transcript.chars().filter(|c| !c.is_whitespace()).count();
+        chars <= self.polish.polish_skip_max_chars as usize
     }
 
     pub(crate) fn with_translation_requested(&self, requested: bool) -> Self {
@@ -757,5 +789,34 @@ mod tests {
         assert!(quick_note.recording.archive_successful_recording);
         assert!(ordinary.insertion.enabled);
         assert_eq!(ordinary.output_target, DictationOutputTarget::ForegroundApp);
+    }
+
+    #[test]
+    fn short_text_polish_skip_respects_threshold_and_translation() {
+        let mut context = DictationContext::default();
+
+        // 0 disables the rule entirely.
+        context.polish.polish_skip_max_chars = 0;
+        assert!(!context.skips_polish_for_short_text("确定"));
+
+        context.polish.polish_skip_max_chars = 4;
+        // Whitespace is not counted: "a b c d" is 4 characters.
+        assert!(context.skips_polish_for_short_text("a b c d"));
+        // Exactly at the limit skips; one over does not.
+        assert!(context.skips_polish_for_short_text("确定重试"));
+        assert!(!context.skips_polish_for_short_text("确定重试好"));
+
+        // Translation output differs from the transcript, so it is never skipped.
+        context.polish.translation_active = true;
+        assert!(!context.skips_polish_for_short_text("确定"));
+
+        // Voice Edit and Cloud Note depend on the LLM output; only plain dictation skips.
+        context.polish.translation_active = false;
+        context.output_target = DictationOutputTarget::VoiceEdit;
+        assert!(!context.skips_polish_for_short_text("确定"));
+        context.output_target = DictationOutputTarget::CloudNote;
+        assert!(!context.skips_polish_for_short_text("确定"));
+        context.output_target = DictationOutputTarget::ForegroundApp;
+        assert!(context.skips_polish_for_short_text("确定"));
     }
 }

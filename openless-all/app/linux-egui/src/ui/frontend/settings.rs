@@ -2101,6 +2101,20 @@ fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
+            let skip_max = vm.settings.polish_skip_max_chars.clone();
+            text_edit_row(
+                ui,
+                tr_l10n(lang, "settings.recording.polish_skip_max_chars_label"),
+                tr_l10n(lang, "settings.recording.polish_skip_max_chars_desc"),
+                &mut vm.settings.polish_skip_max_chars,
+                "0",
+                || {
+                    actions.push(FrontendAction::SettingsText(
+                        SettingsTextField::PolishSkipMaxChars,
+                        skip_max,
+                    ));
+                },
+            );
         },
     );
 }

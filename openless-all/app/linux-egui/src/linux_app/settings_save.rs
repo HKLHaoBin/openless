@@ -491,6 +491,13 @@ impl OpenLessEguiApp {
 
                 self.frontend_vm.settings.polish_context_window = parsed.to_string();
             }
+            frontend::view_model::SettingsTextField::PolishSkipMaxChars => {
+                // Issue #1032: 0 = off. Cap at 50 to keep the skip limited to short fragments.
+                let parsed = text.trim().parse::<u32>().unwrap_or(0).min(50);
+                preferences.polish_skip_max_chars = parsed;
+
+                self.frontend_vm.settings.polish_skip_max_chars = parsed.to_string();
+            }
             frontend::view_model::SettingsTextField::AudioRecordingMaxEntries => {
                 preferences.audio_recording_max_entries = text
                     .trim()
@@ -704,6 +711,7 @@ mod tests {
         draft.selection_polish_output_mode =
             openless_core::shared_types::SelectionPolishOutputMode::PreviewConfirm;
         draft.polish_context_window_minutes = 17;
+        draft.polish_skip_max_chars = 8;
         draft.audio_recording_max_entries = Some(19);
         draft.coding_agent_enabled = !initial.coding_agent_enabled;
         draft.coding_agent_provider = "codex-cli".into();
