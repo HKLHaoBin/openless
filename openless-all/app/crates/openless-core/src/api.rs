@@ -6434,6 +6434,12 @@ impl OpenLessBackend {
         }
 
         let insert_outcome = if context.insertion.enabled {
+            log::info!(
+                "[insert-diagnostics] session_id={} attempt=1 final_chars={} final_hash={}",
+                session_id,
+                engine_result.polished_text.chars().count(),
+                crate::output_cleaning::privacy_text_hash(&engine_result.polished_text),
+            );
             match self
                 .finish_text_insertion(session_id, engine_result.polished_text.clone())
                 .await
@@ -6465,6 +6471,13 @@ impl OpenLessBackend {
         } else {
             None
         };
+        if let Some(outcome) = insert_outcome {
+            log::info!(
+                "[insert-diagnostics] session_id={} attempt=1 outcome={:?}",
+                session_id,
+                outcome,
+            );
+        }
         let result = DictationResult {
             session_id,
             raw_text: engine_result.raw_text.clone(),

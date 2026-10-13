@@ -816,6 +816,50 @@ impl DictationEngine for PipelineDictationEngine {
                 )?;
             }
 
+            if uses_polisher {
+                let findings =
+                    crate::output_cleaning::find_adjacent_near_duplicates(&polish_output.text);
+                let finding_summary = findings
+                    .iter()
+                    .map(|finding| {
+                        format!(
+                            "{}x{}:{:.4}/{:.4}",
+                            finding.left_chars,
+                            finding.right_chars,
+                            finding.similarity,
+                            finding.length_adjusted_similarity
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                log::info!(
+                    "[polish-diagnostics] session_id={} raw_chars={} raw_hash={} final_chars={} final_hash={} near_duplicate_count={} near_duplicates={} polish_failed={} provider={} model={}",
+                    session_id,
+                    transcript.text.chars().count(),
+                    crate::output_cleaning::privacy_text_hash(&transcript.text),
+                    polish_output.text.chars().count(),
+                    crate::output_cleaning::privacy_text_hash(&polish_output.text),
+                    findings.len(),
+                    finding_summary,
+                    polish_failed,
+                    polish_output
+                        .llm_call_label
+                        .as_ref()
+                        .map_or("", |label| label.provider.as_str()),
+                    polish_output
+                        .llm_call_label
+                        .as_ref()
+                        .map_or("", |label| label.model.as_str()),
+                );
+                if !findings.is_empty() {
+                    log::warn!(
+                        "[polish-diagnostics] adjacent near-duplicate output detected for session_id={} count={}",
+                        session_id,
+                        findings.len()
+                    );
+                }
+            }
+
             remove_session(&sessions, session_id, &session);
             Ok(EngineResult {
                 raw_text: transcript.text,

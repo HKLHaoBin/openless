@@ -649,11 +649,12 @@ impl OpenAICompatibleLLMProvider {
         );
         let messages = build_polish_history_messages(&system_prompt, prior_turns, &user_prompt);
         log::info!(
-            "[llm] polish_streaming provider={} model={} prior_turns={} raw_chars={}",
+            "[llm] polish_streaming provider={} model={} prior_turns={} raw_chars={} raw_hash={}",
             self.config.provider_id,
             self.config.model,
             prior_turns.len(),
-            raw_text.chars().count()
+            raw_text.chars().count(),
+            privacy_text_hash(raw_text)
         );
         self.chat_completion_messages_streaming(
             messages,
@@ -852,10 +853,16 @@ impl OpenAICompatibleLLMProvider {
         body: &serde_json::Value,
         budget: Duration,
     ) -> Result<String, LLMError> {
-        match tokio::time::timeout(budget, self.send_chat_request_inner(url, body)).await {
+        let request_id = uuid::Uuid::new_v4();
+        match tokio::time::timeout(
+            budget,
+            self.send_chat_request_inner(url, body, budget, request_id),
+        )
+        .await
+        {
             Ok(result) => result,
             Err(_) => {
-                log::error!("[llm] request timed out after {budget:?}");
+                log::error!("[llm] request_id={} timed out after {budget:?}", request_id);
                 Err(LLMError::Timeout)
             }
         }
@@ -865,6 +872,8 @@ impl OpenAICompatibleLLMProvider {
         &self,
         url: &str,
         body: &serde_json::Value,
+        _budget: Duration,
+        request_id: uuid::Uuid,
     ) -> Result<String, LLMError> {
         self.config
             .protocol
@@ -887,7 +896,12 @@ impl OpenAICompatibleLLMProvider {
 
         let preview_end = BODY_PREVIEW_LIMIT.min(body_text.len());
         let preview = safe_str_slice(&body_text, preview_end);
-        log::info!("[llm] HTTP {} body={}", status.as_u16(), preview);
+        log::info!(
+            "[llm] request_id={} HTTP {} response_bytes={}",
+            request_id,
+            status.as_u16(),
+            body_text.len()
+        );
 
         if !status.is_success() {
             return Err(LLMError::InvalidResponse {
@@ -896,7 +910,23 @@ impl OpenAICompatibleLLMProvider {
             });
         }
 
-        crate::llm_protocol::extract_text(self.config.protocol.format, &body_text)
+        let extracted =
+            crate::llm_protocol::extract_text_raw(self.config.protocol.format, &body_text)?;
+        let cleaned = clean_polish_output(&extracted);
+        log::info!(
+            "[llm] request_id={} response provider={} model={} protocol={:?} extracted_chars={} extracted_hash={} cleaned_chars={} cleaned_hash={} extracted_near_duplicates={} cleaned_near_duplicates={}",
+            request_id,
+            self.config.provider_id,
+            self.config.model,
+            self.config.protocol.format,
+            extracted.chars().count(),
+            privacy_text_hash(&extracted),
+            cleaned.chars().count(),
+            privacy_text_hash(&cleaned),
+            find_adjacent_near_duplicates(&extracted).len(),
+            find_adjacent_near_duplicates(&cleaned).len(),
+        );
+        Ok(cleaned)
     }
 
     /// QA shares protocol decoding with polish, but QA keeps the configured
@@ -957,10 +987,12 @@ impl OpenAICompatibleLLMProvider {
             })
             .map_err(|error| LLMError::ParseError(error.message))?;
         let url = self.config.protocol.format.url(&self.config.base_url)?;
+        let request_id = uuid::Uuid::new_v4();
         let body = self.chat_body(true, messages);
         log::info!(
-            "[llm] POST {} provider={} model={} format={:?} stream=true",
+            "[llm] POST {} request_id={} provider={} model={} format={:?} stream=true",
             crate::net::sanitized_url_for_logs(&url),
+            request_id,
             self.config.provider_id,
             self.config.model,
             self.config.protocol.format
@@ -1001,6 +1033,7 @@ impl OpenAICompatibleLLMProvider {
         }
         let mut events = TextEventStream::new(self.config.protocol.format);
         let mut full_text = String::new();
+        let mut delta_count = 0usize;
         let mut cancelled = false;
         while !events.done {
             if should_cancel() {
@@ -1033,10 +1066,12 @@ impl OpenAICompatibleLLMProvider {
                 if let StreamEvent::Text(delta) = event {
                     if full_text.is_empty() {
                         log::info!(
-                            "[llm] first content delta after {:.2}s",
+                            "[llm] request_id={} first content delta after {:.2}s",
+                            request_id,
                             started.elapsed().as_secs_f64()
                         );
                     }
+                    delta_count += 1;
                     full_text.push_str(&delta);
                     on_delta(&delta);
                 }
@@ -1048,10 +1083,18 @@ impl OpenAICompatibleLLMProvider {
         if !cancelled {
             events.finish()?;
         }
+        let cleaned = clean_polish_output(&full_text);
         log::info!(
-            "[llm] stream done; cancelled={} chars={}",
+            "[llm] stream done request_id={} cancelled={} delta_count={} extracted_chars={} extracted_hash={} cleaned_chars={} cleaned_hash={} extracted_near_duplicates={} cleaned_near_duplicates={}",
+            request_id,
             cancelled,
-            full_text.chars().count()
+            delta_count,
+            full_text.chars().count(),
+            privacy_text_hash(&full_text),
+            cleaned.chars().count(),
+            privacy_text_hash(&cleaned),
+            find_adjacent_near_duplicates(&full_text).len(),
+            find_adjacent_near_duplicates(&cleaned).len(),
         );
         if full_text.is_empty() {
             return Err(LLMError::InvalidResponse {
@@ -2110,6 +2153,11 @@ fn openai_chat_reasoning_effort(model: &str, thinking_enabled: bool) -> Option<&
 }
 
 pub(crate) fn extract_assistant_content(body: &str) -> Result<String, LLMError> {
+    let content = extract_assistant_content_raw(body)?;
+    Ok(clean_polish_output(&content))
+}
+
+pub(crate) fn extract_assistant_content_raw(body: &str) -> Result<String, LLMError> {
     let json: Value = serde_json::from_str(body)
         .map_err(|e| LLMError::ParseError(format!("not valid JSON: {}", e)))?;
     let choices = json
@@ -2124,7 +2172,7 @@ pub(crate) fn extract_assistant_content(body: &str) -> Result<String, LLMError> 
         .and_then(|m| m.get("content"))
         .and_then(|c| c.as_str())
         .ok_or_else(|| LLMError::ParseError("message.content is not a string".into()))?;
-    Ok(clean_polish_output(content))
+    Ok(content.to_string())
 }
 
 pub mod prompts {
