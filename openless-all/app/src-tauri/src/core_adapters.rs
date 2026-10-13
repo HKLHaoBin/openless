@@ -3901,6 +3901,7 @@ impl TauriTextInsertionSession {
                 .submit_composition_outcome(
                     crate::windows_ime_protocol::ImeSubmitOp::Update,
                     text.clone(),
+                    false,
                 )
                 .await
             {
