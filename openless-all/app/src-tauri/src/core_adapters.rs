@@ -1087,7 +1087,11 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
                 "selectionPolishSelectionTooLong",
             ));
         }
-        let validation = crate::selection::validate_selection_insertion_target(target, source_text);
+        let validation = crate::selection::validate_selection_insertion_target_for_apply(
+            target,
+            source_text,
+            reactivate,
+        );
         if let Some(code) = validation.error_code() {
             let error_code = match validation {
                 crate::selection::SelectionInsertionTargetValidation::TargetUnavailable => {

@@ -486,6 +486,38 @@ pub(crate) fn validate_selection_insertion_target(
     }
 }
 
+/// Validate the target immediately before applying a selection replacement.
+///
+/// Preview confirmation has already restored the captured Windows target and must not send a
+/// second Ctrl+C: some hosts collapse the active selection when they receive that synthetic copy.
+/// When the focused control cannot expose a stable UI Automation text selection, fail closed
+/// rather than risk replacing a newer selection in the same control. Direct replacement keeps
+/// the full clipboard-based selection-content check because it has no confirmation step.
+pub(crate) fn validate_selection_insertion_target_for_apply(
+    target: &SelectionInsertionTarget,
+    expected_selection: &str,
+    preview_confirm: bool,
+) -> SelectionInsertionTargetValidation {
+    #[cfg(target_os = "windows")]
+    if preview_confirm {
+        if !selection_insertion_target_is_current(target) {
+            return SelectionInsertionTargetValidation::TargetChanged;
+        }
+        if !crate::host_document::focused_selection_matches(expected_selection) {
+            return SelectionInsertionTargetValidation::SelectionChanged;
+        }
+        if !selection_insertion_target_is_current(target) {
+            return SelectionInsertionTargetValidation::TargetChanged;
+        }
+        return SelectionInsertionTargetValidation::Valid;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    let _ = preview_confirm;
+
+    validate_selection_insertion_target(target, expected_selection)
+}
+
 /// macOS only: re-read the full current selection (trimmed, not head/tail truncated)
 /// for validate to compare against expected_selection. A truncated stand-in must not
 /// compare equal to the live selection, or paste would delete the omitted middle.
@@ -506,8 +538,8 @@ fn read_selection_for_validation() -> Option<String> {
 
 /// Return focus to the original selection target after the preview is confirmed. The preview
 /// window allows editing, so at confirm time it is necessarily no longer the original app's
-/// foreground window; restore the original target first, then run the strict selection validation
-/// above, avoiding a blind paste.
+/// foreground window; restore the original target first, then apply the platform-appropriate
+/// final validation before inserting.
 pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionTarget) -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -1663,5 +1695,25 @@ mod tests {
                 windows: Some(windows_target(10)),
             }
         ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn preview_apply_uses_target_fingerprint_without_reading_selection() {
+        let target = SelectionInsertionTarget { windows: None };
+        assert_eq!(
+            validate_selection_insertion_target_for_apply(&target, "source", true),
+            SelectionInsertionTargetValidation::TargetChanged
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn direct_apply_still_requires_full_target_validation() {
+        let target = SelectionInsertionTarget { windows: None };
+        assert_eq!(
+            validate_selection_insertion_target_for_apply(&target, "source", false),
+            SelectionInsertionTargetValidation::TargetUnavailable
+        );
     }
 }

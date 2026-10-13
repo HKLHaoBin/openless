@@ -73,6 +73,36 @@ fn with_voice_edit_uia<T>(
     }
 }
 
+pub(crate) fn focused_selection_matches(expected: &str) -> bool {
+    with_voice_edit_uia(|uia| unsafe {
+        let element = uia
+            .GetFocusedElement()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let pattern =
+            match element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) {
+                Ok(pattern) => pattern,
+                Err(_) => return Ok(false),
+            };
+        let ranges = pattern
+            .GetSelection()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        if ranges
+            .Length()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?
+            != 1
+        {
+            return Ok(false);
+        }
+        let selected = ranges
+            .GetElement(0)
+            .and_then(|range| range.GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32))
+            .map_err(|_| "selectionTargetUnavailable".to_string())?
+            .to_string();
+        Ok(selected.trim() == expected.trim())
+    })
+    .unwrap_or(false)
+}
+
 unsafe fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>> {
     use windows::Win32::System::Ole::{
         SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
