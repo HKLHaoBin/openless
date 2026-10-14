@@ -1586,6 +1586,15 @@ export const es: typeof zhCN = {
       audioRecordingMaxEntriesLabel: 'Máximo de grabaciones originales',
       audioRecordingMaxEntriesDesc:
         'Máximo de archivos WAV guardados en el dispositivo. Vacío = 200.',
+      voiceActivationLabel: 'Activación por voz',
+      voiceActivationDesc: 'Escucha localmente una frase de activación para iniciar el dictado.',
+      voiceActivationLocalOnly: 'El reconocimiento permanece en este dispositivo; el audio de espera no se sube ni se archiva.',
+      voiceActivationWakeEnabled: 'Frase de activación',
+      voiceActivationWakePhrase: 'Frase de activación',
+      voiceActivationFinishEnabled: 'Frase de finalización',
+      voiceActivationFinishPhrase: 'Frase de finalización',
+      voiceActivationTimeoutEnabled: 'Detener al agotarse el tiempo',
+      voiceActivationTimeoutSeconds: 'Tiempo de espera (segundos)',
       startupGroupTitle: 'Inicio',
       startMinimizedLabel: 'Iniciar minimizado (sin ventana principal)',
       startMinimizedDesc:

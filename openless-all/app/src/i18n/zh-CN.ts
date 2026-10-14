@@ -1418,6 +1418,16 @@ export const zhCN = {
       lowLatencyDictationLabel: '低延迟录音',
       lowLatencyDictationDesc:
         '保持麦克风流就绪，并在内存中保留最多 500 毫秒音频，减少按下热键后第一句话被漏识别的情况。确认录音前不会保存或上传音频；此模式会增加功耗并保持系统麦克风指示灯亮起。',
+      voiceActivationLabel: '语音唤醒听写',
+      voiceActivationDesc:
+        '仅在 Windows 桌面端启用本地语音命令唤醒听写。待机音频只在内存中处理，不会上传或保存；会增加功耗并保持麦克风指示灯亮起。',
+      voiceActivationLocalOnly: '本地识别：说“开始语音录入”开始，说“完成语音录入”结束。需要已安装本地 Zipformer 模型。',
+      voiceActivationWakeEnabled: '启用开始命令',
+      voiceActivationWakePhrase: '开始命令',
+      voiceActivationFinishEnabled: '启用完成命令',
+      voiceActivationFinishPhrase: '完成命令',
+      voiceActivationTimeoutEnabled: '超时自动结束',
+      voiceActivationTimeoutSeconds: '超时秒数',
       muteDuringRecordingLabel: '录音时静音',
       muteDuringRecordingDesc: '录音期间临时静音系统输出，避免扬声器回音。',
       audioCueLabel: '录音提示音',
