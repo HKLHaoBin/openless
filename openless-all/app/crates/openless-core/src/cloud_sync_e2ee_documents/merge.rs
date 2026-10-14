@@ -27,6 +27,7 @@ pub enum ConflictReason {
 #[serde(rename_all = "camelCase")]
 pub struct RedactedConflict {
     pub conflict_id: String,
+    pub document_id: String,
     pub kind: DocumentKind,
     pub reason: ConflictReason,
     pub is_credential_unit: bool,
@@ -233,6 +234,7 @@ pub fn diff_sync_documents(
         };
         preview.conflicts.push(RedactedConflict {
             conflict_id: conflict_id.clone(),
+            document_id: key.id.clone(),
             kind: key.kind,
             reason,
             is_credential_unit: key.kind == DocumentKind::Channels,
@@ -275,10 +277,11 @@ pub fn diff_sync_documents(
             );
             let conflict_id = conflict_id(&DocumentKey {
                 kind: DocumentKind::Channels,
-                id,
+                id: id.clone(),
             });
             preview.conflicts.push(RedactedConflict {
                 conflict_id: conflict_id.clone(),
+                document_id: id,
                 kind: DocumentKind::Channels,
                 reason: if baseline.is_some() {
                     ConflictReason::BothModified

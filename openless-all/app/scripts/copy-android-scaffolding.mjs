@@ -59,6 +59,7 @@ const KOTLIN_FILES = [
   'OpenLessUpdateInstaller.kt',
   'OpenLessContentReader.kt',
   'OpenLessContentWriter.kt',
+  'OpenLessMigrationBundlePolicy.kt',
   'OpenLessImeService.kt',
   'PendingEditReplacement.kt',
   'ImeLearningPolicy.kt',
@@ -90,6 +91,7 @@ const KOTLIN_TEST_FILES = [
   'ImePrivacyPolicyTest.kt',
   'LatinInputModeTest.kt',
   'OpenLessContentReaderTest.kt',
+  'OpenLessMigrationBundleContractTest.kt',
   'OpenLessCredentialCipherTest.kt',
   'OpenLessShizukuBridgeTest.kt',
   'OpenLessAccessibilityResultTest.kt',
@@ -102,6 +104,7 @@ const KOTLIN_TEST_FILES = [
 const KOTLIN_ANDROID_TEST_FILES = [
   'OpenLessCredentialVaultInstrumentedTest.kt',
   'ImeLearningMigrationTest.kt',
+  'OpenLessMigrationBundleInstrumentedTest.kt',
 ];
 
 const XML_FILES = [
