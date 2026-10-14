@@ -164,6 +164,21 @@ function transcript(view, sequence, text, sessionId = 'session') {
   release(view);
 }
 
+// The subscription wrapper must forward and clear the fallback payload unchanged.
+{
+  const view = mount({ snapshot: () => frame() });
+  await until(() => view.values.setState === 'recording');
+  const fallback = { text: 'copied text', reason: 'target unavailable' };
+  view.emit('insert:fallback', fallback);
+  assert.equal(view.values.setInsertFallback, fallback);
+  view.emit('insert:fallback', null);
+  assert.equal(view.values.setInsertFallback, null);
+  const lateEvent = view.listeners.get('insert:fallback');
+  release(view);
+  lateEvent({ payload: fallback });
+  assert.equal(view.values.setInsertFallback, null);
+}
+
 // Real state and transcript events must survive an older in-flight snapshot.
 {
   const pending = deferred();
