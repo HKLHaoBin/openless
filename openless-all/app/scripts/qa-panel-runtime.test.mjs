@@ -270,6 +270,27 @@ await test('polish preview expands native window after payload arrives', async (
   );
   c.hooks.unmount();
 });
+await test('hide before preview payload cancels hydration and ignores the late response', async () => {
+  const c = context();
+  const initial = deferred();
+  const shown = deferred();
+  let request = 0;
+  c.pending.polishPreview = () => (request++ === 0 ? initial.promise : shown.promise);
+  c.render();
+  await tick();
+  const owner = { sessionId: 'session-a', generation: 4 };
+  c.emit('selection-polish-preview:shown', owner);
+  await tick();
+  c.emit('selection-polish-preview:hide', owner);
+  shown.resolve({ text: 'late result', sourceText: 'source', ...owner });
+  await tick();
+  assert.equal(
+    nodes(c.render()).some((n) => n.props.className === 'qa-polish-text'),
+    false,
+  );
+  assert.equal(c.calls.dismiss, 1);
+  c.hooks.unmount();
+});
 await test('polish confirmation submits edited text and retains it after a failed insert', async () => {
   const c = context();
   c.pending.polishPreview = () => ({ text: 'model result', sourceText: 'source text' });
@@ -314,6 +335,8 @@ await test('polish confirmation submits edited text and retains it after a faile
     nodes(c.render()).some((n) => n.props.className === 'qa-polish-text'),
     false,
   );
+  assert.equal(c.calls.dismiss, 1);
+  c.emit('selection-polish-preview:hide', {});
   assert.equal(c.calls.dismiss, 1);
   c.hooks.unmount();
 });

@@ -3156,13 +3156,15 @@ mod linux_app {
                         HostAction::RequestRestart => {
                             self.status = tr_l10n(lang, "status.request_restart").to_string();
                         }
-                        HostAction::ShowSelectionPreview => {
+                        HostAction::ShowSelectionPreview
+                        | HostAction::ShowSelectionPreviewFor(_) => {
                             // 核心照旧发这个动作；现在它只负责把**选区助手面板**
                             // 拉到「润色结果」模式（独立预览窗口已下线）。
                             self.polish_result_visible = true;
                             self.show_selection_popup();
                         }
-                        HostAction::HideSelectionPreview => {
+                        HostAction::HideSelectionPreview
+                        | HostAction::HideSelectionPreviewFor(_) => {
                             // 核心在润色流程收尾（直接覆盖 / 会话结束）时照旧发这个
                             // 动作。面板此刻若在提问对话中，不能被它关掉——只撤掉
                             // 润色结果模式。

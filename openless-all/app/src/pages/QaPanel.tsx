@@ -31,6 +31,7 @@ import {
   confirmSelectionVoicePreview,
   getSelectionPolishPreview,
   getSelectionVoicePreview,
+  type SelectionPolishPreviewOwner,
   isTauri,
   qaSetEditInstructionMode,
   qaSubmitText,
@@ -54,6 +55,13 @@ interface QaLevelPayload {
   sessionId: string;
   level: number;
 }
+type PolishResult = {
+  text: string;
+  sourceText: string;
+  owner: SelectionPolishPreviewOwner;
+};
+
+type PolishPreviewSignal = SelectionPolishPreviewOwner | null | undefined;
 
 export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {}) {
   const { t } = useTranslation();
@@ -72,9 +80,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
    * （原独立的 `selection-polish-preview` 窗口已下线）。可编辑结果，「确认并替换」
    * 将编辑后的文字写回原选区。
    */
-  const [polishResult, setPolishResult] = useState<{ text: string; sourceText: string } | null>(
-    null,
-  );
+  const [polishResult, setPolishResult] = useState<PolishResult | null>(null);
   const [polishError, setPolishError] = useState<string>('');
   const [polishBusy, setPolishBusy] = useState(false);
   const [level, setLevel] = useState(0);
@@ -84,22 +90,56 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const [modeBusy, setModeBusy] = useState(false);
   const [layoutError, setLayoutError] = useState(false);
   const activeSessionIdRef = useRef<string | null>(null);
+  const polishOwnerRef = useRef<SelectionPolishPreviewOwner | null>(null);
+  const polishLoadEpochRef = useRef(0);
   /** 供事件回调判断当前是否真的处于润色模式（长驻订阅闭包看不到最新 state）。 */
   const polishActiveRef = useRef(false);
-  polishActiveRef.current = polishResult !== null;
+  const polishDismissedOwnerRef = useRef<SelectionPolishPreviewOwner | null>(null);
+  polishActiveRef.current = polishResult !== null || polishOwnerRef.current !== null;
 
-  /**
-   * 拉一次润色负载。面板懒创建时 `selection-polish-preview:shown` 可能早于订阅
-   * 到达，所以挂载时也拉一次；后端用 pending 标志保证平时（无润色请求）返回 null。
-   */
-  const loadPolishResult = async () => {
-    try {
-      const payload = await getSelectionPolishPreview();
-      if (!payload) return;
-      setPolishResult({ text: payload.text, sourceText: payload.sourceText });
-      setPolishError('');
-    } catch (error) {
-      console.error('[QaPanel] load polish preview failed', error);
+  const polishOwnersMatch = (
+    expected: SelectionPolishPreviewOwner | null | undefined,
+    actual: SelectionPolishPreviewOwner,
+  ) =>
+    expected === null ||
+    expected === undefined ||
+    (expected.generation === actual.generation &&
+      (expected.sessionId === undefined || expected.sessionId === actual.sessionId));
+
+  /** Hydrate the current preview with a bounded retry and a request epoch guard. */
+  const loadPolishResult = async (expectedOwner?: PolishPreviewSignal) => {
+    const requestEpoch = ++polishLoadEpochRef.current;
+    if (expectedOwner !== undefined) {
+      polishOwnerRef.current = expectedOwner ?? null;
+      polishDismissedOwnerRef.current = null;
+    }
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (requestEpoch !== polishLoadEpochRef.current) return;
+      try {
+        const payload = await getSelectionPolishPreview(
+          expectedOwner?.generation === undefined ? undefined : expectedOwner,
+        );
+        if (requestEpoch !== polishLoadEpochRef.current) return;
+        if (payload) {
+          const owner: SelectionPolishPreviewOwner = {
+            sessionId: payload.sessionId,
+            generation: payload.generation,
+          };
+          if (!polishOwnersMatch(expectedOwner, owner)) return;
+          polishOwnerRef.current = owner;
+          polishDismissedOwnerRef.current = null;
+          setPolishResult({ text: payload.text, sourceText: payload.sourceText, owner });
+          setPolishError('');
+          return;
+        }
+      } catch (error) {
+        if (attempt === 4) {
+          console.error('[QaPanel] load polish preview failed', error);
+        }
+      }
+      if (attempt < 4) {
+        await new Promise((resolve) => setTimeout(resolve, 60 * (attempt + 1)));
+      }
     }
   };
   const loadPolishResultRef = useRef(loadPolishResult);
@@ -279,13 +319,36 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         // 「润色结果」模式的进入/退出复用本面板，与 egui 侧
         // `HostAction::ShowSelectionPreview` 的落点一致。
         handles.push(
-          await listen<unknown>('selection-polish-preview:shown', () => {
-            void loadPolishResultRef.current();
+          await listen<PolishPreviewSignal>('selection-polish-preview:shown', (event) => {
+            void loadPolishResultRef.current(event.payload);
           }),
-          await listen<unknown>('selection-polish-preview:hide', () => {
-            // 只有面板正处在润色模式时才收起它：提问对话中的面板不能被润色流程的
-            // 收尾动作一起关掉。
-            if (!polishActiveRef.current) return;
+          await listen<PolishPreviewSignal>('selection-polish-preview:hide', (event) => {
+            const owner = event.payload;
+            const currentOwner = polishOwnerRef.current;
+            const dismissedOwner = polishDismissedOwnerRef.current;
+            if (
+              (owner !== null &&
+                owner !== undefined &&
+                dismissedOwner !== null &&
+                polishOwnersMatch(owner, dismissedOwner) &&
+                polishOwnersMatch(dismissedOwner, owner)) ||
+              ((owner === null || owner === undefined) &&
+                currentOwner === null &&
+                dismissedOwner !== null) ||
+              ((owner === null || owner === undefined) && currentOwner?.generation !== undefined)
+            )
+              return;
+            if (
+              (!polishActiveRef.current && currentOwner === null) ||
+              (owner !== null &&
+                owner !== undefined &&
+                currentOwner !== null &&
+                !polishOwnersMatch(owner, currentOwner))
+            )
+              return;
+            polishLoadEpochRef.current += 1;
+            polishDismissedOwnerRef.current = owner ?? currentOwner;
+            polishOwnerRef.current = null;
             setPolishResult(null);
             setPolishError('');
             if (embeddedRef.current) onRequestCloseRef.current?.();
@@ -332,6 +395,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     })();
     return () => {
       cancelled = true;
+      polishLoadEpochRef.current += 1;
+      polishOwnerRef.current = null;
       handles.forEach((handle) => handle());
     };
   }, []);
@@ -348,6 +413,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     setComposerText('');
     setEditInstructionMode(false);
     setPolishResult(null);
+    polishOwnerRef.current = null;
+    polishLoadEpochRef.current += 1;
     setPolishError('');
     setEditApplyAvailable(false);
     setEditRevertAvailable(false);
@@ -599,7 +666,28 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   };
 
   // ── 润色结果模式：取消 / 确认并替换 ──────────────────────────────
-  const closePolishResult = () => {
+  const closePolishResult = (owner = polishOwnerRef.current) => {
+    const currentOwner = polishOwnerRef.current;
+    const dismissedOwner = polishDismissedOwnerRef.current;
+    if (
+      owner !== null &&
+      owner !== undefined &&
+      dismissedOwner !== null &&
+      polishOwnersMatch(owner, dismissedOwner) &&
+      polishOwnersMatch(dismissedOwner, owner)
+    )
+      return;
+    if (
+      owner !== null &&
+      owner !== undefined &&
+      currentOwner !== null &&
+      !polishOwnersMatch(owner, currentOwner)
+    )
+      return;
+    if (!polishActiveRef.current && currentOwner === null) return;
+    polishLoadEpochRef.current += 1;
+    polishDismissedOwnerRef.current = owner ?? currentOwner;
+    polishOwnerRef.current = null;
     setPolishResult(null);
     setPolishError('');
     if (embeddedRef.current) onRequestCloseRef.current?.();
@@ -608,31 +696,32 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
 
   const onPolishCancel = () => {
     if (polishBusy) return;
+    const owner = polishOwnerRef.current;
     setPolishBusy(true);
-    void cancelSelectionPolishPreview()
+    void cancelSelectionPolishPreview(owner)
+      .then(() => closePolishResult(owner))
       .catch((error) => {
-        console.error('[QaPanel] cancel selection polish failed', error);
+        setPolishError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => {
         setPolishBusy(false);
-        closePolishResult();
       });
   };
 
   /** 「确认并替换」= 把结果写回原选区的插入（Core `selection.confirm`）。 */
   const onPolishConfirm = () => {
     const text = polishResult?.text ?? '';
+    const owner = polishResult?.owner ?? polishOwnerRef.current;
     if (polishBusy || !text.trim()) return;
     setPolishBusy(true);
     setPolishError('');
-    void confirmSelectionPolishPreview(text)
-      .then(() => {
-        setPolishBusy(false);
-        closePolishResult();
-      })
+    void confirmSelectionPolishPreview(text, owner)
+      .then(() => closePolishResult(owner))
       .catch((error) => {
-        setPolishBusy(false);
         setPolishError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        setPolishBusy(false);
       });
   };
 

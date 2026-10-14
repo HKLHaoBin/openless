@@ -119,7 +119,7 @@ mod windows_ime_session;
 #[cfg(target_os = "windows")]
 mod windows_ime_target;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -138,16 +138,69 @@ pub(crate) const SELECTION_POLISH_PREVIEW_SHOWN: &str = "selection-polish-previe
 /// 让面板自行决定退出「润色结果」模式（它可能正处在提问对话中）。
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) const SELECTION_POLISH_PREVIEW_HIDE: &str = "selection-polish-preview:hide";
-/// 是否处于「润色结果」模式。`get_selection_polish_preview` 只在它为 true 时
-/// 返回负载：面板懒创建后挂载时也会拉一次，不能把残留的快照当成新请求。
-static SELECTION_POLISH_PREVIEW_PENDING: AtomicBool = AtomicBool::new(false);
+/// A preview owner prevents a delayed hide/confirm response from affecting a newer selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SelectionPolishPreviewOwner {
+    pub(crate) session_id: Option<openless_core::SessionId>,
+    pub(crate) generation: u64,
+}
+
+static SELECTION_POLISH_PREVIEW_LEASE: parking_lot::Mutex<Option<SelectionPolishPreviewOwner>> =
+    parking_lot::Mutex::new(None);
+static SELECTION_POLISH_PREVIEW_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn begin_selection_polish_preview(
+    session_id: Option<openless_core::SessionId>,
+) -> SelectionPolishPreviewOwner {
+    let owner = SelectionPolishPreviewOwner {
+        session_id,
+        generation: SELECTION_POLISH_PREVIEW_GENERATION.fetch_add(1, Ordering::SeqCst) + 1,
+    };
+    *SELECTION_POLISH_PREVIEW_LEASE.lock() = Some(owner);
+    owner
+}
+
+pub(crate) fn selection_polish_preview_owner() -> Option<SelectionPolishPreviewOwner> {
+    *SELECTION_POLISH_PREVIEW_LEASE.lock()
+}
 
 pub(crate) fn selection_polish_preview_pending() -> bool {
-    SELECTION_POLISH_PREVIEW_PENDING.load(Ordering::SeqCst)
+    SELECTION_POLISH_PREVIEW_LEASE.lock().is_some()
+}
+
+pub(crate) fn clear_selection_polish_preview_pending_for_owner(
+    owner: SelectionPolishPreviewOwner,
+) -> bool {
+    let mut lease = SELECTION_POLISH_PREVIEW_LEASE.lock();
+    if lease.as_ref() != Some(&owner) {
+        return false;
+    }
+    *lease = None;
+    true
+}
+
+pub(crate) fn clear_selection_polish_preview_pending_for_session(
+    session_id: Option<openless_core::SessionId>,
+) -> Option<SelectionPolishPreviewOwner> {
+    let mut lease = SELECTION_POLISH_PREVIEW_LEASE.lock();
+    let matches = match (
+        session_id,
+        lease.as_ref().and_then(|owner| owner.session_id),
+    ) {
+        (Some(expected), Some(actual)) => expected == actual,
+        (None, _) => lease.is_some(),
+        _ => false,
+    };
+    if !matches {
+        return None;
+    }
+    let owner = lease.take();
+    owner
 }
 
 pub(crate) fn clear_selection_polish_preview_pending() {
-    SELECTION_POLISH_PREVIEW_PENDING.store(false, Ordering::SeqCst);
+    let _ = clear_selection_polish_preview_pending_for_session(None);
 }
 
 #[cfg(target_os = "macos")]
@@ -2970,28 +3023,38 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     hide_chat_window_animated(app, "qa", &QA_PANEL_EPOCH);
 }
 
-/// 「润色结果」不再有独立窗口：复用选区助手（qa）面板切到润色模式。核心在
-/// 「预览确认」输出模式下照旧只发 `HostAction::ShowSelectionPreview`。
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
-    SELECTION_POLISH_PREVIEW_PENDING.store(true, Ordering::SeqCst);
+pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    session_id: Option<openless_core::SessionId>,
+) {
+    let owner = begin_selection_polish_preview(session_id);
     show_qa_window(app, "polish-preview");
-    // 面板可能是本次才懒创建（刚挂载，订阅还没装上）——它在挂载时也会自己
-    // 拉一次负载（见 `get_selection_polish_preview` 的 pending 门禁）。
-    let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_SHOWN, ());
+    // The event is only a wake-up signal. The QA panel also hydrates from the owner-aware
+    // command on mount, so a lazy WebView cannot lose the preview payload when this fires early.
+    let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_SHOWN, owner);
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
-pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
+pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(
+    _app: &AppHandle<R>,
+    _session_id: Option<openless_core::SessionId>,
+) {
+}
 
 /// 退出「润色结果」模式。是否顺带关掉面板交给前端：面板可能正处在提问对话中，
 /// 不能被润色流程的收尾动作一起关掉（与 egui 侧 `HideSelectionPreview` 一致）。
-pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
-    clear_selection_polish_preview_pending();
+pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    session_id: Option<openless_core::SessionId>,
+) {
+    let Some(owner) = clear_selection_polish_preview_pending_for_session(session_id) else {
+        return;
+    };
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let _ = app;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_HIDE, ());
+    let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_HIDE, owner);
 }
 
 const VOICE_EDIT_WINDOW_WIDTH: f64 = 480.0;

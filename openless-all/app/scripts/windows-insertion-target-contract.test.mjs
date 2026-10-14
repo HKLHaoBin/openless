@@ -74,8 +74,10 @@ assert.match(
 );
 assert.match(
   restoreTarget,
-  /return capture_windows_selection_target\(\)\.as_ref\(\) == Some\(&captured\);/,
+  /if capture_windows_selection_target\(\)\.as_ref\(\) == Some\(&captured\)/,
   'restoring a window must still verify the original window and control fingerprint',
 );
+assert.match(restoreTarget, /AttachThreadInput[\s\S]*?SetFocus\(focused\)/, 'restoring a window must restore the original focused child');
+assert.match(restoreTarget, /for attempt in 0\.\.20/, 'focus restoration must use bounded polling');
 
 console.log('Windows insertion target contract passed');

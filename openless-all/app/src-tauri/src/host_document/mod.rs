@@ -38,7 +38,9 @@ mod uia_text;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
-pub(crate) use windows::{focused_selection_matches, insert_with_delivery_check};
+pub(crate) use windows::{
+    focused_selection_status, insert_with_delivery_check, FocusedSelectionStatus,
+};
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{KeyboardDelivery, KeyboardDeliveryOutcome};

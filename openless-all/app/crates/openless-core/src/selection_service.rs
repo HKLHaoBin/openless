@@ -133,8 +133,11 @@ impl SelectionServiceInner {
             .await;
     }
 
-    fn hide_preview(&self) {
-        if let Err(error) = self.host_actions.request(HostAction::HideSelectionPreview) {
+    fn hide_preview(&self, session_id: Option<SessionId>) {
+        let action = session_id
+            .map(HostAction::HideSelectionPreviewFor)
+            .unwrap_or(HostAction::HideSelectionPreview);
+        if let Err(error) = self.host_actions.request(action) {
             log::warn!("failed to hide selection preview: {error}");
         }
     }
@@ -739,7 +742,7 @@ impl SelectionApi for SelectionService {
                         inner.set_preview(session_id, output.text)?;
                         inner
                             .host_actions
-                            .request(HostAction::ShowSelectionPreview)?;
+                            .request(HostAction::ShowSelectionPreviewFor(session_id))?;
                     }
                     SelectionPolishOutputMode::DirectReplace => {
                         inner.set_preview(session_id, output.text)?;
@@ -759,7 +762,7 @@ impl SelectionApi for SelectionService {
             .await;
             if result.is_err() && inner.fail_if_active(session_id) {
                 inner.cancel_runtime_best_effort(session_id).await;
-                inner.hide_preview();
+                inner.hide_preview(Some(session_id));
             }
             result
         })
@@ -782,7 +785,7 @@ impl SelectionApi for SelectionService {
             match result {
                 Ok(outcome) => {
                     inner.complete(session_id, outcome)?;
-                    inner.hide_preview();
+                    inner.hide_preview(Some(session_id));
                     Ok(())
                 }
                 Err(error) => {
@@ -793,7 +796,7 @@ impl SelectionApi for SelectionService {
                     // confirm button.
                     if inner.settle_confirm_failure(session_id, &error) {
                         inner.cancel_runtime_best_effort(session_id).await;
-                        inner.hide_preview();
+                        inner.hide_preview(Some(session_id));
                     }
                     Err(error)
                 }
@@ -829,7 +832,7 @@ impl SelectionApi for SelectionService {
                 Some(active_session.0),
                 BackendEventKind::SelectionStateChanged(active_session.1),
             );
-            inner.hide_preview();
+            inner.hide_preview(Some(active_session.0));
             let active_session = active_session.0;
             let polish_result = inner.polisher.cancel(active_session).await;
             let runtime_result = inner.runtime.cancel(active_session).await;

@@ -1075,11 +1075,27 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         replacement_text: &str,
         reactivate: bool,
     ) -> Result<InsertOutcome, BackendError> {
-        if reactivate && !crate::selection::reactivate_selection_insertion_target(target) {
-            return Err(BackendError::new(
-                BackendErrorCode::Platform,
-                "selectionPolishTargetUnavailable",
-            ));
+        if reactivate {
+            let reactivation =
+                crate::selection::reactivate_selection_insertion_target_detailed(target);
+            log::info!(
+                "[selection-polish] apply path=preview reactivation={} source_chars={} replacement_chars={}",
+                reactivation.as_str(),
+                source_text.chars().count(),
+                replacement_text.chars().count()
+            );
+            if !reactivation.succeeded() {
+                return Err(BackendError::new(
+                    BackendErrorCode::Platform,
+                    "selectionPolishTargetUnavailable",
+                ));
+            }
+        } else {
+            log::info!(
+                "[selection-polish] apply path=direct source_chars={} replacement_chars={}",
+                source_text.chars().count(),
+                replacement_text.chars().count()
+            );
         }
         if crate::selection::is_truncated_selection_stand_in(source_text) {
             return Err(BackendError::new(
@@ -1093,6 +1109,11 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             reactivate,
         );
         if let Some(code) = validation.error_code() {
+            log::info!(
+                "[selection-polish] apply validation={} path={}",
+                code,
+                if reactivate { "preview" } else { "direct" }
+            );
             let error_code = match validation {
                 crate::selection::SelectionInsertionTargetValidation::TargetUnavailable => {
                     BackendErrorCode::Platform
@@ -1117,11 +1138,17 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             ));
         }
         let preferences = self.preferences()?;
-        map_insert_status(crate::insertion::TextInserter::new().insert(
+        let mapped = map_insert_status(crate::insertion::TextInserter::new().insert(
             replacement_text,
             preferences.restore_clipboard_after_paste,
             preferences.paste_shortcut,
-        ))
+        ));
+        log::info!(
+            "[selection-polish] apply insertion_result={} path={}",
+            if mapped.is_ok() { "success" } else { "error" },
+            if reactivate { "preview" } else { "direct" }
+        );
+        mapped
     }
 }
 
@@ -4279,8 +4306,14 @@ impl HostActions for TauriHostActions {
         match action {
             HostAction::ShowMain | HostAction::FocusMain => crate::show_main_window(&app),
             HostAction::ShowDictationFeedback | HostAction::HideDictationFeedback => {}
-            HostAction::ShowSelectionPreview => crate::show_selection_polish_preview(&app),
-            HostAction::HideSelectionPreview => crate::hide_selection_polish_preview(&app),
+            HostAction::ShowSelectionPreview => crate::show_selection_polish_preview(&app, None),
+            HostAction::ShowSelectionPreviewFor(session_id) => {
+                crate::show_selection_polish_preview(&app, Some(session_id))
+            }
+            HostAction::HideSelectionPreview => crate::hide_selection_polish_preview(&app, None),
+            HostAction::HideSelectionPreviewFor(session_id) => {
+                crate::hide_selection_polish_preview(&app, Some(session_id))
+            }
             HostAction::ShowQa => {
                 self.qa_context.prepare_show();
                 crate::show_qa_window(&app, "idle");

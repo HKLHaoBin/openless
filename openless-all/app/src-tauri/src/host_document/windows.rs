@@ -73,7 +73,14 @@ fn with_voice_edit_uia<T>(
     }
 }
 
-pub(crate) fn focused_selection_matches(expected: &str) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FocusedSelectionStatus {
+    Matched,
+    Changed,
+    Unavailable,
+}
+
+pub(crate) fn focused_selection_status(expected: &str) -> FocusedSelectionStatus {
     with_voice_edit_uia(|uia| unsafe {
         let element = uia
             .GetFocusedElement()
@@ -81,7 +88,7 @@ pub(crate) fn focused_selection_matches(expected: &str) -> bool {
         let pattern =
             match element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) {
                 Ok(pattern) => pattern,
-                Err(_) => return Ok(false),
+                Err(_) => return Ok(FocusedSelectionStatus::Unavailable),
             };
         let ranges = pattern
             .GetSelection()
@@ -91,16 +98,20 @@ pub(crate) fn focused_selection_matches(expected: &str) -> bool {
             .map_err(|_| "selectionTargetUnavailable".to_string())?
             != 1
         {
-            return Ok(false);
+            return Ok(FocusedSelectionStatus::Unavailable);
         }
         let selected = ranges
             .GetElement(0)
             .and_then(|range| range.GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32))
             .map_err(|_| "selectionTargetUnavailable".to_string())?
             .to_string();
-        Ok(selected.trim() == expected.trim())
+        if selected.trim() == expected.trim() {
+            Ok(FocusedSelectionStatus::Matched)
+        } else {
+            Ok(FocusedSelectionStatus::Changed)
+        }
     })
-    .unwrap_or(false)
+    .unwrap_or(FocusedSelectionStatus::Unavailable)
 }
 
 unsafe fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>> {

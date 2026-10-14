@@ -580,8 +580,8 @@ async fn preview_confirmation_hides_the_host_preview_after_applying() {
     assert_eq!(
         host.actions(),
         vec![
-            HostAction::ShowSelectionPreview,
-            HostAction::HideSelectionPreview,
+            HostAction::ShowSelectionPreviewFor(session_id),
+            HostAction::HideSelectionPreviewFor(session_id),
         ]
     );
 
@@ -605,7 +605,7 @@ async fn shutdown_cancels_an_active_selection_and_hides_its_preview() {
     let mut preferences = backend.get_preferences();
     preferences.selection_polish_output_mode = SelectionPolishOutputMode::PreviewConfirm;
     write_preferences(&backend, preferences);
-    backend
+    let session_id = backend
         .services()
         .selection
         .begin_polish(SelectionPolishRequest {
@@ -632,8 +632,8 @@ async fn shutdown_cancels_an_active_selection_and_hides_its_preview() {
     assert_eq!(
         host.actions(),
         vec![
-            HostAction::ShowSelectionPreview,
-            HostAction::HideSelectionPreview,
+            HostAction::ShowSelectionPreviewFor(session_id),
+            HostAction::HideSelectionPreviewFor(session_id),
         ]
     );
 
@@ -682,7 +682,10 @@ async fn transient_platform_failure_keeps_the_preview_retryable() {
     // leave the user with a click that appears to do nothing.
     assert_eq!(error.code, BackendErrorCode::Platform);
     assert_eq!(runtime.cancel_count(), 0);
-    assert_eq!(host.actions(), vec![HostAction::ShowSelectionPreview]);
+    assert_eq!(
+        host.actions(),
+        vec![HostAction::ShowSelectionPreviewFor(session_id)]
+    );
     assert_eq!(
         backend
             .services()
@@ -761,8 +764,8 @@ async fn stale_preview_apply_settles_the_session_and_hides_the_preview() {
     assert_eq!(
         host.actions(),
         vec![
-            HostAction::ShowSelectionPreview,
-            HostAction::HideSelectionPreview,
+            HostAction::ShowSelectionPreviewFor(session_id),
+            HostAction::HideSelectionPreviewFor(session_id),
         ]
     );
     assert_eq!(

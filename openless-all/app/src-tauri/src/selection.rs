@@ -73,6 +73,27 @@ struct WindowsSelectionTarget {
     focused_thread_id: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionTargetReactivation {
+    Restored,
+    TargetUnavailable,
+    FocusRestoreFailed,
+}
+
+impl SelectionTargetReactivation {
+    pub(crate) const fn succeeded(self) -> bool {
+        matches!(self, Self::Restored)
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Restored => "restored",
+            Self::TargetUnavailable => "target_unavailable",
+            Self::FocusRestoreFailed => "focus_restore_failed",
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[derive(Debug, Clone)]
 struct MacosSelectionTarget {
@@ -503,8 +524,23 @@ pub(crate) fn validate_selection_insertion_target_for_apply(
         if !selection_insertion_target_is_current(target) {
             return SelectionInsertionTargetValidation::TargetChanged;
         }
-        if !crate::host_document::focused_selection_matches(expected_selection) {
-            return SelectionInsertionTargetValidation::SelectionChanged;
+        let focused_selection = crate::host_document::focused_selection_status(expected_selection);
+        log::info!(
+            "[selection-polish] preview_uia status={}",
+            match focused_selection {
+                crate::host_document::FocusedSelectionStatus::Matched => "matched",
+                crate::host_document::FocusedSelectionStatus::Changed => "changed",
+                crate::host_document::FocusedSelectionStatus::Unavailable => "unavailable",
+            }
+        );
+        match focused_selection {
+            crate::host_document::FocusedSelectionStatus::Matched => {}
+            crate::host_document::FocusedSelectionStatus::Changed => {
+                return SelectionInsertionTargetValidation::SelectionChanged;
+            }
+            crate::host_document::FocusedSelectionStatus::Unavailable => {
+                return SelectionInsertionTargetValidation::TargetUnavailable;
+            }
         }
         if !selection_insertion_target_is_current(target) {
             return SelectionInsertionTargetValidation::TargetChanged;
@@ -541,44 +577,109 @@ fn read_selection_for_validation() -> Option<String> {
 /// foreground window; restore the original target first, then apply the platform-appropriate
 /// final validation before inserting.
 pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionTarget) -> bool {
+    reactivate_selection_insertion_target_detailed(target).succeeded()
+}
+
+pub(crate) fn reactivate_selection_insertion_target_detailed(
+    target: &SelectionInsertionTarget,
+) -> SelectionTargetReactivation {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Foundation::HWND;
+        use windows::Win32::Foundation::{BOOL, HWND};
+        use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
         use windows::Win32::UI::WindowsAndMessaging::{
-            BringWindowToTop, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
+            BringWindowToTop, GetWindowThreadProcessId, IsIconic, IsWindow, SetForegroundWindow,
+            ShowWindow, SW_RESTORE,
         };
 
         let Some(captured) = target.windows else {
-            return false;
+            return SelectionTargetReactivation::TargetUnavailable;
         };
+        let foreground = HWND(captured.foreground_window as *mut _);
+        let focused = HWND(captured.focused_window as *mut _);
         unsafe {
-            let foreground = HWND(captured.foreground_window as *mut _);
-            if IsIconic(foreground).as_bool() {
-                let _ = ShowWindow(foreground, SW_RESTORE);
+            if !IsWindow(foreground).as_bool() || !IsWindow(focused).as_bool() {
+                return SelectionTargetReactivation::TargetUnavailable;
             }
-            let _ = BringWindowToTop(foreground);
-            let _ = SetForegroundWindow(foreground);
+
+            let mut foreground_process_id = 0;
+            let foreground_thread_id =
+                GetWindowThreadProcessId(foreground, Some(&mut foreground_process_id));
+            let mut focused_process_id = 0;
+            let focused_thread_id =
+                GetWindowThreadProcessId(focused, Some(&mut focused_process_id));
+            if foreground_process_id != captured.foreground_process_id
+                || foreground_thread_id != captured.foreground_thread_id
+                || focused_process_id != captured.focused_process_id
+                || focused_thread_id != captured.focused_thread_id
+                || foreground_process_id == 0
+                || foreground_thread_id == 0
+                || focused_process_id == 0
+                || focused_thread_id == 0
+            {
+                return SelectionTargetReactivation::TargetUnavailable;
+            }
+
+            let current_thread_id = GetCurrentThreadId();
+            let mut attached_threads = Vec::with_capacity(2);
+            for thread_id in [captured.foreground_thread_id, captured.focused_thread_id] {
+                if thread_id != current_thread_id
+                    && !attached_threads.contains(&thread_id)
+                    && AttachThreadInput(current_thread_id, thread_id, BOOL(1)).as_bool()
+                {
+                    attached_threads.push(thread_id);
+                }
+            }
+
+            let mut focus_restored = false;
+            for attempt in 0..20 {
+                if IsIconic(foreground).as_bool() {
+                    let _ = ShowWindow(foreground, SW_RESTORE);
+                }
+                let _ = BringWindowToTop(foreground);
+                let _ = SetForegroundWindow(foreground);
+                let _ = SetActiveWindow(foreground);
+                let _ = SetFocus(focused);
+
+                std::thread::sleep(Duration::from_millis(20));
+                if capture_windows_selection_target().as_ref() == Some(&captured) {
+                    log::info!(
+                        "[selection-polish] preview_reactivate result=restored attempts={}",
+                        attempt + 1
+                    );
+                    focus_restored = true;
+                    break;
+                }
+            }
+
+            for thread_id in attached_threads.into_iter().rev() {
+                let _ = AttachThreadInput(current_thread_id, thread_id, BOOL(0));
+            }
+            if focus_restored {
+                SelectionTargetReactivation::Restored
+            } else {
+                log::info!(
+                    "[selection-polish] preview_reactivate result=focus_restore_failed attempts=20"
+                );
+                SelectionTargetReactivation::FocusRestoreFailed
+            }
         }
-        std::thread::sleep(Duration::from_millis(80));
-        // Windows' focus-stealing rules may reject SetForegroundWindow. Recovery counts only if
-        // the exact same window/control fingerprint is re-captured; do not blindly paste into the
-        // current app just because the activation call returned.
-        return capture_windows_selection_target().as_ref() == Some(&captured);
     }
 
     #[cfg(target_os = "macos")]
     {
         let Some(captured) = target.macos.as_ref() else {
-            return false;
+            return SelectionTargetReactivation::TargetUnavailable;
         };
         let Some(pid) = captured.front_app_pid else {
-            return false;
+            return SelectionTargetReactivation::TargetUnavailable;
         };
         // Streaming writes usually already own the foreground application.
         // Do not reactivate it and sleep for 80ms on every delta; the caller
         // still validates the captured text control before posting keys.
         if current_front_app_pid() == Some(pid) {
-            return true;
+            return SelectionTargetReactivation::Restored;
         }
         // The preview window is OpenLess's own window; after confirm, focus must go back to the
         // original app before pasting. NSRunningApplication activate is best-effort, and some
@@ -592,18 +693,18 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
             activate_app_by_pid(pid);
             std::thread::sleep(Duration::from_millis(80));
             if current_front_app_pid() == Some(pid) {
-                return true;
+                return SelectionTargetReactivation::Restored;
             }
         }
         // Still not foreground: fail explicitly; never write blindly into whatever app happens to
         // hold focus.
-        false
+        SelectionTargetReactivation::FocusRestoreFailed
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = target;
-        true
+        SelectionTargetReactivation::Restored
     }
 }
 

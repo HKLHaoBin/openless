@@ -172,6 +172,7 @@ export {
   qaSetEditInstructionMode,
 } from './qa';
 
+export type { SelectionPolishPreviewOwner, SelectionPolishPreview } from './selection-polish-preview';
 export {
   getSelectionPolishPreview,
   confirmSelectionPolishPreview,

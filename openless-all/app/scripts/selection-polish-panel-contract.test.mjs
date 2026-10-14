@@ -52,7 +52,9 @@ if (previewPageExists) {
 }
 
 // 2. 后端把「润色结果」交给 qa 面板，而不是新窗口。
-if (!/fn show_selection_polish_preview[\s\S]{0,400}?show_qa_window\(app, "polish-preview"\)/.test(lib)) {
+if (
+  !/fn show_selection_polish_preview[\s\S]{0,400}?show_qa_window\(app, "polish-preview"\)/.test(lib)
+) {
   violations.push('show_selection_polish_preview no longer opens the qa panel');
 }
 if (!/emit_to\("qa", SELECTION_POLISH_PREVIEW_SHOWN/.test(lib)) {
@@ -65,23 +67,35 @@ if (/WebviewWindowBuilder::new\(\s*app,\s*"selection-polish-preview"/.test(lib))
   violations.push('lib.rs builds a selection-polish-preview window again');
 }
 
-// 3. 是否退出润色模式由前端决定（面板可能正在提问对话中）。
-if (!/fn hide_selection_polish_preview[\s\S]{0,300}?clear_selection_polish_preview_pending\(\)/.test(lib)) {
-  violations.push('hide_selection_polish_preview no longer clears the pending flag');
+if (
+  !/fn hide_selection_polish_preview[\s\S]{0,400}?clear_selection_polish_preview_pending_for_session/.test(
+    lib,
+  )
+) {
+  violations.push('hide_selection_polish_preview no longer clears its matching preview owner');
 }
 
-// 4. IPC：预览负载只在「真的处于润色模式」时给出。
-if (!/fn get_selection_polish_preview[\s\S]{0,400}?if !crate::selection_polish_preview_pending\(\)/.test(commands)) {
-  violations.push('get_selection_polish_preview lost its pending gate');
+// 4. IPC: preview reads are gated by an owner lease, not a stale snapshot.
+if (
+  !/fn get_selection_polish_preview[\s\S]{0,400}?selection_polish_preview_owner\(\)/.test(commands)
+) {
+  violations.push('get_selection_polish_preview lost its owner lease gate');
 }
-if (!/fn confirm_selection_polish_preview[\s\S]{0,200}?clear_selection_polish_preview_pending\(\)/.test(commands)) {
-  violations.push('confirm_selection_polish_preview no longer clears the pending flag');
+if (
+  !/fn confirm_selection_polish_preview[\s\S]{0,400}?selection_polish_preview_owner\(\)/.test(
+    commands,
+  )
+) {
+  violations.push('confirm_selection_polish_preview lost its owner validation');
 }
-if (!/fn cancel_selection_polish_preview[\s\S]{0,200}?clear_selection_polish_preview_pending\(\)/.test(commands)) {
-  violations.push('cancel_selection_polish_preview no longer clears the pending flag');
+if (
+  !/fn cancel_selection_polish_preview[\s\S]{0,400}?selection_polish_preview_owner\(\)/.test(
+    commands,
+  )
+) {
+  violations.push('cancel_selection_polish_preview lost its owner validation');
 }
 
-// 5. 面板侧：认事件、编辑结果、提供「确认并替换」。
 for (const eventName of ['selection-polish-preview:shown', 'selection-polish-preview:hide']) {
   if (!qaPanel.includes(`'${eventName}'`)) {
     violations.push(`QaPanel.tsx does not listen for ${eventName}`);
@@ -94,6 +108,21 @@ if (
   !/<textarea[\s\S]*?className="qa-polish-text"[\s\S]*?value=\{polishResult.text\}/.test(qaPanel)
 ) {
   violations.push('QaPanel.tsx polish-result box is no longer an editable controlled textarea');
+}
+if (!qaPanel.includes('polishLoadEpochRef') || !qaPanel.includes('polishOwnerRef')) {
+  violations.push('QaPanel.tsx dropped preview request/owner guards');
+}
+if (
+  !qaPanel.includes('polishDismissedOwnerRef') ||
+  !qaPanel.includes('if (!polishActiveRef.current && currentOwner === null) return')
+) {
+  violations.push('QaPanel.tsx lost idempotent owner-scoped preview dismissal');
+}
+if (
+  !qaPanel.includes('event.payload') ||
+  !qaPanel.includes('confirmSelectionPolishPreview(text, owner)')
+) {
+  violations.push('QaPanel.tsx no longer carries preview ownership through events and confirm');
 }
 const expandedStart = qaPanel.indexOf('const expanded');
 if (
