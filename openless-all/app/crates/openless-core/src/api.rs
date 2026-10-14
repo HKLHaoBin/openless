@@ -6452,7 +6452,8 @@ impl OpenLessBackend {
                         engine_result.asr_ms,
                         engine_result.polish_ms,
                         engine_result.has_audio_recording,
-                        context.uses_llm_polisher(),
+                        context.uses_llm_polisher()
+                            && !context.skips_polish_for_short_text(&engine_result.raw_text),
                         engine_result.asr_call_label.clone(),
                         engine_result.llm_call_label.clone(),
                     );
@@ -6687,7 +6688,8 @@ impl OpenLessBackend {
             crate::shared_types::PipelineMode::Traditional => "traditional",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
-        let llm_used = context.uses_llm_polisher();
+        let llm_used = context.uses_llm_polisher()
+            && !context.skips_polish_for_short_text(&engine_result.raw_text);
         let attribution = HistoryProviderAttribution::from_context(
             context,
             llm_used,
@@ -12702,6 +12704,190 @@ mod tests {
         assert_eq!(history[0].polish_ms, None);
 
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn short_polish_history_matches_the_executed_path() {
+        #[derive(Clone, Copy)]
+        struct Case {
+            raw: &'static str,
+            threshold: u32,
+            translation: bool,
+            insert_failed: bool,
+            correction: Option<(&'static str, &'static str)>,
+            polish_failed: bool,
+            uses_polisher: bool,
+        }
+        let short = Case {
+            raw: "确定",
+            threshold: 8,
+            translation: false,
+            insert_failed: false,
+            correction: None,
+            polish_failed: false,
+            uses_polisher: false,
+        };
+        let long = "确定重试确定重试好";
+        let cases = [
+            ("short", short),
+            (
+                "insert-failed",
+                Case {
+                    insert_failed: true,
+                    ..short
+                },
+            ),
+            (
+                "long",
+                Case {
+                    raw: long,
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+            (
+                "disabled",
+                Case {
+                    threshold: 0,
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+            (
+                "translation",
+                Case {
+                    translation: true,
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+            (
+                "expanded",
+                Case {
+                    correction: Some(("确定", long)),
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+            (
+                "shortened",
+                Case {
+                    raw: long,
+                    correction: Some((long, "确定")),
+                    ..short
+                },
+            ),
+            (
+                "polish-failed",
+                Case {
+                    raw: long,
+                    polish_failed: true,
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+        ];
+        for (name, case) in cases {
+            let data_dir = TestDataDir::new(name);
+            let polisher = Arc::new(if case.polish_failed {
+                crate::testing::FixtureTextPolisher::failing(BackendError::new(
+                    BackendErrorCode::Provider,
+                    "fixture polish failure",
+                ))
+            } else {
+                crate::testing::FixtureTextPolisher::successful("polished text")
+            });
+            let engine = crate::PipelineDictationEngine::new(
+                Arc::new(crate::testing::FixtureAudioRecorder::new(
+                    vec![vec![1, 0, 2, 0]],
+                    vec![(25, 0.5)],
+                )),
+                Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
+                    case.raw, 25,
+                )),
+                polisher.clone(),
+            );
+            let mut backend =
+                backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine));
+            if case.insert_failed {
+                backend.deps.text_inserter =
+                    Arc::new(crate::testing::FixtureTextInserter::failing(
+                        BackendError::new(BackendErrorCode::Platform, "fixture insert failure"),
+                    ));
+            }
+            backend
+                .set_credential(
+                    CredentialKey::new(
+                        crate::credentials::CredentialNamespace::Llm,
+                        Some("ark".to_string()),
+                        crate::credentials::LLM_MODEL_ACCOUNT,
+                    )
+                    .unwrap(),
+                    SecretValue::new("fixture-model"),
+                )
+                .await
+                .unwrap();
+            let mut preferences = backend.get_preferences();
+            preferences.polish_skip_max_chars = case.threshold;
+            preferences.streaming_insert = false;
+            preferences.translation_target_language = "English".to_string();
+            preferences.working_languages = vec!["简体中文".to_string(), "English".to_string()];
+            backend.set_preferences(preferences).unwrap();
+            if let Some((from, to)) = case.correction {
+                backend
+                    .add_correction_rule(from.to_string(), to.to_string())
+                    .unwrap();
+            }
+            backend.start().await.unwrap();
+            backend
+                .activate_style_pack(crate::style_packs::BUILTIN_STYLE_PACK_LIGHT_ID)
+                .unwrap();
+            backend
+                .start_dictation_with_options(DictationStartOptions {
+                    translation_requested: case.translation,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let result = backend.stop_dictation().await;
+            assert_eq!(result.is_err(), case.insert_failed, "{name}");
+            let history = backend.list_history().unwrap();
+            assert_eq!(history.len(), 1, "{name}");
+            let entry = &history[0];
+            assert_eq!(
+                polisher.inputs().len(),
+                if case.uses_polisher { 1 } else { 0 },
+                "{name}"
+            );
+            assert_eq!(
+                entry.llm_provider.as_deref(),
+                case.uses_polisher.then_some("ark"),
+                "{name}"
+            );
+            assert_eq!(
+                entry.llm_model.as_deref(),
+                case.uses_polisher.then_some("fixture-model"),
+                "{name}"
+            );
+            assert_eq!(entry.polish_ms.is_some(), case.uses_polisher, "{name}");
+            assert_eq!(entry.mode, crate::types::PolishMode::Light, "{name}");
+            assert_eq!(entry.translation_active, case.translation, "{name}");
+            let expected_error = if case.insert_failed {
+                Some("insertFailed")
+            } else if case.polish_failed {
+                Some("polishFailed")
+            } else {
+                None
+            };
+            assert_eq!(entry.error_code.as_deref(), expected_error, "{name}");
+            if !case.uses_polisher {
+                assert_eq!(
+                    entry.final_text,
+                    case.correction.map_or(case.raw, |(_, to)| to),
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

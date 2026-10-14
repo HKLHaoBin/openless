@@ -668,6 +668,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn short_polish_threshold_saves_and_hydrates_the_current_text() {
+        let mut app = OpenLessEguiApp::new(
+            Arc::new(tokio::runtime::Runtime::new().unwrap()),
+            Err("fixture".into()),
+            None,
+            false,
+        );
+        let mut persisted = UserPreferences::default();
+        app.preferences = Some(persisted.clone());
+        app.settings_save = SettingsSave::new(&persisted);
+        for (text, expected) in [("8", 8), ("", 0), ("99", 50), ("invalid", 0)] {
+            app.apply_settings_text(
+                frontend::view_model::SettingsTextField::PolishSkipMaxChars,
+                text.to_string(),
+            );
+            assert_eq!(
+                app.preferences.as_ref().unwrap().polish_skip_max_chars,
+                expected
+            );
+            assert_eq!(
+                app.frontend_vm.settings.polish_skip_max_chars,
+                expected.to_string()
+            );
+            let (request, edits) = app.settings_save.begin().unwrap();
+            persisted = openless_linux_egui::patch_preferences(&persisted, &edits).unwrap();
+            persisted = serde_json::from_value(serde_json::to_value(&persisted).unwrap()).unwrap();
+            assert_eq!(persisted.polish_skip_max_chars, expected);
+            assert!(app.settings_save.finish(request, &Ok(())));
+        }
+    }
+
+    #[test]
     fn queue_keeps_later_edits_external_changes_and_failed_drafts() {
         let mut draft = UserPreferences::default();
         let mut queue = SettingsSave::new(&draft);
