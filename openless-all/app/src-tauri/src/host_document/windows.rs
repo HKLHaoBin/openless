@@ -80,7 +80,56 @@ pub(crate) enum FocusedSelectionStatus {
     Unavailable,
 }
 
-pub(crate) fn focused_selection_status(expected: &str) -> FocusedSelectionStatus {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FocusedSelectionObservation {
+    pub(crate) status: FocusedSelectionStatus,
+    pub(crate) expected_chars: usize,
+    pub(crate) selected_chars: Option<usize>,
+    pub(crate) expected_utf16: usize,
+    pub(crate) selected_utf16: Option<usize>,
+    pub(crate) expected_line_breaks: usize,
+    pub(crate) selected_line_breaks: Option<usize>,
+    pub(crate) newline_normalized_match: Option<bool>,
+}
+
+fn normalize_line_endings(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn selection_observation(expected: &str, selected: Option<&str>) -> FocusedSelectionObservation {
+    let expected = expected.trim();
+    let normalized_expected = normalize_line_endings(expected);
+    let selected = selected.map(str::trim);
+    let normalized_selected = selected.map(normalize_line_endings);
+    let newline_normalized_match = normalized_selected
+        .as_deref()
+        .map(|selected| selected == normalized_expected);
+    FocusedSelectionObservation {
+        status: match selected {
+            Some(selected) if selected == expected || newline_normalized_match == Some(true) => {
+                FocusedSelectionStatus::Matched
+            }
+            Some(_) => FocusedSelectionStatus::Changed,
+            None => FocusedSelectionStatus::Unavailable,
+        },
+        expected_chars: expected.chars().count(),
+        selected_chars: selected.map(|text| text.chars().count()),
+        expected_utf16: expected.encode_utf16().count(),
+        selected_utf16: selected.map(|text| text.encode_utf16().count()),
+        expected_line_breaks: expected
+            .chars()
+            .filter(|character| matches!(character, '\r' | '\n'))
+            .count(),
+        selected_line_breaks: selected.map(|text| {
+            text.chars()
+                .filter(|character| matches!(character, '\r' | '\n'))
+                .count()
+        }),
+        newline_normalized_match,
+    }
+}
+
+pub(crate) fn focused_selection_observation(expected: &str) -> FocusedSelectionObservation {
     with_voice_edit_uia(|uia| unsafe {
         let element = uia
             .GetFocusedElement()
@@ -88,7 +137,9 @@ pub(crate) fn focused_selection_status(expected: &str) -> FocusedSelectionStatus
         let pattern =
             match element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) {
                 Ok(pattern) => pattern,
-                Err(_) => return Ok(FocusedSelectionStatus::Unavailable),
+                Err(_) => {
+                    return Ok(selection_observation(expected, None));
+                }
             };
         let ranges = pattern
             .GetSelection()
@@ -98,20 +149,20 @@ pub(crate) fn focused_selection_status(expected: &str) -> FocusedSelectionStatus
             .map_err(|_| "selectionTargetUnavailable".to_string())?
             != 1
         {
-            return Ok(FocusedSelectionStatus::Unavailable);
+            return Ok(selection_observation(expected, None));
         }
         let selected = ranges
             .GetElement(0)
             .and_then(|range| range.GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32))
             .map_err(|_| "selectionTargetUnavailable".to_string())?
             .to_string();
-        if selected.trim() == expected.trim() {
-            Ok(FocusedSelectionStatus::Matched)
-        } else {
-            Ok(FocusedSelectionStatus::Changed)
-        }
+        Ok(selection_observation(expected, Some(&selected)))
     })
-    .unwrap_or(FocusedSelectionStatus::Unavailable)
+    .unwrap_or_else(|_| selection_observation(expected, None))
+}
+
+pub(crate) fn focused_selection_status(expected: &str) -> FocusedSelectionStatus {
+    focused_selection_observation(expected).status
 }
 
 unsafe fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>> {
@@ -347,6 +398,25 @@ mod voice_edit_tests {
             Err("voiceEditTargetChanged".into())
         );
         assert_eq!(super::super::utf16_offset_to_char_offset("a😀b", 3), 2);
+    }
+
+    #[test]
+    fn selection_observation_keeps_newline_mismatch_visible_without_text_logging() {
+        let observation = selection_observation("first\nsecond", Some("first\r\nsecond"));
+        assert_eq!(observation.status, FocusedSelectionStatus::Matched);
+        assert_eq!(observation.expected_chars, 12);
+        assert_eq!(observation.selected_chars, Some(13));
+        assert_eq!(observation.expected_line_breaks, 1);
+        assert_eq!(observation.selected_line_breaks, Some(2));
+        assert_eq!(observation.newline_normalized_match, Some(true));
+    }
+
+    #[test]
+    fn selection_observation_marks_unavailable_without_a_selected_range() {
+        let observation = selection_observation("text", None);
+        assert_eq!(observation.status, FocusedSelectionStatus::Unavailable);
+        assert_eq!(observation.selected_chars, None);
+        assert_eq!(observation.newline_normalized_match, None);
     }
 }
 

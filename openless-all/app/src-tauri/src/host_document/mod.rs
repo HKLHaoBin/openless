@@ -39,7 +39,8 @@ mod uia_text;
 mod windows;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::{
-    focused_selection_status, insert_with_delivery_check, FocusedSelectionStatus,
+    focused_selection_observation, focused_selection_status, insert_with_delivery_check,
+    FocusedSelectionObservation, FocusedSelectionStatus,
 };
 
 #[cfg(target_os = "macos")]

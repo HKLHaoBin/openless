@@ -524,16 +524,36 @@ pub(crate) fn validate_selection_insertion_target_for_apply(
         if !selection_insertion_target_is_current(target) {
             return SelectionInsertionTargetValidation::TargetChanged;
         }
-        let focused_selection = crate::host_document::focused_selection_status(expected_selection);
+        let focused_selection =
+            crate::host_document::focused_selection_observation(expected_selection);
         log::info!(
-            "[selection-polish] preview_uia status={}",
-            match focused_selection {
+            "[selection-polish] preview_uia status={} expected_chars={} selected_chars={} expected_utf16={} selected_utf16={} expected_line_breaks={} selected_line_breaks={} newline_normalized_match={}",
+            match focused_selection.status {
                 crate::host_document::FocusedSelectionStatus::Matched => "matched",
                 crate::host_document::FocusedSelectionStatus::Changed => "changed",
                 crate::host_document::FocusedSelectionStatus::Unavailable => "unavailable",
-            }
+            },
+            focused_selection.expected_chars,
+            focused_selection
+                .selected_chars
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "-".into()),
+            focused_selection.expected_utf16,
+            focused_selection
+                .selected_utf16
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "-".into()),
+            focused_selection.expected_line_breaks,
+            focused_selection
+                .selected_line_breaks
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "-".into()),
+            focused_selection
+                .newline_normalized_match
+                .map(|matched| matched.to_string())
+                .unwrap_or_else(|| "-".into()),
         );
-        match focused_selection {
+        match focused_selection.status {
             crate::host_document::FocusedSelectionStatus::Matched => {}
             crate::host_document::FocusedSelectionStatus::Changed => {
                 return SelectionInsertionTargetValidation::SelectionChanged;

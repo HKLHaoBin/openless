@@ -63,6 +63,10 @@ assert.match(
 );
 
 const selection = await readFile(new URL('../src-tauri/src/selection.rs', import.meta.url), 'utf8');
+const windowsHost = await readFile(
+  new URL('../src-tauri/src/host_document/windows.rs', import.meta.url),
+  'utf8',
+);
 const restoreTarget = selection.match(
   /pub\(crate\) fn reactivate_selection_insertion_target[\s\S]*?(?=\n    #\[cfg\(target_os = "macos"\)\])/,
 )?.[0];
@@ -79,5 +83,20 @@ assert.match(
 );
 assert.match(restoreTarget, /AttachThreadInput[\s\S]*?SetFocus\(focused\)/, 'restoring a window must restore the original focused child');
 assert.match(restoreTarget, /for attempt in 0\.\.20/, 'focus restoration must use bounded polling');
+assert.match(
+  windowsHost,
+  /pub\(crate\) struct FocusedSelectionObservation[\s\S]*?newline_normalized_match/,
+  'UIA diagnostics must expose only bounded text-shape metadata',
+);
+assert.match(
+  selection,
+  /preview_uia status=.*expected_chars=.*selected_chars=.*newline_normalized_match=/,
+  'PreviewConfirm must log selection-shape metadata without logging document text',
+);
+assert.doesNotMatch(
+  selection,
+  /preview_uia[^\n]*(?:source_text|replacement_text|expected_selection)/,
+  'PreviewConfirm UIA diagnostics must not log selection content',
+);
 
 console.log('Windows insertion target contract passed');
