@@ -660,7 +660,6 @@ pub(crate) fn reactivate_selection_insertion_target_detailed(
                 let _ = BringWindowToTop(foreground);
                 let _ = SetForegroundWindow(foreground);
                 let _ = SetActiveWindow(foreground);
-                let _ = SetFocus(focused);
 
                 std::thread::sleep(Duration::from_millis(20));
                 if capture_windows_selection_target().as_ref() == Some(&captured) {
@@ -671,6 +670,10 @@ pub(crate) fn reactivate_selection_insertion_target_detailed(
                     focus_restored = true;
                     break;
                 }
+
+                // SetFocus can collapse a live text selection in browser-based editors. Only use it
+                // after the normal activation path failed to restore the original child HWND.
+                let _ = SetFocus(focused);
             }
 
             for thread_id in attached_threads.into_iter().rev() {

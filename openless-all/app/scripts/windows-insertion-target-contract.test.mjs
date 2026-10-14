@@ -82,6 +82,14 @@ assert.match(
   'restoring a window must still verify the original window and control fingerprint',
 );
 assert.match(restoreTarget, /AttachThreadInput[\s\S]*?SetFocus\(focused\)/, 'restoring a window must restore the original focused child');
+const normalActivationCheck = restoreTarget.indexOf(
+  'if capture_windows_selection_target().as_ref() == Some(&captured)',
+);
+const fallbackFocus = restoreTarget.indexOf('let _ = SetFocus(focused);');
+assert.ok(
+  normalActivationCheck >= 0 && fallbackFocus > normalActivationCheck,
+  'SetFocus must remain a fallback after normal activation is checked so browser editors keep their selection',
+);
 assert.match(restoreTarget, /for attempt in 0\.\.20/, 'focus restoration must use bounded polling');
 assert.match(
   windowsHost,
