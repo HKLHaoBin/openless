@@ -67,6 +67,8 @@ const KOTLIN_FILES = [
   'StrokeInputController.kt',
   'StrokeInput.kt',
   'LitePinyinController.kt',
+  'OpenLessRime.kt',
+  'RimePinyinController.kt',
   'LitePinyinRepository.kt',
   'LitePinyinUserFrequency.kt',
   'LitePinyinLearnedPhrases.kt',
@@ -102,6 +104,7 @@ const KOTLIN_TEST_FILES = [
 const KOTLIN_ANDROID_TEST_FILES = [
   'OpenLessCredentialVaultInstrumentedTest.kt',
   'ImeLearningMigrationTest.kt',
+  'RimeEngineIntegrationTest.kt',
 ];
 
 const XML_FILES = [

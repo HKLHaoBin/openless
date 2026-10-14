@@ -1,0 +1,75 @@
+# OpenLess 鸿蒙前端宿主
+
+ArkTS / ArkWeb Stage 工程，将 React 前端离线打包进 HAP。
+已通过 ArkWeb JavaScript Proxy → ArkTS → Node-API → Rust C ABI 接入 `openless-core`。
+已接通启动快照、能力查询、设置读取及字段事务写入、历史及活动统计、词典增删改和启用状态、纠正规则读取、风格列表及启动视频标记。
+数据使用应用沙箱真实文件存储，鸿蒙 IPC 不回退到浏览器模拟数据。未实现命令明确报错。
+已接通系统麦克风枚举、授权查询和 PCM 音量监测；支持提供商目录、渠道管理、模型列表和连接测试。凭据通过鸿蒙 Asset Store 加密保存，启动时恢复到 Rust 内存适配器；渠道元数据独立持久化。
+网络状态沿用桌面端的真实 HTTP 探测；外部链接交给系统浏览器，WebView 拦截外站导航。调试日志通过系统文件选择器导出。
+完整听写录音流程、跨应用输入法和 ASR/润色结果输出仍待接入。
+
+## 当前完工边界
+
+历史删除及清空、纠错规则新增/删除/启停、手改词语收集、词库预设读写、系统剪贴板复制已补齐。隔离沙箱自检验证词语去重、规则启停与删除、预设读写以及重新打开存储后的持久化，测试不修改用户数据。
+
+仍未完成的移动端业务：
+
+- AudioCapturer 音频送入核心听写会话、开始/停止/取消、ASR 流式识别、润色结果回传。当前麦克风监听只计算音量，不代表听写已完成。
+- 输入法的语音录音、识别结果预览与确认插入。首版扩展和手动键盘已实现，语音入口暂未启用。
+- 历史音频读取、重识别、重新润色和渠道录音测试。
+- 云同步及端到端加密同步适配。
+- 鸿蒙更新检测及安装流程；不能直接调用安卓 APK 更新。
+
+桌面悬浮窗口、全局快捷键、Windows IME、Wayland、桌面 CLI / Less Computer 等命令不作为当前手机和平板版本的完工条件。`ipc-audit.json` 是共享 IPC 静态覆盖清单，包含这些桌面接口；覆盖比例不等于移动端完成比例，也不证明端到端功能可用。
+
+跨应用输入建议以 IME Kit 为主：输入法通过系统分配的 InputClient 向绑定且获得焦点的编辑框插入文字。基础权限沿用 INTERNET 和 MICROPHONE；输入法需额外声明扩展并由用户在系统设置启用。键盘面板使用输入法框架，无须为了显示面板申请普通悬浮窗。
+
+本项目仅走输入法，不接入无障碍扩展。悬浮窗本身不提供跨应用写入能力；不启用输入法时可用复制后手动粘贴作为退路。
+
+## 输入法首版
+
+`OpenLessInputMethod` 是系统输入法扩展，`pages/InputMethodPanel` 是原生 ArkUI 键盘面板，不经过主设置页的 WebView。已通过 Node-API 接入与 Android 共用的 librime 1.17.0，支持离线拼音、候选词、翻页、空格确认、中英文切换、数字与标点、编码退格及系统输入框删除。没有引入 Fcitx5，也不使用无障碍。语音识别仍待接入。
+
+在系统设置的输入法管理中启用“OpenLess 输入法”，然后在普通输入框切换到它。仅声明输入法扩展及既有的网络/麦克风权限，不注册无障碍服务。系统分配的 InputClient 在 inputStop 时解绑；排队按键不会发送到已经解绑的客户端；日志不记录输入内容。
+
+语音按钮显示“待接入”并禁用，不能将面板可用视为 ASR 已完成。当前保留主应用的语音能力标记为 false，避免主设置页误以为完整听写已可用。
+
+参考：[IME Kit](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides-v5/ime-kit-V5)、[输入法插入与预上屏示例](https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-ime-7)、[官方扩展能力模板（包含 Accessibility 和 InputMethod）](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-hmos-add-new-ability)。
+
+从仓库根目录构建：
+
+```bash
+bash openless-all/app/scripts/build-harmony-frontend.sh
+```
+
+依赖：已安装前端 npm 依赖、HarmonyOS Command Line Tools、Python 3。
+工具链默认 `~/.local/share/harmony/current`，可通过 `OPENLESS_HARMONY_TOOLCHAIN` 指定。
+Rust 首次构建需要 `rustup target add aarch64-unknown-linux-ohos`。
+缓存默认 `/data-win/openless-cache`，可通过 `OPENLESS_CACHE_ROOT` 指定。
+
+- `harmony/web-dist`：React 离线资源，使用相对 URL。
+- `harmony/openless-project`：构建工程副本、项目缓存和 HAP。
+- `harmony/rust-target`：Rust 鸿蒙交叉编译产物。
+- `harmony/ohpm`：ohpm 下载缓存。
+- `cargo`：Rust 依赖下载缓存。
+- `harmony/hvigor`：Hvigor 用户缓存及工具依赖。
+- `npm`：本脚本使用的 npm 下载缓存。
+
+HAP 位于 `harmony/openless-project/entry/build/default/outputs/default/`。
+仓库只维护鸿蒙源文件，构建中间文件不写回鸿蒙源码工程。
+前端以 `VITE_OPENLESS_PLATFORM=harmony` 构建，采用移动端能力配置。
+
+包名 `openless.hm.com`，compatible API 12，target API 20，compile SDK 使用本机默认版本。
+先生成未签名 HAP；若本地签名目录证书与 Profile 齐全，则使用官方工具生成 `entry-default-signed.hap`。
+签名目录默认 `~/.local/share/harmony/signing/local-test`，可用 `OPENLESS_HARMONY_SIGNING_DIR` 覆盖；密码从本地文件读取，不写入源码配置。真机安装需要该包名对应的华为调试证书，以及包含目标设备的调试 Profile。
+其他包名的 Profile 不能直接使用。签名材料不能提交到仓库。
+编译成功不代表真机运行已验证。
+
+鸿蒙构建使用单文件 IIFE 和延迟执行的普通脚本，去除资源标签的 crossorigin 属性，避免 rawfile 不透明来源导致的模块加载失败；桌面及安卓构建不受影响。
+
+使用 `$rawfile('web/index.html')` 加载页面，开启 JavaScript 和 DOM Storage。
+参考：[华为 Web 页面加载文档](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/web-page-loading)。
+
+设备运行时数据位于应用 `filesDir/openless`，运行时缓存位于 `cacheDir/openless`；电脑上的统一目录用于开发构建缓存。
+WebView 通过同步 request/takeResult 传递请求票据，ArkTS 异步执行系统操作，Rust 命令通过 Node-API async work 在后台执行。避免直接将 Promise 从 JavaScript Proxy 返回导致不同 WebView 版本错误解析。
+麦克风音量通过本机 WebView 自定义事件返回，关闭列表后释放采集器。API 24 上输入设备切换遵循系统路由，无法强制切换不在当前路由上的麦克风。

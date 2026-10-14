@@ -248,7 +248,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     // TO, not the current one — i.e. it reads "拼音" while latinInputMode
     // is ENGLISH, and "英文" while it's PINYIN.
     private var latinInputMode = LatinInputMode.ENGLISH
-    private val litePinyinController by lazy { LitePinyinController(this) }
+    private val litePinyinController by lazy { RimePinyinController(this) }
     // The word currently being typed on the English keyboard — appended to
     // per letter, trimmed per backspace, cleared at every word boundary
     // (space/return/punctuation/candidate tap/mode or panel switch). Never
@@ -1553,13 +1553,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // and before that a padding-pushed overlay), both of which fought
         // this row's actual (tighter than assumed) real height.
         val spaceButton = keyboardKey("Space", 5f, action = {
-            // Space never commits a pinyin candidate (see
-            // toggleLatinInputMode()'s own doc comment) — a short press
-            // always just inserts a literal space, in both modes, and
-            // abandons whatever was mid-composition. This is deliberate:
-            // it's a software keyboard, not a physical one where "space
-            // selects the first candidate" is a decades-old muscle-memory
-            // convention worth preserving.
+            if (latinInputMode == LatinInputMode.PINYIN && litePinyinController.confirmFirst { renderPinyinCandidates(it) }) {
+                return@keyboardKey
+            }
             finalizeEnglishComposingWord()
             litePinyinController.clear()
             currentInputConnection?.commitText(" ", 1)
@@ -3033,12 +3029,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 }
                 return
             }
-            // A digit/punctuation typed mid-encoding (e.g. from the 123/
-            // symbols layer) abandons the encoding the same way space does
-            // (plan 3.2 point 9) rather than leaving it stranded, then
-            // falls through to commit the symbol itself normally below.
-            litePinyinController.clear()
-            renderPinyinCandidates(emptyList())
+            litePinyinController.insertLiteral(char) { renderPinyinCandidates(it) }
+            return
         }
         if (currentInputConnection?.commitText(char, 1) != true) return
         if (personalizedLearningAllowed() && char.length == 1 && char[0].isLetter()) {
@@ -3276,15 +3268,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     /** Candidate tap is the ONLY way a pinyin candidate reaches the field — see toggleLatinInputMode()'s doc comment on why Space deliberately never does this. */
     private fun selectPinyinCandidate(char: String) {
         if (ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) return
-        if (currentInputConnection?.commitText(char, 1) != true) return
-        // observeCommitForLearning needs the encoding still intact; commitSelection
-        // then records frequency under the real sourceKey and consumes that key
-        // (full buffer or first syllable) before refreshing the candidate row.
-        litePinyinController.observeCommitForLearning(char)
-        litePinyinController.commitSelection(char) { renderPinyinCandidates(it) }
-        litePinyinController.recordCommittedText(char)
-        performKeyHaptic()
-        refreshPinyinAssociations()
+        litePinyinController.selectCandidate(char) { renderPinyinCandidates(it) }
     }
 
     /**
@@ -3371,6 +3355,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     internal fun sendEnterKey() {
+        if (latinInputMode == LatinInputMode.PINYIN &&
+            !ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0) &&
+            litePinyinController.confirmFirst { renderPinyinCandidates(it) }) return
         currentInputConnection?.sendKeyEvent(android.view.KeyEvent(
             android.view.KeyEvent.ACTION_DOWN,
             android.view.KeyEvent.KEYCODE_ENTER,
@@ -3395,6 +3382,14 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         litePinyinController.clear()
         litePinyinController.resetAssociationContext()
         litePinyinController.setLearningAllowed(personalizedLearningAllowed())
+        litePinyinController.bindCommit { text ->
+            if (ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) false
+            else if (currentInputConnection?.commitText(text, 1) == true) {
+                litePinyinController.recordCommittedText(text)
+                performKeyHaptic()
+                true
+            } else false
+        }
         if (ImeLearningPolicy.isPassword(attribute?.inputType ?: 0)) {
             inputMode = InputMode.ENGLISH
             latinInputMode = LatinInputMode.ENGLISH

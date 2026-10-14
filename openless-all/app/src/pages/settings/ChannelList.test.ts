@@ -21,6 +21,7 @@ const expectedByPlatform: Record<OS, readonly string[]> = {
   mac: ['local-qwen3-mlx', 'local-qwen3-c', 'local-whisper', 'apple-speech'],
   win: ['foundry-local-whisper', 'sherpa-onnx-local'],
   android: [],
+  harmony: [],
 };
 
 // Production receives this catalog from Core. The test supplies only the

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { takeSplashPlayback } from '../lib/ipc';
 
 /** Bundled 2.0 splash video (public/ static asset, Vite copies it into dist as-is). */
-const SPLASH_SRC = '/openless-2.0-splash.mp4';
+const SPLASH_SRC = `${import.meta.env.BASE_URL}openless-2.0-splash.mp4`;
 /** Fade duration for the whole layer after playback, matching global.css's ol-splash-out. */
 const FADE_MS = 1200;
 /** Watchdog: if both `ended` / `error` fail (corrupt encoding, background throttling),
