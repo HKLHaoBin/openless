@@ -3801,7 +3801,6 @@ mod tests {
                         egui::Pos2::ZERO,
                         egui::vec2(760.0, 2200.0),
                     )),
-                    modifiers,
                     events,
                     ..Default::default()
                 },
