@@ -1655,15 +1655,21 @@ mod jni_exports {
         let Ok(mut env) = JniEnv::from_raw(env) else {
             return std::ptr::null_mut();
         };
-        let mode = env.get_string(&JString::from_raw(mode));
-        let password = env.get_string(&JString::from_raw(password));
-        let android_preferences = env.get_string(&JString::from_raw(android_preferences));
+        let mode = env
+            .get_string(&JString::from_raw(mode))
+            .map(|value| value.to_string_lossy().into_owned());
+        let password = env
+            .get_string(&JString::from_raw(password))
+            .map(|value| value.to_string_lossy().into_owned());
+        let android_preferences = env
+            .get_string(&JString::from_raw(android_preferences))
+            .map(|value| value.to_string_lossy().into_owned());
         let response = match (mode, password, android_preferences) {
             (Ok(mode), Ok(password), Ok(android_preferences)) => export_local_migration_bundle_json(
-                &mode.to_string_lossy(),
+                &mode,
                 include_credentials != 0,
-                &password.to_string_lossy(),
-                &android_preferences.to_string_lossy(),
+                &password,
+                &android_preferences,
             ),
             _ => local_bundle_error("invalid JNI input"),
         };
@@ -1681,16 +1687,20 @@ mod jni_exports {
         let Ok(mut env) = JniEnv::from_raw(env) else {
             return std::ptr::null_mut();
         };
-        let values = (
-            env.get_string(&JString::from_raw(bundle_base64)),
-            env.get_string(&JString::from_raw(password)),
-            env.get_string(&JString::from_raw(android_preferences)),
-        );
-        let response = match values {
+        let bundle_base64 = env
+            .get_string(&JString::from_raw(bundle_base64))
+            .map(|value| value.to_string_lossy().into_owned());
+        let password = env
+            .get_string(&JString::from_raw(password))
+            .map(|value| value.to_string_lossy().into_owned());
+        let android_preferences = env
+            .get_string(&JString::from_raw(android_preferences))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match (bundle_base64, password, android_preferences) {
             (Ok(bundle), Ok(password), Ok(android_preferences)) => preview_local_migration_bundle_json(
-                &bundle.to_string_lossy(),
-                &password.to_string_lossy(),
-                &android_preferences.to_string_lossy(),
+                &bundle,
+                &password,
+                &android_preferences,
             ),
             _ => local_bundle_error("invalid JNI input"),
         };
@@ -1706,8 +1716,11 @@ mod jni_exports {
         let Ok(mut env) = JniEnv::from_raw(env) else {
             return std::ptr::null_mut();
         };
-        let response = match env.get_string(&JString::from_raw(bundle_base64)) {
-            Ok(bundle) => inspect_local_migration_bundle_json(&bundle.to_string_lossy()),
+        let bundle_base64 = env
+            .get_string(&JString::from_raw(bundle_base64))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match bundle_base64 {
+            Ok(bundle) => inspect_local_migration_bundle_json(&bundle),
             Err(_) => local_bundle_error("invalid JNI input"),
         };
         crate::android::jni::android::export_jstring(&mut env, &response)
@@ -1723,14 +1736,16 @@ mod jni_exports {
         let Ok(mut env) = JniEnv::from_raw(env) else {
             return std::ptr::null_mut();
         };
-        let values = (
-            env.get_string(&JString::from_raw(bundle_base64)),
-            env.get_string(&JString::from_raw(password)),
-        );
-        let response = match values {
+        let bundle_base64 = env
+            .get_string(&JString::from_raw(bundle_base64))
+            .map(|value| value.to_string_lossy().into_owned());
+        let password = env
+            .get_string(&JString::from_raw(password))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match (bundle_base64, password) {
             (Ok(bundle), Ok(password)) => extract_local_migration_android_preferences_json(
-                &bundle.to_string_lossy(),
-                &password.to_string_lossy(),
+                &bundle,
+                &password,
             ),
             _ => local_bundle_error("invalid JNI input"),
         };
@@ -1751,23 +1766,40 @@ mod jni_exports {
         let Ok(mut env) = JniEnv::from_raw(env) else {
             return std::ptr::null_mut();
         };
-        let values = (
-            env.get_string(&JString::from_raw(bundle_base64)),
-            env.get_string(&JString::from_raw(password)),
-            env.get_string(&JString::from_raw(mode)),
-            env.get_string(&JString::from_raw(choices_json)),
-            env.get_string(&JString::from_raw(expected_generation)),
-            env.get_string(&JString::from_raw(android_preferences)),
-        );
-        let response = match values {
+        let bundle_base64 = env
+            .get_string(&JString::from_raw(bundle_base64))
+            .map(|value| value.to_string_lossy().into_owned());
+        let password = env
+            .get_string(&JString::from_raw(password))
+            .map(|value| value.to_string_lossy().into_owned());
+        let mode = env
+            .get_string(&JString::from_raw(mode))
+            .map(|value| value.to_string_lossy().into_owned());
+        let choices_json = env
+            .get_string(&JString::from_raw(choices_json))
+            .map(|value| value.to_string_lossy().into_owned());
+        let expected_generation = env
+            .get_string(&JString::from_raw(expected_generation))
+            .map(|value| value.to_string_lossy().into_owned());
+        let android_preferences = env
+            .get_string(&JString::from_raw(android_preferences))
+            .map(|value| value.to_string_lossy().into_owned());
+        let response = match (
+            bundle_base64,
+            password,
+            mode,
+            choices_json,
+            expected_generation,
+            android_preferences,
+        ) {
             (Ok(bundle), Ok(password), Ok(mode), Ok(choices), Ok(expected_generation), Ok(android_preferences)) => {
                 import_local_migration_bundle_json(
-                    &bundle.to_string_lossy(),
-                    &password.to_string_lossy(),
-                    &mode.to_string_lossy(),
-                    &choices.to_string_lossy(),
-                    &expected_generation.to_string_lossy(),
-                    &android_preferences.to_string_lossy(),
+                    &bundle,
+                    &password,
+                    &mode,
+                    &choices,
+                    &expected_generation,
+                    &android_preferences,
                 )
             }
             _ => local_bundle_error("invalid JNI input"),

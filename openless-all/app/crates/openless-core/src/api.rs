@@ -2769,6 +2769,7 @@ impl OpenLessBackend {
                 marketplace,
                 repositories.clone(),
                 Arc::clone(&settings_write_gate),
+                encrypted_sync.is_none(),
             ))
         } else {
             None

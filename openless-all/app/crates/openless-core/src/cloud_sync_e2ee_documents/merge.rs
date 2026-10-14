@@ -137,13 +137,18 @@ impl MergePreview {
                 let mut channel: ChannelRecord = serde_json::from_value(doc.value.clone())
                     .map_err(|_| DocumentError::InvalidDocument)?;
                 if channel.namespace == *namespace {
-                    channel.active = choice.as_deref() == Some(channel.id.as_str());
-                    if channel.active {
-                        channel.enabled = true;
+                    let desired_active = choice.as_deref() == Some(channel.id.as_str());
+                    if desired_active {
                         found = true;
                     }
-                    doc.value = serde_json::to_value(channel)
-                        .map_err(|_| DocumentError::InvalidDocument)?;
+                    if channel.active != desired_active {
+                        channel.active = desired_active;
+                        if desired_active {
+                            channel.enabled = true;
+                        }
+                        doc.value = serde_json::to_value(channel)
+                            .map_err(|_| DocumentError::InvalidDocument)?;
+                    }
                 }
             }
             if !found {
