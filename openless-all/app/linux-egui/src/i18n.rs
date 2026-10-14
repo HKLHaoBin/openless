@@ -3966,11 +3966,11 @@ pub const CATALOG: &[Msg] = &[
     Msg {
         key: "settings.recording.audio_enhancement_desc",
         text: row(
-            "对本机麦克风应用轻量增益与软限幅，不包含降噪或回声消除。默认关闭。",
-            "對本機麥克風套用輕量增益與軟限幅，不包含降噪或回聲消除。預設關閉。",
-            "Applies light gain and soft limiting to the local microphone. It does not include noise suppression or echo cancellation. Off by default.",
-            "ローカルマイクに軽いゲインとソフトリミッターを適用します。ノイズ抑制やエコーキャンセルは含みません。既定ではオフです。",
-            "로컬 마이크에 가벼운 게인과 소프트 리미터를 적용합니다. 소음 억제나 에코 제거는 포함하지 않으며 기본값은 꺼짐입니다.",
+            "对本机麦克风应用轻量降噪、增益与软限幅，不包含回声消除。默认关闭。",
+            "對本機麥克風套用輕量降噪、增益與軟限幅，不包含回聲消除。預設關閉。",
+            "Applies light gain, soft limiting, and conservative noise suppression to the local microphone. It does not include echo cancellation. Off by default.",
+            "ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。",
+            "로컬 마이크에 가벼운 소음 억제, 게인과 소프트 리미터를 적용합니다. 에코 제거는 포함하지 않으며 기본값은 꺼짐입니다.",
         ),
     },
         Msg {

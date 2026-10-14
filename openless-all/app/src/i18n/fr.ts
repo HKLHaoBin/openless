@@ -1531,7 +1531,7 @@ export const fr: typeof zhCN = {
       lowLatencyDictationDesc:
         'Garde un flux microphone prêt et conserve jusqu’à 500 ms en mémoire afin de réduire les mots perdus juste après le raccourci. Aucun audio n’est enregistré ni envoyé avant confirmation ; ce mode consomme davantage et maintient l’indicateur du microphone actif.',
       audioEnhancementLabel: 'Amélioration légère du microphone',
-      audioEnhancementDesc: 'Applique un gain léger et une limitation douce au microphone local. N’inclut ni réduction du bruit ni annulation d’écho. Désactivée par défaut.',
+      audioEnhancementDesc: 'Applique un gain léger, une limitation douce et une réduction prudente du bruit au microphone local. N’inclut pas l’annulation d’écho. Désactivée par défaut.',
       muteDuringRecordingLabel: 'Couper le son pendant l’enregistrement',
       muteDuringRecordingDesc:
         'Coupe temporairement le son système pendant la saisie vocale pour éviter l’écho des haut-parleurs.',

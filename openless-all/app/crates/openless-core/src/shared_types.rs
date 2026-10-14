@@ -405,7 +405,7 @@ pub struct UserPreferences {
     /// Temporarily mute system output during recording; restore the original mute state on stop/cancel/error.
     #[serde(default)]
     pub mute_during_recording: bool,
-    /// Apply the lightweight gain and soft limiter to native microphone input.
+    /// Apply conservative noise suppression, lightweight gain, and a soft limiter to native microphone input.
     /// Disabled by default until an audio-quality baseline supports changing it.
     #[serde(default)]
     pub audio_enhancement_enabled: bool,

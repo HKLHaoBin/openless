@@ -1519,7 +1519,7 @@ export const de: typeof zhCN = {
       lowLatencyDictationDesc:
         'Hält einen Mikrofonstream bereit und bewahrt bis zu 500 ms im Speicher, damit Sprache direkt nach dem Kurzbefehl seltener verloren geht. Vor der Bestätigung wird Audio weder gespeichert noch hochgeladen; der Stromverbrauch steigt und die Mikrofonanzeige bleibt aktiv.',
       audioEnhancementLabel: 'Leichte Mikrofonverbesserung',
-      audioEnhancementDesc: 'Wendet eine leichte Verstärkung und weiche Begrenzung auf das lokale Mikrofon an. Keine Rauschunterdrückung oder Echounterdrückung. Standardmäßig aus.',
+      audioEnhancementDesc: 'Wendet eine leichte Verstärkung, weiche Begrenzung und konservative Rauschunterdrückung auf das lokale Mikrofon an. Keine Echounterdrückung. Standardmäßig aus.',
       muteDuringRecordingLabel: 'Während der Aufnahme stummschalten',
       muteDuringRecordingDesc:
         'Schaltet die Systemausgabe während der Spracheingabe vorübergehend stumm, um Lautsprecherechos zu vermeiden.',
