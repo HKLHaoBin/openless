@@ -1595,7 +1595,10 @@ export const de: typeof zhCN = {
       audioRecordingMaxEntriesDesc: 'Maximale Anzahl lokal gespeicherter WAV-Dateien. Leer = 200.',
       voiceActivationLabel: 'Sprachaktivierung',
       voiceActivationDesc: 'Lokal auf eine Aktivierungsphrase warten, um das Diktat zu starten.',
-      voiceActivationLocalOnly: 'Die Erkennung bleibt auf diesem Gerät; Bereitschaftsaudio wird weder hochgeladen noch archiviert.',
+      voiceActivationLocalOnly:
+        'Die Erkennung bleibt auf diesem Gerät; Bereitschaftsaudio wird weder hochgeladen noch archiviert.',
+      voiceActivationModelMissing: 'Das lokale Zipformer-Modell ist nicht installiert.',
+      voiceActivationDownloadZipformer: 'Zipformer herunterladen',
       voiceActivationWakeEnabled: 'Aktivierungsphrase',
       voiceActivationWakePhrase: 'Aktivierungsphrase',
       voiceActivationFinishEnabled: 'Abschlussphrase',

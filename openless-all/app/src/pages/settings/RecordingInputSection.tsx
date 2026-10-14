@@ -7,6 +7,7 @@ import { CapsuleStylePreview } from '../../components/TypelessCapsule';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { playRecordStartCue } from '../../lib/audioCue';
 import { defaultDictationHotkey } from '../../lib/hotkey';
+import { getSherpaOnnxAsrCatalog } from '../../lib/localAsr';
 import { emitSaved } from '../../lib/savedEvent';
 import { isHotkeyModeMigrationNoticeActive } from '../../lib/hotkeyMigration';
 import {
@@ -14,6 +15,11 @@ import {
   showWindowsSendInputNewlineMode,
 } from '../../lib/windowsKeyboardListToggle';
 import { isTauri, listMicrophoneDevices, setDictationHotkey } from '../../lib/ipc';
+import {
+  isVoiceActivationModelMissing,
+  VOICE_ACTIVATION_MODEL_ALIAS,
+  type VoiceActivationStateSnapshot,
+} from '../../lib/voiceActivation';
 import { getPlatformCapabilities } from '../../lib/platform';
 import type {
   CapsuleStyle,
@@ -28,7 +34,7 @@ import type {
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { Card, Collapsible } from '../_atoms';
+import { Btn, Card, Collapsible } from '../_atoms';
 import { SectionTitle, SettingRow, Toggle, inputStyle, segmentedTrackStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
 import { detectOS } from '../../components/WindowChrome';
@@ -51,7 +57,11 @@ async function autostartDisable(): Promise<void> {
   await invoke('plugin:autostart|disable');
 }
 
-export function RecordingInputSection() {
+export function RecordingInputSection({
+  onOpenLocalModels,
+}: {
+  onOpenLocalModels?: () => void;
+} = {}) {
   const { t } = useTranslation();
   const os = detectOS();
   const { prefs, capability, updatePrefs: savePrefs, refresh } = useHotkeySettings();
@@ -59,6 +69,8 @@ export function RecordingInputSection() {
   const [microphoneDevices, setMicrophoneDevices] = useState<MicrophoneDevice[]>([]);
   const [microphoneDevicesLoaded, setMicrophoneDevicesLoaded] = useState(false);
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
+  const [voiceActivationModelMissing, setVoiceActivationModelMissing] = useState(false);
+  const voiceActivationStateObservedRef = useRef(false);
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
@@ -128,6 +140,62 @@ export function RecordingInputSection() {
       unlisten?.();
     };
   }, [loadMicrophoneDevices]);
+
+  useEffect(() => {
+    if (!isTauri || os !== 'win') {
+      setVoiceActivationModelMissing(false);
+      return;
+    }
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    async function listenForVoiceActivationChanges() {
+      const { listen } = await import('@tauri-apps/api/event');
+      if (cancelled) return;
+      const stopListening = await listen<VoiceActivationStateSnapshot>(
+        'voice-activation:state-changed',
+        (event) => {
+          voiceActivationStateObservedRef.current = true;
+          setVoiceActivationModelMissing(isVoiceActivationModelMissing(event.payload));
+        },
+      );
+      if (cancelled) {
+        stopListening();
+        return;
+      }
+      unlisten = stopListening;
+    }
+    void listenForVoiceActivationChanges();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [os]);
+
+  useEffect(() => {
+    if (!isTauri || os !== 'win' || !prefs?.voiceActivationEnabled) {
+      voiceActivationStateObservedRef.current = false;
+      setVoiceActivationModelMissing(false);
+      return;
+    }
+    voiceActivationStateObservedRef.current = false;
+    let cancelled = false;
+    void getSherpaOnnxAsrCatalog()
+      .then((catalog) => {
+        if (cancelled || voiceActivationStateObservedRef.current) return;
+        const model = catalog.find(({ alias }) => alias === VOICE_ACTIVATION_MODEL_ALIAS);
+        setVoiceActivationModelMissing(model?.cached === false);
+      })
+      .catch(() => {
+        // The runtime event remains authoritative when the catalog cannot be read.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [os, prefs?.voiceActivationEnabled]);
+
+  useEffect(() => {
+    if (!prefs?.voiceActivationEnabled) setVoiceActivationModelMissing(false);
+  }, [prefs?.voiceActivationEnabled]);
 
   const saveKeyboardListAffectingPrefs = useCallback(
     async (nextPrefs: UserPreferences) => {
@@ -538,6 +606,36 @@ export function RecordingInputSection() {
                 <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 8 }}>
                   {t('settings.recording.voiceActivationLocalOnly')}
                 </div>
+                {voiceActivationModelMissing && (
+                  <div
+                    role="alert"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      marginBottom: 10,
+                      padding: '9px 10px',
+                      borderRadius: 8,
+                      background: 'rgba(220, 38, 38, 0.08)',
+                      border: '0.5px solid var(--ol-err)',
+                    }}
+                  >
+                    <span style={{ fontSize: 11.5, color: 'var(--ol-err)', lineHeight: 1.5 }}>
+                      {t('settings.recording.voiceActivationModelMissing')}
+                    </span>
+                    {onOpenLocalModels && (
+                      <Btn
+                        variant="blue"
+                        size="sm"
+                        onClick={onOpenLocalModels}
+                        style={{ flexShrink: 0 }}
+                      >
+                        {t('settings.recording.voiceActivationDownloadZipformer')}
+                      </Btn>
+                    )}
+                  </div>
+                )}
                 <SettingRow label={t('settings.recording.voiceActivationWakeEnabled')}>
                   <Toggle
                     on={prefs.voiceActivationWakeEnabled ?? true}
@@ -565,7 +663,10 @@ export function RecordingInputSection() {
                     aria-label={t('settings.recording.voiceActivationFinishPhrase')}
                     defaultValue={prefs.voiceActivationFinishPhrase ?? '完成语音录入'}
                     onBlur={(event) =>
-                      savePrefs({ ...prefs, voiceActivationFinishPhrase: event.currentTarget.value })
+                      savePrefs({
+                        ...prefs,
+                        voiceActivationFinishPhrase: event.currentTarget.value,
+                      })
                     }
                     style={{ ...inputStyle, width: '100%', margin: '2px 0 8px' }}
                   />
@@ -573,7 +674,9 @@ export function RecordingInputSection() {
                 <SettingRow label={t('settings.recording.voiceActivationTimeoutEnabled')}>
                   <Toggle
                     on={prefs.voiceActivationTimeoutEnabled ?? true}
-                    onToggle={(next) => savePrefs({ ...prefs, voiceActivationTimeoutEnabled: next })}
+                    onToggle={(next) =>
+                      savePrefs({ ...prefs, voiceActivationTimeoutEnabled: next })
+                    }
                   />
                 </SettingRow>
                 {prefs.voiceActivationTimeoutEnabled && (

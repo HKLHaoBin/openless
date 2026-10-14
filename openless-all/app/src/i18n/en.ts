@@ -1564,7 +1564,10 @@ export const en: typeof zhCN = {
       audioRecordingMaxEntriesDesc: 'Max wav files retained locally. Blank = 200.',
       voiceActivationLabel: 'Voice activation',
       voiceActivationDesc: 'Listen locally for a wake phrase to start dictation.',
-      voiceActivationLocalOnly: 'Recognition stays on this device; standby audio is not uploaded or archived.',
+      voiceActivationLocalOnly:
+        'Recognition stays on this device; standby audio is not uploaded or archived.',
+      voiceActivationModelMissing: 'The local Zipformer model is not installed.',
+      voiceActivationDownloadZipformer: 'Download Zipformer',
       voiceActivationWakeEnabled: 'Wake phrase',
       voiceActivationWakePhrase: 'Wake phrase',
       voiceActivationFinishEnabled: 'Finish phrase',

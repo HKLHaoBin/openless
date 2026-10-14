@@ -1421,7 +1421,10 @@ export const zhCN = {
       voiceActivationLabel: '语音唤醒听写',
       voiceActivationDesc:
         '仅在 Windows 桌面端启用本地语音命令唤醒听写。待机音频只在内存中处理，不会上传或保存；会增加功耗并保持麦克风指示灯亮起。',
-      voiceActivationLocalOnly: '本地识别：说“开始语音录入”开始，说“完成语音录入”结束。需要已安装本地 Zipformer 模型。',
+      voiceActivationLocalOnly:
+        '本地识别：说“开始语音录入”开始，说“完成语音录入”结束。需要已安装本地 Zipformer 模型。',
+      voiceActivationModelMissing: '请先在“AI 服务与模型”的本地模型页准备 Zipformer。',
+      voiceActivationDownloadZipformer: '前往 AI 服务与模型下载 Zipformer',
       voiceActivationWakeEnabled: '启用开始命令',
       voiceActivationWakePhrase: '开始命令',
       voiceActivationFinishEnabled: '启用完成命令',

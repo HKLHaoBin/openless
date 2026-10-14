@@ -1487,6 +1487,8 @@ export const zhTW: typeof zhCN = {
       voiceActivationLabel: '語音啟用',
       voiceActivationDesc: '在本機等待喚醒詞以開始聽寫。',
       voiceActivationLocalOnly: '辨識只在此裝置上進行；待機音訊不會上傳或封存。',
+      voiceActivationModelMissing: '請先在「AI 服務與模型」的本機模型頁準備 Zipformer。',
+      voiceActivationDownloadZipformer: '前往 AI 服務與模型下載 Zipformer',
       voiceActivationWakeEnabled: '喚醒詞',
       voiceActivationWakePhrase: '喚醒詞',
       voiceActivationFinishEnabled: '完成詞',

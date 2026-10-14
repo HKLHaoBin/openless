@@ -1539,7 +1539,10 @@ export const ko: typeof zhCN = {
       audioRecordingMaxEntriesDesc: '로컬 보관 wav 파일 상한. 빈칸 = 200.',
       voiceActivationLabel: '음성 활성화',
       voiceActivationDesc: '받아쓰기 시작 구문을 로컬에서 감지합니다.',
-      voiceActivationLocalOnly: '인식은 이 기기에서만 수행되며 대기 오디오는 업로드하거나 보관하지 않습니다.',
+      voiceActivationLocalOnly:
+        '인식은 이 기기에서만 수행되며 대기 오디오는 업로드하거나 보관하지 않습니다.',
+      voiceActivationModelMissing: '로컬 Zipformer 모델이 설치되지 않았습니다.',
+      voiceActivationDownloadZipformer: 'Zipformer 다운로드',
       voiceActivationWakeEnabled: '시작 구문',
       voiceActivationWakePhrase: '시작 구문',
       voiceActivationFinishEnabled: '종료 구문',

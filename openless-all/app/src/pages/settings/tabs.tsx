@@ -56,13 +56,13 @@ function usePlatformCaps(): PlatformCapabilities | null {
 }
 
 // Recording & input: from recording to text insertion, plus phone input.
-export function GeneralTab() {
+export function GeneralTab({ onOpenLocalModels }: { onOpenLocalModels?: () => void } = {}) {
   const platformCaps = usePlatformCaps();
   const showRemoteInput = platformCaps?.platform === 'desktop';
 
   return (
     <>
-      <RecordingInputSection />
+      <RecordingInputSection onOpenLocalModels={onOpenLocalModels} />
       {showRemoteInput && <RemoteInputSection />}
     </>
   );
@@ -113,16 +113,19 @@ export function AppearanceTab() {
 }
 
 // AI services & models: organizes channels, local models, and network settings by current pipeline and platform capabilities.
-export function ServicesTab() {
+export function ServicesTab({ initialView }: { initialView?: ServiceViewId } = {}) {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
   const platformCaps = usePlatformCaps();
   const showLocalModel = platformCaps?.supportsLocalAsr === true;
   const multimodal =
     prefs?.multimodalPipelineEnabled === true && prefs.pipelineMode === 'multimodal';
-  const [view, setView] = useState<ServiceViewId>('llm');
+  const [view, setView] = useState<ServiceViewId>(initialView ?? 'llm');
   const views = availableServiceViews(showLocalModel);
-  const selectedView = resolveServiceView(view, views, multimodal);
+  const selectedView =
+    initialView === 'models' && view === 'models' && showLocalModel
+      ? 'models'
+      : resolveServiceView(view, views, multimodal);
   const contentRef = useRef<HTMLDivElement>(null);
   useContentMotion(contentRef, selectedView);
   const pipelineRef = useRef<HTMLDivElement>(null);
