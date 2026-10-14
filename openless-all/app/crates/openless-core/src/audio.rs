@@ -508,7 +508,7 @@ mod tests {
             enhancement_enabled: true,
         });
         let mut out_of_phase = [0.2_f32; 320];
-        for frame in out_of_phase.chunks_exact_mut(2) {
+        for frame in out_of_phase.as_chunks_mut::<2>().0 {
             frame[1] = -0.2;
         }
         for _ in 0..24 {
