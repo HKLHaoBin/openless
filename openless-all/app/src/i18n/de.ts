@@ -1518,6 +1518,8 @@ export const de: typeof zhCN = {
       lowLatencyDictationLabel: 'Aufnahme mit niedriger Latenz',
       lowLatencyDictationDesc:
         'Hält einen Mikrofonstream bereit und bewahrt bis zu 500 ms im Speicher, damit Sprache direkt nach dem Kurzbefehl seltener verloren geht. Vor der Bestätigung wird Audio weder gespeichert noch hochgeladen; der Stromverbrauch steigt und die Mikrofonanzeige bleibt aktiv.',
+      audioEnhancementLabel: 'Leichte Mikrofonverbesserung',
+      audioEnhancementDesc: 'Wendet eine leichte Verstärkung, weiche Begrenzung und konservative Rauschunterdrückung auf das lokale Mikrofon an. Keine Echounterdrückung. Standardmäßig aus.',
       muteDuringRecordingLabel: 'Während der Aufnahme stummschalten',
       muteDuringRecordingDesc:
         'Schaltet die Systemausgabe während der Spracheingabe vorübergehend stumm, um Lautsprecherechos zu vermeiden.',
@@ -1585,6 +1587,9 @@ export const de: typeof zhCN = {
         'Ältere Einträge werden beim Speichern neuer Einträge entfernt. 0 = keine zeitabhängige Bereinigung.',
       historyMaxEntriesLabel: 'Maximale Verlaufseinträge',
       historyMaxEntriesDesc: 'Maximal lokal gespeicherte Sitzungen. Leer = 200. Bereich: 5–200.',
+      polishSkipMaxCharsLabel: 'Überarbeitung bei kurzen Eingaben überspringen (max. Zeichen)',
+      polishSkipMaxCharsDesc:
+        'Transkripte mit höchstens N Zeichen (ohne Leerzeichen) werden ohne LLM-Aufruf als Rohtext eingefügt. 0 = aus. Übersetzungen werden immer überarbeitet.',
       polishContextWindowLabel: 'Kontextfenster für Überarbeitung (Minuten)',
       polishContextWindowDesc:
         'Verwendet überarbeitete Transkripte der letzten N Minuten als Gesprächskontext. 0 = deaktiviert.',

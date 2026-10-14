@@ -1477,6 +1477,8 @@ export const ja: typeof zhCN = {
       lowLatencyDictationLabel: '低遅延キャプチャ',
       lowLatencyDictationDesc:
         'マイクストリームを準備し、最大 500 ミリ秒をメモリに保持して、ホットキー直後の音声が欠落しにくくします。録音を確定するまで音声は保存・アップロードされません。電力を多く使い、マイク使用中の表示が続きます。',
+      audioEnhancementLabel: '軽量マイク拡張',
+      audioEnhancementDesc: 'ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc:
         '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',
@@ -1542,6 +1544,9 @@ export const ja: typeof zhCN = {
         '保持日数を超えた履歴は新規書き込み時に削除されます。0 = 時間で削除しない。',
       historyMaxEntriesLabel: '履歴件数の上限',
       historyMaxEntriesDesc: 'ローカル保持セッション上限。空欄 = 200。範囲 5–200。',
+      polishSkipMaxCharsLabel: '短い入力は整形をスキップ（最大文字数）',
+      polishSkipMaxCharsDesc:
+        '空白を除いて N 文字以下の認識結果は、LLM を呼び出さずそのまま挿入します。0 = オフ。翻訳は常に整形します。',
       polishContextWindowLabel: '会話コンテキスト窓（分）',
       polishContextWindowDesc:
         '直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。',

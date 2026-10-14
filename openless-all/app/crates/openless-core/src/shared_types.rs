@@ -405,6 +405,10 @@ pub struct UserPreferences {
     /// Temporarily mute system output during recording; restore the original mute state on stop/cancel/error.
     #[serde(default)]
     pub mute_during_recording: bool,
+    /// Apply conservative noise suppression, lightweight gain, and a soft limiter to native microphone input.
+    /// Disabled by default until an audio-quality baseline supports changing it.
+    #[serde(default)]
+    pub audio_enhancement_enabled: bool,
     /// Reconnect the current ASR after recording ends and submit the whole PCM. Default off.
     #[serde(default)]
     pub stable_transcription_enabled: bool,
@@ -709,6 +713,13 @@ pub struct UserPreferences {
     /// Default 5 minutes.
     #[serde(default = "default_polish_context_window_minutes")]
     pub polish_context_window_minutes: u32,
+    /// Skip LLM polish for dictations whose transcript has at most N
+    /// non-whitespace characters (issue #1032). Short fragments are inserted
+    /// as the raw ASR text, avoiding a polish round-trip that costs far more
+    /// than the transcription itself. 0 = off (default). Translation sessions
+    /// always polish regardless of this value.
+    #[serde(default = "default_polish_skip_max_chars")]
+    pub polish_skip_max_chars: u32,
     /// Start silently (no main window). Common for login-launch users who
     /// want the tray rather than a popped-up window. When on, every launch
     /// path skips the window (manual clicks included); users reach the main
@@ -900,6 +911,10 @@ fn default_polish_context_window_minutes() -> u32 {
     5
 }
 
+fn default_polish_skip_max_chars() -> u32 {
+    0
+}
+
 fn default_local_asr_mirror() -> String {
     "huggingface".into()
 }
@@ -954,6 +969,8 @@ struct UserPreferencesWire {
     capsule_transcript_font_size: u8,
     #[serde(default)]
     mute_during_recording: bool,
+    #[serde(default)]
+    audio_enhancement_enabled: bool,
     #[serde(default)]
     stable_transcription_enabled: bool,
     #[serde(default)]
@@ -1096,6 +1113,8 @@ struct UserPreferencesWire {
     history_retention_days: u32,
     #[serde(default = "default_polish_context_window_minutes")]
     polish_context_window_minutes: u32,
+    #[serde(default = "default_polish_skip_max_chars")]
+    polish_skip_max_chars: u32,
     #[serde(default)]
     start_minimized: bool,
     #[serde(default)]
@@ -1212,6 +1231,7 @@ impl Default for UserPreferencesWire {
             capsule_transcript_enabled: prefs.capsule_transcript_enabled,
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
+            audio_enhancement_enabled: prefs.audio_enhancement_enabled,
             stable_transcription_enabled: prefs.stable_transcription_enabled,
             low_latency_dictation_enabled: prefs.low_latency_dictation_enabled,
             audio_cue_on_record: prefs.audio_cue_on_record,
@@ -1287,6 +1307,7 @@ impl Default for UserPreferencesWire {
             update_channel_explicit: None,
             history_retention_days: prefs.history_retention_days,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
+            polish_skip_max_chars: prefs.polish_skip_max_chars,
             start_minimized: prefs.start_minimized,
             theme_mode: prefs.theme_mode,
             streaming_insert: prefs.streaming_insert,
@@ -1413,6 +1434,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             capsule_transcript_enabled: wire.capsule_transcript_enabled,
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
+            audio_enhancement_enabled: wire.audio_enhancement_enabled,
             stable_transcription_enabled: wire.stable_transcription_enabled,
             low_latency_dictation_enabled: wire.low_latency_dictation_enabled,
             audio_cue_on_record: wire.audio_cue_on_record,
@@ -1501,6 +1523,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             update_channel_explicit,
             history_retention_days: wire.history_retention_days,
             polish_context_window_minutes: wire.polish_context_window_minutes,
+            polish_skip_max_chars: wire.polish_skip_max_chars,
             start_minimized: wire.start_minimized,
             theme_mode: wire.theme_mode,
             streaming_insert,
@@ -1791,6 +1814,7 @@ impl Default for UserPreferences {
             capsule_transcript_enabled: true,
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
+            audio_enhancement_enabled: false,
             stable_transcription_enabled: false,
             low_latency_dictation_enabled: false,
             audio_cue_on_record: true,
@@ -1863,6 +1887,7 @@ impl Default for UserPreferences {
             update_channel_explicit: false,
             history_retention_days: default_history_retention_days(),
             polish_context_window_minutes: default_polish_context_window_minutes(),
+            polish_skip_max_chars: default_polish_skip_max_chars(),
             start_minimized: false,
             theme_mode: ThemeMode::default(),
             streaming_insert: true,
@@ -3248,6 +3273,21 @@ mod tests {
     }
 
     #[test]
+    fn audio_enhancement_defaults_off_and_round_trips_when_enabled() {
+        let legacy: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.audio_enhancement_enabled);
+
+        let enabled = UserPreferences {
+            audio_enhancement_enabled: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&enabled).unwrap();
+        assert!(json.contains("\"audioEnhancementEnabled\":true"));
+        let restored: UserPreferences = serde_json::from_str(&json).unwrap();
+        assert!(restored.audio_enhancement_enabled);
+    }
+
+    #[test]
     fn stable_transcription_defaults_off_and_round_trips_when_enabled() {
         let legacy: UserPreferences = serde_json::from_str("{}").unwrap();
         assert!(!legacy.stable_transcription_enabled);
@@ -3450,6 +3490,20 @@ mod tests {
 
         let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(from_empty.paste_shortcut, PasteShortcut::CtrlV);
+    }
+
+    #[test]
+    fn polish_skip_max_chars_defaults_off_and_round_trips() {
+        // Issue #1032: the short-input polish skip is opt-in, so existing users keep polishing.
+        assert_eq!(UserPreferences::default().polish_skip_max_chars, 0);
+        let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(from_empty.polish_skip_max_chars, 0);
+
+        let configured: UserPreferences =
+            serde_json::from_str(r#"{"polishSkipMaxChars":8}"#).unwrap();
+        assert_eq!(configured.polish_skip_max_chars, 8);
+        let saved = serde_json::to_value(&configured).unwrap();
+        assert_eq!(saved["polishSkipMaxChars"], 8);
     }
 
     /// issue #440: old versions wrote the default `streamingInsert:false`

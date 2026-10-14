@@ -1418,6 +1418,8 @@ export const zhCN = {
       lowLatencyDictationLabel: '低延迟录音',
       lowLatencyDictationDesc:
         '保持麦克风流就绪，并在内存中保留最多 500 毫秒音频，减少按下热键后第一句话被漏识别的情况。确认录音前不会保存或上传音频；此模式会增加功耗并保持系统麦克风指示灯亮起。',
+      audioEnhancementLabel: '轻量麦克风增强',
+      audioEnhancementDesc: '对本机麦克风应用轻量降噪、增益与软限幅，不包含回声消除。默认关闭。',
       muteDuringRecordingLabel: '录音时静音',
       muteDuringRecordingDesc: '录音期间临时静音系统输出，避免扬声器回音。',
       audioCueLabel: '录音提示音',
@@ -1477,6 +1479,9 @@ export const zhCN = {
       historyRetentionDesc: '超过保留天数的历史在写入新条目时被清理；0 = 不按时间清理。',
       historyMaxEntriesLabel: '历史条数上限',
       historyMaxEntriesDesc: '本地保留会话上限，留空 = 200。范围 5–200。',
+      polishSkipMaxCharsLabel: '短句跳过润色（最大字数）',
+      polishSkipMaxCharsDesc:
+        '转写不超过 N 个字（不计空白）时直接插入原文，不调用润色模型。0 = 关闭。翻译模式始终润色。',
       polishContextWindowLabel: '对话上下文窗口（分钟）',
       polishContextWindowDesc: '把最近 N 分钟内已润色的转写作为多轮上下文，0 = 关闭。',
       recordAudioForDebugLabel: '保留原始录音（调试）',

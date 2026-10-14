@@ -1510,6 +1510,8 @@ export const es: typeof zhCN = {
       lowLatencyDictationLabel: 'Captura de baja latencia',
       lowLatencyDictationDesc:
         'Mantén preparado el flujo del micrófono y conserva hasta 500 ms en memoria para reducir la pérdida de voz justo después del atajo. El audio no se guarda ni se sube antes de confirmar la grabación; consume más energía y mantiene activo el indicador del micrófono.',
+      audioEnhancementLabel: 'Mejora ligera del micrófono',
+      audioEnhancementDesc: 'Aplica una ganancia ligera, limitación suave y reducción de ruido conservadora al micrófono local. No incluye cancelación de eco. Desactivada de forma predeterminada.',
       muteDuringRecordingLabel: 'Silenciar durante la grabación',
       muteDuringRecordingDesc:
         'Silencia temporalmente el sonido del sistema durante la entrada de voz para evitar el eco de los altavoces.',
@@ -1577,6 +1579,9 @@ export const es: typeof zhCN = {
       historyMaxEntriesLabel: 'Máximo de registros',
       historyMaxEntriesDesc:
         'Máximo de sesiones guardadas en el dispositivo. Vacío = 200. Intervalo: 5–200.',
+      polishSkipMaxCharsLabel: 'Omitir mejora en dictados cortos (máx. caracteres)',
+      polishSkipMaxCharsDesc:
+        'Las transcripciones de hasta N caracteres (sin contar espacios) se insertan tal cual, sin llamar al LLM. 0 = desactivado. La traducción siempre se mejora.',
       polishContextWindowLabel: 'Ventana de contexto para mejorar texto (minutos)',
       polishContextWindowDesc:
         'Usa las transcripciones mejoradas de los últimos N minutos como contexto de varias intervenciones. 0 = desactivado.',

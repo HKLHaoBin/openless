@@ -1789,6 +1789,8 @@ type TextInsertionPreparation = futures_util::future::Shared<
 >;
 
 struct ActiveTextInsertion {
+    session_id: SessionId,
+    insert_attempts: AtomicU64,
     platform: Arc<dyn TextInsertionSession>,
     streaming: bool,
     script: crate::shared_types::ChineseScriptPreference,
@@ -1826,6 +1828,7 @@ struct ActiveTextInsertionState {
 
 impl ActiveTextInsertion {
     fn new(
+        session_id: SessionId,
         platform: Arc<dyn TextInsertionSession>,
         context: &DictationContext,
         task_spawner: Arc<dyn TaskSpawner>,
@@ -1840,6 +1843,8 @@ impl ActiveTextInsertion {
         // raw transcript behind, so the two paths are mutually exclusive.
         let composition_input = context.insertion.composition_input;
         Arc::new(Self {
+            session_id,
+            insert_attempts: AtomicU64::new(0),
             platform,
             streaming: !composition_input
                 && context.uses_llm_polisher()
@@ -1883,6 +1888,57 @@ impl ActiveTextInsertion {
             .expect("text insertion resources lock poisoned")
             .take();
         self.finish_cleanup_retry();
+    }
+
+    fn begin_insert_attempt(&self, operation: &str, text: &str) -> u64 {
+        let attempt = self.insert_attempts.fetch_add(1, Ordering::Relaxed) + 1;
+        log::info!(
+            "[insert-diagnostics] session_id={} attempt={} operation={} chars={} hash={}",
+            self.session_id,
+            attempt,
+            operation,
+            text.chars().count(),
+            crate::output_cleaning::privacy_text_hash(text),
+        );
+        attempt
+    }
+
+    async fn write_text(
+        &self,
+        text: String,
+        operation: &str,
+    ) -> Result<crate::ports::InsertWriteResult, BackendError> {
+        let attempt = self.begin_insert_attempt(operation, &text);
+        let result = self.platform.write(text).await;
+        log::info!(
+            "[insert-diagnostics] session_id={} attempt={} operation={} result={:?}",
+            self.session_id,
+            attempt,
+            operation,
+            result
+                .as_ref()
+                .map(|written| written.written_chars)
+                .map_err(|error| error.code),
+        );
+        result
+    }
+
+    async fn finish_platform(&self, text: String) -> Result<InsertOutcome, BackendError> {
+        let operation = if text.is_empty() {
+            "finalize"
+        } else {
+            "insert_final"
+        };
+        let attempt = self.begin_insert_attempt(operation, &text);
+        let result = self.platform.finish(text).await;
+        log::info!(
+            "[insert-diagnostics] session_id={} attempt={} operation={} result={:?}",
+            self.session_id,
+            attempt,
+            operation,
+            result.as_ref().map_err(|error| error.code),
+        );
+        result
     }
 
     fn push(self: &Arc<Self>, delta: &crate::types::PolishDelta) {
@@ -1937,7 +1993,7 @@ impl ActiveTextInsertion {
             let result = if delta.is_empty() {
                 Ok(crate::ports::InsertWriteResult { written_chars: 0 })
             } else {
-                self.platform.write(delta.clone()).await
+                self.write_text(delta.clone(), "stream").await
             };
             let mut state = self.state.lock().expect("text insertion lock poisoned");
             match result {
@@ -2119,10 +2175,10 @@ impl ActiveTextInsertion {
             .reconcile_final(&final_text);
         use crate::streaming_insert::FinalReconciliation;
         match reconciliation {
-            FinalReconciliation::InsertFinal(text) => self.platform.finish(text).await,
+            FinalReconciliation::InsertFinal(text) => self.finish_platform(text).await,
             FinalReconciliation::WriteTail(tail) => {
                 let expected = tail.chars().count();
-                let written = self.platform.write(tail).await;
+                let written = self.write_text(tail, "tail").await;
                 let complete = matches!(written, Ok(result) if result.written_chars >= expected);
                 if complete {
                     if self.save_streamed_text_to_clipboard {
@@ -2130,7 +2186,7 @@ impl ActiveTextInsertion {
                             log::warn!("failed to preserve streamed text on clipboard: {error}");
                         }
                     }
-                    self.platform.finish(String::new()).await
+                    self.finish_platform(String::new()).await
                 } else {
                     self.finish_with_fallback(final_text).await
                 }
@@ -2141,7 +2197,7 @@ impl ActiveTextInsertion {
                         log::warn!("failed to preserve streamed text on clipboard: {error}");
                     }
                 }
-                self.platform.finish(String::new()).await
+                self.finish_platform(String::new()).await
             }
             FinalReconciliation::CopyFallback(text) => self.finish_with_fallback(text).await,
         }
@@ -2149,7 +2205,12 @@ impl ActiveTextInsertion {
 
     async fn finish_with_fallback(&self, text: String) -> Result<InsertOutcome, BackendError> {
         let copied = self.platform.copy(text).await;
-        let closed = self.platform.finish(String::new()).await;
+        log::info!(
+            "[insert-diagnostics] session_id={} operation=copy_fallback result={:?}",
+            self.session_id,
+            copied.as_ref().map_err(|error| error.code),
+        );
+        let closed = self.finish_platform(String::new()).await;
         copied?;
         closed?;
         Ok(InsertOutcome::CopiedFallback)
@@ -2186,6 +2247,12 @@ impl ActiveTextInsertion {
                             // the composition, or it would leave the transcript behind.
                             insertion.wait_for_partial_drain().await;
                             let result = insertion.platform.cancel().await;
+                            log::info!(
+                                "[insert-diagnostics] session_id={} operation=cancel attempts={} result={:?}",
+                                insertion.session_id,
+                                insertion.insert_attempts.load(Ordering::Relaxed),
+                                result.as_ref().map_err(|error| error.code),
+                            );
                             *insertion
                                 .cancel_result
                                 .lock()
@@ -4300,6 +4367,9 @@ impl OpenLessBackend {
                 .then(|| preferences.microphone_device_name.clone()),
             low_latency: preferences.low_latency_dictation_enabled,
             pre_roll_ms: 500,
+            audio_processing: crate::audio::AudioProcessingConfig {
+                enhancement_enabled: preferences.audio_enhancement_enabled,
+            },
         };
         match self.deps.dictation_engine.arm_audio_capture(request) {
             Ok(capture) => {
@@ -6124,6 +6194,7 @@ impl OpenLessBackend {
                     .begin(session_id, Arc::clone(&insertion_context))
                     .await?;
                 Ok(ActiveTextInsertion::new(
+                    session_id,
                     platform,
                     &insertion_context,
                     task_spawner,
@@ -6623,6 +6694,12 @@ impl OpenLessBackend {
         }
 
         let insert_outcome = if context.insertion.enabled {
+            log::info!(
+                "[insert-diagnostics] session_id={} phase=finalizing final_chars={} final_hash={}",
+                session_id,
+                engine_result.polished_text.chars().count(),
+                crate::output_cleaning::privacy_text_hash(&engine_result.polished_text),
+            );
             match self
                 .finish_text_insertion(session_id, engine_result.polished_text.clone())
                 .await
@@ -6641,7 +6718,8 @@ impl OpenLessBackend {
                         engine_result.asr_ms,
                         engine_result.polish_ms,
                         engine_result.has_audio_recording,
-                        context.uses_llm_polisher(),
+                        context.uses_llm_polisher()
+                            && !context.skips_polish_for_short_text(&engine_result.raw_text),
                         engine_result.asr_call_label.clone(),
                         engine_result.llm_call_label.clone(),
                     );
@@ -6654,6 +6732,13 @@ impl OpenLessBackend {
         } else {
             None
         };
+        if let Some(outcome) = insert_outcome {
+            log::info!(
+                "[insert-diagnostics] session_id={} phase=completed outcome={:?}",
+                session_id,
+                outcome,
+            );
+        }
         let result = DictationResult {
             session_id,
             raw_text: engine_result.raw_text.clone(),
@@ -6876,7 +6961,8 @@ impl OpenLessBackend {
             crate::shared_types::PipelineMode::Traditional => "traditional",
             crate::shared_types::PipelineMode::Multimodal => "multimodal",
         };
-        let llm_used = context.uses_llm_polisher();
+        let llm_used = context.uses_llm_polisher()
+            && !context.skips_polish_for_short_text(&engine_result.raw_text);
         let attribution = HistoryProviderAttribution::from_context(
             context,
             llm_used,
@@ -7487,6 +7573,26 @@ impl OpenLessBackend {
             options,
         );
         context.pipeline_mode = pipeline_mode;
+        // Issue #1032: when the LLM channel is not configured, mark the
+        // session as eligible for the Raw fallback instead of dispatching a
+        // polish request that cannot succeed. The context keeps its original
+        // style until the destination is known, so a later Cloud Note or
+        // translation choice can still take the polish path. A configured
+        // channel whose call fails still takes the polish fallback path below.
+        if purpose == DictationContextPurpose::Dictation
+            && traditional
+            && deferred_llm_error.is_none()
+            && context.uses_llm_polisher()
+            && !crate::cloud_providers::llm_channel_configured(
+                self.deps.credential_store.as_ref(),
+                &context.llm.provider_id,
+                &context.llm.provider_type,
+                context.llm.model.as_deref(),
+            )
+            .await
+        {
+            context = context.with_unconfigured_llm_raw();
+        }
         if let Some(error) = deferred_llm_error {
             if purpose != DictationContextPurpose::Dictation || context.uses_llm_polisher() {
                 return Err(error);
@@ -9743,6 +9849,22 @@ mod tests {
             .unwrap();
     }
 
+    /// Dictation fixtures exercise the polish path, so they run with a configured
+    /// default LLM channel (`ark`). Unconfigured channels now run as Raw (issue #1032).
+    fn llm_configured_credentials() -> Arc<crate::credentials::InMemoryCredentialStore> {
+        Arc::new(
+            crate::credentials::InMemoryCredentialStore::default().with_secret(
+                CredentialKey::new(
+                    crate::credentials::CredentialNamespace::Llm,
+                    Some("ark".to_string()),
+                    crate::credentials::LLM_API_KEY_ACCOUNT,
+                )
+                .unwrap(),
+                SecretValue::new("fixture-key"),
+            ),
+        )
+    }
+
     fn backend_with_dictation_engine(
         data_dir: std::path::PathBuf,
         dictation_engine: Arc<dyn DictationEngine>,
@@ -9759,7 +9881,7 @@ mod tests {
                 )),
                 dictation_engine,
                 task_spawner: Arc::new(TokioTaskSpawner),
-                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                credential_store: llm_configured_credentials(),
                 services: crate::domains::BackendServices::unsupported(),
                 local_asr_runtime: None,
                 marketplace_config: None,
@@ -11732,8 +11854,7 @@ mod tests {
         let contexts = engine.contexts();
         assert_eq!(contexts.len(), 2);
         assert!(!contexts[0].polish.translation_active);
-        let mut expected = (*contexts[0]).clone();
-        expected.polish.translation_active = true;
+        let expected = contexts[0].with_translation_requested(true);
         assert_eq!(*contexts[1], expected);
         assert_eq!(
             contexts[1].recording.microphone_device_name.as_deref(),
@@ -12888,6 +13009,20 @@ mod tests {
         )
         .unwrap();
         backend.start().await.unwrap();
+        // Configure the default LLM channel so the polish call is actually dispatched
+        // and fails; an unconfigured channel now runs as Raw (issue #1032).
+        backend
+            .set_credential(
+                CredentialKey::new(
+                    crate::credentials::CredentialNamespace::Llm,
+                    Some("ark".to_string()),
+                    crate::credentials::LLM_API_KEY_ACCOUNT,
+                )
+                .unwrap(),
+                SecretValue::new("fixture-key"),
+            )
+            .await
+            .unwrap();
 
         backend.start_dictation().await.unwrap();
         let result = backend.stop_dictation().await.unwrap();
@@ -12901,6 +13036,247 @@ mod tests {
         assert_eq!(history[0].has_audio_recording, Some(false));
 
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn unconfigured_llm_runs_as_raw_without_polish_failure() {
+        // Issue #1032: with no LLM API key the default Light mode must not dispatch
+        // polish (which would fail and record polishFailed); the dictation runs as Raw.
+        let data_dir = std::env::temp_dir().join(format!(
+            "openless-core-unconfigured-llm-history-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let engine = crate::dictation_engine::PipelineDictationEngine::new(
+            Arc::new(
+                crate::testing::FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![(25, 0.5)])
+                    .with_archived_recording(true),
+            ),
+            Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
+                "raw fallback",
+                25,
+            )),
+            Arc::new(crate::testing::FixtureTextPolisher::failing(
+                BackendError::new(BackendErrorCode::Provider, "polish must not be called"),
+            )),
+        );
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data_dir.clone(),
+                ..BackendConfig::default()
+            },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(crate::testing::FixtureTextInserter::with_outcome(
+                    InsertOutcome::Inserted,
+                )),
+                dictation_engine: Arc::new(engine),
+                task_spawner: Arc::new(TokioTaskSpawner),
+                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                services: crate::domains::BackendServices::unsupported(),
+                local_asr_runtime: None,
+                marketplace_config: None,
+                selection_runtime: None,
+                selection_polisher: None,
+                qa_runtime: None,
+            },
+        )
+        .unwrap();
+        backend.start().await.unwrap();
+
+        backend.start_dictation().await.unwrap();
+        let result = backend.stop_dictation().await.unwrap();
+
+        assert_eq!(result.polished_text, "raw fallback");
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].error_code, None);
+        assert_eq!(history[0].polish_ms, None);
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn short_polish_history_matches_the_executed_path() {
+        #[derive(Clone, Copy)]
+        struct Case {
+            raw: &'static str,
+            threshold: u32,
+            translation: bool,
+            insert_failed: bool,
+            correction: Option<(&'static str, &'static str)>,
+            polish_failed: bool,
+            uses_polisher: bool,
+        }
+        let short = Case {
+            raw: "确定",
+            threshold: 8,
+            translation: false,
+            insert_failed: false,
+            correction: None,
+            polish_failed: false,
+            uses_polisher: false,
+        };
+        let long = "确定重试确定重试好";
+        let cases = [
+            ("short", short),
+            (
+                "insert-failed",
+                Case {
+                    insert_failed: true,
+                    ..short
+                },
+            ),
+            (
+                "long",
+                Case {
+                    raw: long,
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+            (
+                "disabled",
+                Case {
+                    threshold: 0,
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+            (
+                "translation",
+                Case {
+                    translation: true,
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+            (
+                "expanded",
+                Case {
+                    correction: Some(("确定", long)),
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+            (
+                "shortened",
+                Case {
+                    raw: long,
+                    correction: Some((long, "确定")),
+                    ..short
+                },
+            ),
+            (
+                "polish-failed",
+                Case {
+                    raw: long,
+                    polish_failed: true,
+                    uses_polisher: true,
+                    ..short
+                },
+            ),
+        ];
+        for (name, case) in cases {
+            let data_dir = TestDataDir::new(name);
+            let polisher = Arc::new(if case.polish_failed {
+                crate::testing::FixtureTextPolisher::failing(BackendError::new(
+                    BackendErrorCode::Provider,
+                    "fixture polish failure",
+                ))
+            } else {
+                crate::testing::FixtureTextPolisher::successful("polished text")
+            });
+            let engine = crate::PipelineDictationEngine::new(
+                Arc::new(crate::testing::FixtureAudioRecorder::new(
+                    vec![vec![1, 0, 2, 0]],
+                    vec![(25, 0.5)],
+                )),
+                Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
+                    case.raw, 25,
+                )),
+                polisher.clone(),
+            );
+            let mut backend =
+                backend_with_dictation_engine(data_dir.path().to_path_buf(), Arc::new(engine));
+            if case.insert_failed {
+                backend.deps.text_inserter =
+                    Arc::new(crate::testing::FixtureTextInserter::failing(
+                        BackendError::new(BackendErrorCode::Platform, "fixture insert failure"),
+                    ));
+            }
+            backend
+                .set_credential(
+                    CredentialKey::new(
+                        crate::credentials::CredentialNamespace::Llm,
+                        Some("ark".to_string()),
+                        crate::credentials::LLM_MODEL_ACCOUNT,
+                    )
+                    .unwrap(),
+                    SecretValue::new("fixture-model"),
+                )
+                .await
+                .unwrap();
+            let mut preferences = backend.get_preferences();
+            preferences.polish_skip_max_chars = case.threshold;
+            preferences.streaming_insert = false;
+            preferences.translation_target_language = "English".to_string();
+            preferences.working_languages = vec!["简体中文".to_string(), "English".to_string()];
+            backend.set_preferences(preferences).unwrap();
+            if let Some((from, to)) = case.correction {
+                backend
+                    .add_correction_rule(from.to_string(), to.to_string())
+                    .unwrap();
+            }
+            backend.start().await.unwrap();
+            backend
+                .activate_style_pack(crate::style_packs::BUILTIN_STYLE_PACK_LIGHT_ID)
+                .unwrap();
+            backend
+                .start_dictation_with_options(DictationStartOptions {
+                    translation_requested: case.translation,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let result = backend.stop_dictation().await;
+            assert_eq!(result.is_err(), case.insert_failed, "{name}");
+            let history = backend.list_history().unwrap();
+            assert_eq!(history.len(), 1, "{name}");
+            let entry = &history[0];
+            assert_eq!(
+                polisher.inputs().len(),
+                if case.uses_polisher { 1 } else { 0 },
+                "{name}"
+            );
+            assert_eq!(
+                entry.llm_provider.as_deref(),
+                case.uses_polisher.then_some("ark"),
+                "{name}"
+            );
+            assert_eq!(
+                entry.llm_model.as_deref(),
+                case.uses_polisher.then_some("fixture-model"),
+                "{name}"
+            );
+            assert_eq!(entry.polish_ms.is_some(), case.uses_polisher, "{name}");
+            assert_eq!(entry.mode, crate::types::PolishMode::Light, "{name}");
+            assert_eq!(entry.translation_active, case.translation, "{name}");
+            let expected_error = if case.insert_failed {
+                Some("insertFailed")
+            } else if case.polish_failed {
+                Some("polishFailed")
+            } else {
+                None
+            };
+            assert_eq!(entry.error_code.as_deref(), expected_error, "{name}");
+            if !case.uses_polisher {
+                assert_eq!(
+                    entry.final_text,
+                    case.correction.map_or(case.raw, |(_, to)| to),
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -13335,6 +13711,7 @@ mod tests {
 
     #[tokio::test]
     async fn insertion_failure_persists_generated_text_and_releases_the_session() {
+        crate::testing::logging::start();
         let data_dir = std::env::temp_dir().join(format!(
             "openless-core-insert-failure-history-{}",
             uuid::Uuid::new_v4().simple()
@@ -13377,6 +13754,16 @@ mod tests {
             .expect_err("insertion must fail");
 
         assert_eq!(error.code, BackendErrorCode::Platform);
+        let logs = crate::testing::logging::matching(&format!(
+            "[insert-diagnostics] session_id={session_id} "
+        ));
+        assert!(logs
+            .iter()
+            .any(|line| line.contains("attempt=1 operation=insert_final result=Err(Platform)")));
+        assert!(!logs
+            .iter()
+            .any(|line| line.contains("generated text")
+                || line.contains("fixture insertion failure")));
         let history = backend.list_history().unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].id, session_id.to_string());
@@ -13473,7 +13860,7 @@ mod tests {
                 text_inserter: Arc::new(inserter.clone()),
                 dictation_engine: Arc::new(engine),
                 task_spawner: Arc::new(TokioTaskSpawner),
-                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                credential_store: llm_configured_credentials(),
                 services: crate::domains::BackendServices::unsupported(),
                 local_asr_runtime: None,
                 marketplace_config: None,
@@ -13556,6 +13943,7 @@ mod tests {
         ending: NativeInsertionEnd,
         translation: bool,
     ) {
+        crate::testing::logging::start();
         struct BlockingInsertion {
             actions: Arc<Mutex<Vec<&'static str>>>,
             started: Arc<tokio::sync::Semaphore>,
@@ -13623,7 +14011,7 @@ mod tests {
         let host = Arc::new(FakeHost::default());
         let mut deps = BackendDependencies::unsupported();
         deps.host_actions = host.clone();
-        deps.credential_store = Arc::new(crate::credentials::InMemoryCredentialStore::default());
+        deps.credential_store = llm_configured_credentials();
         deps.text_inserter = Arc::new(BlockingInserter(Arc::new(BlockingInsertion {
             actions: Arc::clone(&actions),
             started: Arc::clone(&started),
@@ -13764,6 +14152,17 @@ mod tests {
             *actions.lock().unwrap(),
             vec!["write started", "write finished", "input source restored"]
         );
+        if streaming {
+            let logs = crate::testing::logging::matching(&format!(
+                "[insert-diagnostics] session_id={session_id} "
+            ));
+            assert!(logs
+                .iter()
+                .any(|line| line.contains("attempt=1 operation=stream result=Ok(")));
+            assert!(logs
+                .iter()
+                .any(|line| line.contains("operation=cancel attempts=1 result=Ok(())")));
+        }
         let next = backend.start_dictation().await.unwrap();
         backend.cancel_dictation(Some(next)).await.unwrap();
     }
@@ -13806,6 +14205,7 @@ mod tests {
 
     #[tokio::test]
     async fn streaming_final_writes_only_the_missing_tail() {
+        crate::testing::logging::start();
         use crate::testing::{FixtureDictationEngine, FixtureInsertionAction, FixtureTextInserter};
 
         let data_dir = TestDataDir::new("streaming-final-tail");
@@ -13827,7 +14227,7 @@ mod tests {
                 text_inserter: Arc::new(inserter.clone()),
                 dictation_engine: Arc::new(engine),
                 task_spawner: Arc::new(TokioTaskSpawner),
-                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                credential_store: llm_configured_credentials(),
                 services: crate::domains::BackendServices::unsupported(),
                 local_asr_runtime: None,
                 marketplace_config: None,
@@ -13864,10 +14264,31 @@ mod tests {
                 },
             ]
         );
+        let logs = crate::testing::logging::matching(&format!(
+            "[insert-diagnostics] session_id={session_id} "
+        ));
+        for operation in [
+            "attempt=1 operation=stream chars=1",
+            "attempt=2 operation=tail chars=1",
+            "attempt=3 operation=finalize chars=0",
+        ] {
+            assert!(
+                logs.iter().any(|line| line.contains(operation)),
+                "missing {operation}: {logs:?}"
+            );
+        }
+        assert_eq!(
+            logs.iter().filter(|line| line.contains(" result=")).count(),
+            3
+        );
+        assert!(!logs
+            .iter()
+            .any(|line| line.contains('你') || line.contains('好')));
     }
 
     #[tokio::test]
     async fn native_streaming_unavailable_keeps_one_final_delivery() {
+        crate::testing::logging::start();
         struct FinalOnlySession(Arc<Mutex<Vec<String>>>);
         impl TextInsertionSession for FinalOnlySession {
             fn supports_streaming(&self) -> bool {
@@ -13906,6 +14327,7 @@ mod tests {
         )
         .unwrap();
         let insertion = ActiveTextInsertion::new(
+            session_id,
             Arc::new(FinalOnlySession(delivered.clone())),
             &context,
             Arc::new(TokioTaskSpawner),
@@ -13921,6 +14343,12 @@ mod tests {
             InsertOutcome::Inserted
         );
         assert_eq!(*delivered.lock().unwrap(), ["final text"]);
+        let logs = crate::testing::logging::matching(&format!(
+            "[insert-diagnostics] session_id={session_id} "
+        ));
+        assert_eq!(logs.len(), 2);
+        assert!(logs[0].contains("attempt=1 operation=insert_final chars=10"));
+        assert!(logs[1].contains("attempt=1 operation=insert_final result=Ok(Inserted)"));
     }
 
     struct CompositionRecorder(Arc<Mutex<Vec<String>>>);
@@ -13959,6 +14387,7 @@ mod tests {
         )
         .unwrap();
         ActiveTextInsertion::new(
+            session_id,
             Arc::new(CompositionRecorder(log)),
             context,
             Arc::new(TokioTaskSpawner),
@@ -14045,6 +14474,7 @@ mod tests {
         )
         .unwrap();
         let insertion = ActiveTextInsertion::new(
+            session_id,
             Arc::new(StreamingProbe),
             &context,
             Arc::new(TokioTaskSpawner),

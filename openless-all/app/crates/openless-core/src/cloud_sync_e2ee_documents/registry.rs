@@ -166,6 +166,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "local_only_microphone_capture",
     },
     PreferenceField {
+        rust_name: "audio_enhancement_enabled",
+        key: "audioEnhancementEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_only_microphone_capture",
+    },
+    PreferenceField {
         rust_name: "active_asr_provider",
         key: "activeAsrProvider",
         class: PreferenceClass::Excluded,
@@ -630,6 +637,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "polish_context_window_minutes",
         key: "polishContextWindowMinutes",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Unsigned32,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "polish_skip_max_chars",
+        key: "polishSkipMaxChars",
         class: PreferenceClass::Portable,
         shape: PreferenceShape::Unsigned32,
         reason: "portable_setting",
