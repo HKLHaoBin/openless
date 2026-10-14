@@ -107,4 +107,39 @@ assert.doesNotMatch(
   'PreviewConfirm UIA diagnostics must not log selection content',
 );
 
+const restoreSelection = windowsHost.match(
+  /pub\(crate\) fn restore_focused_selection[\s\S]*?(?=\nunsafe fn runtime_id)/,
+)?.[0];
+assert.ok(restoreSelection, 'the focused-selection restoration helper must exist');
+assert.match(
+  restoreSelection,
+  /!current_text\.trim\(\)\.is_empty\(\)[\s\S]*?MoveEndpointByUnit[\s\S]*?candidate[\s\S]*?\.Select\(\)/,
+  'browser selection restoration must only expand a collapsed UIA caret and select an exact text match',
+);
+assert.match(
+  restoreSelection,
+  /let Some\(anchor\) = anchor[\s\S]*?FocusedSelectionRestoreStatus::Unavailable/,
+  'selection restoration must fail closed when the original UIA anchor was not captured',
+);
+assert.match(
+  restoreSelection,
+  /line_break_units[\s\S]*?unit_counts[\s\S]*?MoveEndpointByUnit/,
+  'selection restoration must account for provider-specific newline character units',
+);
+assert.doesNotMatch(
+  restoreSelection,
+  /post_copy_shortcut|simulate_copy_and_read/,
+  'selection restoration must not fall back to synthetic Ctrl+C',
+);
+assert.match(
+  adapters,
+  /restore_selection_insertion_target_selection\(target, source_text\)[\s\S]*?validate_selection_insertion_target_for_apply\(/,
+  'PreviewConfirm must attempt bounded UIA selection restoration before final validation',
+);
+assert.match(
+  adapters,
+  /match selection_restore[\s\S]*?SelectionInsertionTargetSelectionRestore::Changed[\s\S]*?BackendErrorCode::Cancelled[\s\S]*?selectionPolishSelectionChanged/,
+  'a changed or ambiguous selection restore must fail closed before text-only validation',
+);
+
 console.log('Windows insertion target contract passed');

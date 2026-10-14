@@ -165,6 +165,286 @@ pub(crate) fn focused_selection_status(expected: &str) -> FocusedSelectionStatus
     focused_selection_observation(expected).status
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct FocusedSelectionAnchor {
+    runtime_id: Vec<i32>,
+    process_id: i32,
+    before: String,
+    after: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FocusedSelectionRestoreStatus {
+    Matched,
+    Restored,
+    Changed,
+    Unavailable,
+}
+
+const SELECTION_CONTEXT_UNITS: i32 = 128;
+
+fn selection_context_before(
+    pattern: &IUIAutomationTextPattern,
+    selected: &IUIAutomationTextRange,
+) -> Result<String> {
+    unsafe {
+        let range = pattern.DocumentRange()?;
+        range.MoveEndpointByRange(
+            TextPatternRangeEndpoint_Start,
+            selected,
+            TextPatternRangeEndpoint_Start,
+        )?;
+        range.MoveEndpointByUnit(
+            TextPatternRangeEndpoint_Start,
+            TextUnit_Character,
+            -SELECTION_CONTEXT_UNITS,
+        )?;
+        range.MoveEndpointByRange(
+            TextPatternRangeEndpoint_End,
+            selected,
+            TextPatternRangeEndpoint_Start,
+        )?;
+        Ok(range
+            .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)?
+            .to_string())
+    }
+}
+
+fn selection_context_after(
+    pattern: &IUIAutomationTextPattern,
+    selected: &IUIAutomationTextRange,
+) -> Result<String> {
+    unsafe {
+        let range = pattern.DocumentRange()?;
+        range.MoveEndpointByRange(
+            TextPatternRangeEndpoint_Start,
+            selected,
+            TextPatternRangeEndpoint_End,
+        )?;
+        range.MoveEndpointByRange(
+            TextPatternRangeEndpoint_End,
+            selected,
+            TextPatternRangeEndpoint_End,
+        )?;
+        range.MoveEndpointByUnit(
+            TextPatternRangeEndpoint_End,
+            TextUnit_Character,
+            SELECTION_CONTEXT_UNITS,
+        )?;
+        Ok(range
+            .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)?
+            .to_string())
+    }
+}
+
+/// Capture the focused UIA element and bounded text around its current selection. The anchor is
+/// kept in memory only; its contents are never logged. It lets preview confirmation distinguish a
+/// browser selection collapsed at the original endpoint from an identical string elsewhere.
+pub(crate) fn capture_focused_selection_anchor() -> Option<FocusedSelectionAnchor> {
+    with_voice_edit_uia(|uia| unsafe {
+        let element = uia
+            .GetFocusedElement()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let pattern = element
+            .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let ranges = pattern
+            .GetSelection()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        if ranges
+            .Length()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?
+            != 1
+        {
+            return Ok(None);
+        }
+        let selected = ranges
+            .GetElement(0)
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let selected_text = selected
+            .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)
+            .map_err(|_| "selectionTargetUnavailable".to_string())?
+            .to_string();
+        if selected_text.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(FocusedSelectionAnchor {
+            runtime_id: runtime_id(&element)
+                .map_err(|_| "selectionTargetUnavailable".to_string())?,
+            process_id: element
+                .CurrentProcessId()
+                .map_err(|_| "selectionTargetUnavailable".to_string())?,
+            before: selection_context_before(&pattern, &selected)
+                .map_err(|_| "selectionTargetUnavailable".to_string())?,
+            after: selection_context_after(&pattern, &selected)
+                .map_err(|_| "selectionTargetUnavailable".to_string())?,
+        }))
+    })
+    .ok()
+    .flatten()
+}
+
+fn selection_context_matches(actual: &str, expected: &str) -> bool {
+    normalize_line_endings(actual) == normalize_line_endings(expected)
+}
+
+/// Browser editors often collapse a selection when their window loses focus. If the original
+/// control is focused again and UIA reports a collapsed caret, expand only from that exact caret
+/// and accept the repair when the resulting range contains the complete captured selection text.
+/// A non-empty different selection is never rewritten, and an ambiguous/unavailable range fails
+/// closed through the normal validation that follows this helper.
+pub(crate) fn restore_focused_selection(
+    anchor: Option<&FocusedSelectionAnchor>,
+    expected: &str,
+) -> FocusedSelectionRestoreStatus {
+    let expected = expected.trim();
+    if expected.is_empty() {
+        return FocusedSelectionRestoreStatus::Unavailable;
+    }
+    let Some(anchor) = anchor else {
+        return FocusedSelectionRestoreStatus::Unavailable;
+    };
+    let requested_units = expected.chars().count().min(i32::MAX as usize) as i32;
+    if requested_units == 0 {
+        return FocusedSelectionRestoreStatus::Unavailable;
+    }
+
+    with_voice_edit_uia(|uia| unsafe {
+        let element = uia
+            .GetFocusedElement()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let current_runtime_id =
+            runtime_id(&element).map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let current_process_id = element
+            .CurrentProcessId()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        if current_runtime_id != anchor.runtime_id || current_process_id != anchor.process_id {
+            return Ok(FocusedSelectionRestoreStatus::Changed);
+        }
+        let pattern = element
+            .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let ranges = pattern
+            .GetSelection()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        if ranges
+            .Length()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?
+            != 1
+        {
+            return Ok(FocusedSelectionRestoreStatus::Unavailable);
+        }
+        let current = ranges
+            .GetElement(0)
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let current_text = current
+            .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)
+            .map_err(|_| "selectionTargetUnavailable".to_string())?
+            .to_string();
+        let current_status = selection_observation(expected, Some(&current_text)).status;
+        if current_status == FocusedSelectionStatus::Matched {
+            let before = selection_context_before(&pattern, &current).ok();
+            let after = selection_context_after(&pattern, &current).ok();
+            return Ok(
+                if before
+                    .as_deref()
+                    .is_some_and(|before| selection_context_matches(before, &anchor.before))
+                    && after
+                        .as_deref()
+                        .is_some_and(|after| selection_context_matches(after, &anchor.after))
+                {
+                    FocusedSelectionRestoreStatus::Matched
+                } else {
+                    FocusedSelectionRestoreStatus::Changed
+                },
+            );
+        }
+        if !current_text.trim().is_empty() {
+            return Ok(FocusedSelectionRestoreStatus::Changed);
+        }
+
+        let normalized_expected = normalize_line_endings(expected);
+        let line_break_units = normalized_expected.chars().filter(|character| *character == '\n').count();
+        let line_break_units = line_break_units.min(i32::MAX as usize) as i32;
+        let common_unit_counts = [
+            requested_units,
+            requested_units.saturating_sub(line_break_units),
+            requested_units.saturating_add(line_break_units),
+            requested_units.saturating_sub(1),
+            requested_units.saturating_add(1),
+        ];
+        let max_restore_units = expected
+            .encode_utf16()
+            .count()
+            .saturating_add(line_break_units as usize)
+            .saturating_add(2)
+            .min(ObservedInsertion::MAX_DOCUMENT_UTF16) as i32;
+        let mut unit_counts = Vec::with_capacity(max_restore_units as usize);
+        for count in common_unit_counts {
+            if count > 0 && !unit_counts.contains(&count) {
+                unit_counts.push(count);
+            }
+        }
+        for count in 1..=max_restore_units {
+            if !common_unit_counts.contains(&count) {
+                unit_counts.push(count);
+            }
+        }
+
+        for (endpoint, direction) in [
+            (TextPatternRangeEndpoint_Start, -1),
+            (TextPatternRangeEndpoint_End, 1),
+        ] {
+            for units in unit_counts.iter().copied() {
+                let candidate = current
+                    .Clone()
+                    .map_err(|_| "selectionTargetUnavailable".to_string())?;
+                let moved = candidate
+                    .MoveEndpointByUnit(endpoint, TextUnit_Character, direction * units)
+                    .map_err(|_| "selectionTargetUnavailable".to_string())?;
+                if moved == 0 {
+                    continue;
+                }
+                let candidate_text = candidate
+                    .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)
+                    .map_err(|_| "selectionTargetUnavailable".to_string())?
+                    .to_string();
+                if selection_observation(expected, Some(&candidate_text)).status
+                    != FocusedSelectionStatus::Matched
+                {
+                    continue;
+                }
+                let before = selection_context_before(&pattern, &candidate).ok();
+                let after = selection_context_after(&pattern, &candidate).ok();
+                let context_matches = before
+                    .as_deref()
+                    .is_some_and(|actual| selection_context_matches(actual, &anchor.before))
+                    && after
+                        .as_deref()
+                        .is_some_and(|actual| selection_context_matches(actual, &anchor.after));
+                if !context_matches {
+                    continue;
+                }
+                candidate
+                    .Select()
+                    .map_err(|_| "selectionTargetUnavailable".to_string())?;
+                log::info!(
+                    "[selection-polish] preview_selection_restore result=restored direction={} units={}",
+                    if endpoint == TextPatternRangeEndpoint_Start {
+                        "backward"
+                    } else {
+                        "forward"
+                    },
+                    units,
+                );
+                return Ok(FocusedSelectionRestoreStatus::Restored);
+            }
+        }
+        Ok(FocusedSelectionRestoreStatus::Changed)
+    })
+    .unwrap_or(FocusedSelectionRestoreStatus::Unavailable)
+}
+
 unsafe fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>> {
     use windows::Win32::System::Ole::{
         SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,

@@ -1093,6 +1093,44 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
                     "selectionPolishTargetUnavailable",
                 ));
             }
+            #[cfg(target_os = "windows")]
+            let selection_restore =
+                crate::selection::restore_selection_insertion_target_selection(target, source_text);
+            #[cfg(target_os = "windows")]
+            log::info!(
+                "[selection-polish] preview_selection_restore result={}",
+                match selection_restore {
+                    crate::selection::SelectionInsertionTargetSelectionRestore::Matched => {
+                        "matched"
+                    }
+                    crate::selection::SelectionInsertionTargetSelectionRestore::Restored => {
+                        "restored"
+                    }
+                    crate::selection::SelectionInsertionTargetSelectionRestore::Changed => {
+                        "changed"
+                    }
+                    crate::selection::SelectionInsertionTargetSelectionRestore::Unavailable => {
+                        "unavailable"
+                    }
+                }
+            );
+            #[cfg(target_os = "windows")]
+            match selection_restore {
+                crate::selection::SelectionInsertionTargetSelectionRestore::Matched
+                | crate::selection::SelectionInsertionTargetSelectionRestore::Restored => {}
+                crate::selection::SelectionInsertionTargetSelectionRestore::Changed => {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Cancelled,
+                        "selectionPolishSelectionChanged",
+                    ));
+                }
+                crate::selection::SelectionInsertionTargetSelectionRestore::Unavailable => {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Platform,
+                        "selectionPolishTargetUnavailable",
+                    ));
+                }
+            }
         } else {
             log::info!(
                 "[selection-polish] apply path=direct source_chars={} replacement_chars={}",

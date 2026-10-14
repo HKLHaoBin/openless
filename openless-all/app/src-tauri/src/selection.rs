@@ -58,6 +58,8 @@ pub struct SelectionContext {
 pub(crate) struct SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     windows: Option<WindowsSelectionTarget>,
+    #[cfg(target_os = "windows")]
+    windows_selection_anchor: Option<crate::host_document::FocusedSelectionAnchor>,
     #[cfg(target_os = "macos")]
     macos: Option<MacosSelectionTarget>,
 }
@@ -114,6 +116,14 @@ pub(crate) enum SelectionInsertionTargetValidation {
     TargetUnavailable,
     TargetChanged,
     SelectionChanged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionInsertionTargetSelectionRestore {
+    Matched,
+    Restored,
+    Changed,
+    Unavailable,
 }
 
 impl SelectionInsertionTargetValidation {
@@ -357,6 +367,7 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
     {
         return SelectionInsertionTarget {
             windows: capture_windows_selection_target(),
+            windows_selection_anchor: crate::host_document::capture_focused_selection_anchor(),
         };
     }
 
@@ -572,6 +583,41 @@ pub(crate) fn validate_selection_insertion_target_for_apply(
     let _ = preview_confirm;
 
     validate_selection_insertion_target(target, expected_selection)
+}
+
+pub(crate) fn restore_selection_insertion_target_selection(
+    target: &SelectionInsertionTarget,
+    expected_selection: &str,
+) -> SelectionInsertionTargetSelectionRestore {
+    #[cfg(target_os = "windows")]
+    {
+        if !selection_insertion_target_is_current(target) {
+            return SelectionInsertionTargetSelectionRestore::Changed;
+        }
+        return match crate::host_document::restore_focused_selection(
+            target.windows_selection_anchor.as_ref(),
+            expected_selection,
+        ) {
+            crate::host_document::FocusedSelectionRestoreStatus::Matched => {
+                SelectionInsertionTargetSelectionRestore::Matched
+            }
+            crate::host_document::FocusedSelectionRestoreStatus::Restored => {
+                SelectionInsertionTargetSelectionRestore::Restored
+            }
+            crate::host_document::FocusedSelectionRestoreStatus::Changed => {
+                SelectionInsertionTargetSelectionRestore::Changed
+            }
+            crate::host_document::FocusedSelectionRestoreStatus::Unavailable => {
+                SelectionInsertionTargetSelectionRestore::Unavailable
+            }
+        };
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (target, expected_selection);
+        SelectionInsertionTargetSelectionRestore::Unavailable
+    }
 }
 
 /// macOS only: re-read the full current selection (trimmed, not head/tail truncated)
@@ -1812,11 +1858,15 @@ mod tests {
     #[test]
     fn windows_requires_a_captured_target_before_contacting_the_provider() {
         assert!(!selection_insertion_target_is_captured(
-            &SelectionInsertionTarget { windows: None }
+            &SelectionInsertionTarget {
+                windows: None,
+                ..Default::default()
+            }
         ));
         assert!(selection_insertion_target_is_captured(
             &SelectionInsertionTarget {
                 windows: Some(windows_target(10)),
+                ..Default::default()
             }
         ));
     }
@@ -1824,7 +1874,10 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn preview_apply_uses_target_fingerprint_without_reading_selection() {
-        let target = SelectionInsertionTarget { windows: None };
+        let target = SelectionInsertionTarget {
+            windows: None,
+            ..Default::default()
+        };
         assert_eq!(
             validate_selection_insertion_target_for_apply(&target, "source", true),
             SelectionInsertionTargetValidation::TargetChanged
@@ -1834,7 +1887,10 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn direct_apply_still_requires_full_target_validation() {
-        let target = SelectionInsertionTarget { windows: None };
+        let target = SelectionInsertionTarget {
+            windows: None,
+            ..Default::default()
+        };
         assert_eq!(
             validate_selection_insertion_target_for_apply(&target, "source", false),
             SelectionInsertionTargetValidation::TargetUnavailable
