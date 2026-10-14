@@ -1,15 +1,15 @@
 {
   "scope": "Static shared IPC command coverage; excludes event subscriptions, dynamic commands and desktop-only calls outside src/lib/ipc.",
   "total": 190,
-  "wired": 89,
-  "missing": 101,
+  "wired": 100,
+  "missing": 90,
   "commands": [
     {
       "name": "accept_pending_correction",
       "calledFrom": [
         "src/lib/ipc/vocab.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "add_correction_rule",
@@ -121,7 +121,7 @@
       "calledFrom": [
         "src/lib/ipc/cloud-sync.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "cloud_sync_e2ee_apply_restore",
@@ -247,21 +247,21 @@
       "calledFrom": [
         "src/lib/ipc/cloud-sync.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "cloud_sync_status",
       "calledFrom": [
         "src/lib/ipc/cloud-sync.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "cloud_sync_upload",
       "calledFrom": [
         "src/lib/ipc/cloud-sync.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "coding_agent_cancel_test",
@@ -408,21 +408,21 @@
       "calledFrom": [
         "src/lib/ipc/vocab.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "export_error_log",
       "calledFrom": [
         "src/lib/ipc/utils.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "arkts"
     },
     {
       "name": "export_error_log_to_downloads",
       "calledFrom": [
         "src/lib/ipc/utils.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "arkts"
     },
     {
       "name": "export_style_pack_to_zip",
@@ -772,7 +772,7 @@
       "calledFrom": [
         "src/lib/ipc/marketplace.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "arkts"
     },
     {
       "name": "marketplace_install",
@@ -912,7 +912,7 @@
       "calledFrom": [
         "src/lib/ipc/channels.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "regenerate_remote_pin",
@@ -926,7 +926,7 @@
       "calledFrom": [
         "src/lib/ipc/vocab.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "remove_correction_rule",

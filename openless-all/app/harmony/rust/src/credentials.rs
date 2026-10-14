@@ -180,7 +180,12 @@ impl CredentialStore for HarmonyCredentials {
         let original_key = key.clone();
         let directory = self.directory.clone();
         Box::pin(async move {
-            if key.provider_id.is_none() {
+            if key.provider_id.is_none()
+                && matches!(
+                    key.namespace,
+                    CredentialNamespace::Asr | CredentialNamespace::Llm | CredentialNamespace::Omni
+                )
+            {
                 key.provider_id = Some(
                     directory
                         .active_provider(match key.namespace {

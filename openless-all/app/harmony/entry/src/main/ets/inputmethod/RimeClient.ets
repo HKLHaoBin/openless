@@ -48,7 +48,9 @@ export function initializeRime(filesDir: string, resources: resourceManager.Reso
 
 export async function testRime(filesDir: string, resources: resourceManager.ResourceManager): Promise<boolean> {
   if (validated) return true;
-  await initializeRime(filesDir, resources, 'rime-selftest-user');
+  // The private schema used below cannot learn. Keep initialization on the
+  // real profile so a main-window probe cannot redirect future IME sessions.
+  await initializeRime(filesDir, resources);
   let state = await rimeRequest('create', '', 'private');
   const id = state.session;
   try {

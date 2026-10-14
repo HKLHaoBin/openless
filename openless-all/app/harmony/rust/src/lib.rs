@@ -185,6 +185,76 @@ fn credential_key(args: &Value) -> Result<openless_core::CredentialKey, String> 
 fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
     let b = &host.backend;
     let value = match command {
+        "accept_pending_correction" => {
+            b.accept_pending_correction(required(&args, "id")?)
+                .map_err(|e| e.to_string())?;
+            Value::Null
+        }
+        "reject_pending_correction" => {
+            b.reject_pending_correction(required(&args, "id")?);
+            Value::Null
+        }
+        "dismiss_vocab_suggestions" => {
+            b.dismiss_pending_corrections();
+            Value::Null
+        }
+        "record_channel_test" => {
+            host.runtime
+                .block_on(b.record_channel_test(
+                    channel_kind(&args)?,
+                    required(&args, "id")?.into(),
+                    args["ok"].as_bool().ok_or("ok required")?,
+                    serde_json::from_value(args["latencyMs"].clone()).map_err(|e| e.to_string())?,
+                    args["error"].as_str().map(str::to_owned),
+                ))
+                .map_err(|e| e.to_string())?;
+            Value::Null
+        }
+        "cloud_sync_status" => json!(host
+            .runtime
+            .block_on(b.cloud_sync_status())
+            .map_err(|e| e.to_string())?),
+        "cloud_sync_upload" => json!(host
+            .runtime
+            .block_on(
+                b.cloud_sync_upload(
+                    args["baseRevision"]
+                        .as_u64()
+                        .ok_or("baseRevision required")?,
+                    serde_json::from_value(args["uiPreferences"].clone())
+                        .map_err(|e| e.to_string())?
+                )
+            )
+            .map_err(|e| e.to_string())?),
+        "cloud_sync_restore" => json!(host
+            .runtime
+            .block_on(b.cloud_sync_restore())
+            .map_err(|e| e.to_string())?),
+        "cloud_sync_delete" => json!(host
+            .runtime
+            .block_on(
+                b.cloud_sync_delete(
+                    args["baseRevision"]
+                        .as_u64()
+                        .ok_or("baseRevision required")?
+                )
+            )
+            .map_err(|e| e.to_string())?),
+        "__marketplace_download_archive" => {
+            use base64::Engine;
+            let bytes = host
+                .runtime
+                .block_on(
+                    b.services()
+                        .marketplace
+                        .download_archive(required(&args, "packId")?.into()),
+                )
+                .map_err(|e| e.to_string())?;
+            if bytes.len() > 512 * 1024 {
+                return Err("风格包 ZIP 最大为 512 KiB".into());
+            }
+            json!(base64::engine::general_purpose::STANDARD.encode(bytes))
+        }
         "read_audio_recording" => history::read(host, &args)?,
         "retranscribe_recording" => history::retranscribe(host, &args)?,
         "apply_quick_note_repolish" => json!(b
@@ -260,12 +330,27 @@ fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
         }
         "list_history" => json!(b.list_history().map_err(|e| e.to_string())?),
         "delete_history_entry" => {
-            b.delete_history(required(&args, "id")?)
-                .map_err(|e| e.to_string())?;
+            let id = required(&args, "id")?;
+            if b.snapshot()
+                .dictation
+                .session_id
+                .is_some_and(|session| session.to_string() == id)
+            {
+                return Err("stop the active recording before deleting it".into());
+            }
+            b.delete_history(id).map_err(|e| e.to_string())?;
+            history::remove_audio(host, id)?;
             Value::Null
         }
         "clear_history" => {
+            if b.snapshot().dictation.session_id.is_some() {
+                return Err("stop the active recording before clearing history".into());
+            }
+            let entries = b.list_history().map_err(|e| e.to_string())?;
             b.clear_history().map_err(|e| e.to_string())?;
+            for entry in entries {
+                history::remove_audio(host, &entry.id)?;
+            }
             Value::Null
         }
         "list_vocab" => json!(b.list_vocabulary().map_err(|e| e.to_string())?),

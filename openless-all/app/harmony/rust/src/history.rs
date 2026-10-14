@@ -53,11 +53,30 @@ fn validate_wav(wav: &[u8]) -> Result<(), String> {
         || wav[34..36] != 16u16.to_le_bytes()
         || &wav[36..40] != b"data"
         || (wav.len() - 44) % 2 != 0
+        || u32::from_le_bytes(wav[4..8].try_into().unwrap()) as usize != wav.len() - 8
         || u32::from_le_bytes(wav[40..44].try_into().unwrap()) as usize != wav.len() - 44
     {
         return Err("recording is corrupt or not 16 kHz mono PCM".into());
     }
     Ok(())
+}
+
+pub fn remove_audio(host: &Host, id: &str) -> Result<(), String> {
+    let session: SessionId = serde_json::from_value(json!(id)).map_err(|_| "invalid session id")?;
+    if host.backend.snapshot().dictation.session_id == Some(session) {
+        return Err("stop the active recording before deleting it".into());
+    }
+    let path = host
+        .backend
+        .config()
+        .data_dir
+        .join("recordings")
+        .join(format!("{session}.wav"));
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 pub fn read(host: &Host, args: &Value) -> Result<Value, String> {

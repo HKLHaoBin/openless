@@ -39,6 +39,27 @@ pub fn styles(owner: &Host) -> Result<Value, String> {
             backend: Arc::new(backend),
             credentials,
         };
+        let channel = dispatch(
+            &test,
+            "create_channel",
+            json!({"kind":"asr","providerType":"openai","name":"isolated test"}),
+        )?;
+        let channel_id = channel.as_str().ok_or("missing channel id")?;
+        dispatch(
+            &test,
+            "record_channel_test",
+            json!({"kind":"asr","id":channel_id,"ok":false,"latencyMs":23,"error":"fixture failure"}),
+        )?;
+        let channels = dispatch(&test, "list_channels", json!({"kind":"asr"}))?;
+        if !channels.as_array().is_some_and(|items| {
+            items.iter().any(|item| {
+                item["id"] == channel_id
+                    && item["lastTest"]["ok"] == false
+                    && item["lastTest"]["latencyMs"] == 23
+            })
+        }) {
+            return Err("channel test result was not persisted".into());
+        }
         // Exercise shared IPC argument names and persistence without touching user data.
         dispatch(&test, "add_learned_vocab", json!({"phrase":"鸿蒙接线测试"}))?;
         dispatch(&test, "add_learned_vocab", json!({"phrase":"鸿蒙接线测试"}))?;
@@ -290,6 +311,17 @@ pub fn voice(owner: &Host) -> Result<Value, String> {
         {
             return Err("cancelled session still accepts audio".into());
         }
+        dispatch(&test, "delete_history_entry", json!({"id":id.to_string()}))?;
+        if test
+            .backend
+            .config()
+            .data_dir
+            .join("recordings")
+            .join(format!("{id}.wav"))
+            .exists()
+        {
+            return Err("history deletion left archived audio behind".into());
+        }
         test.runtime
             .block_on(test.backend.shutdown())
             .map_err(|e| e.to_string())?;
@@ -313,6 +345,7 @@ mod tests {
         let runtime = std::sync::Arc::new(tokio::runtime::Runtime::new().unwrap());
         let host = crate::build_host(root.join("data"), root.join("cache"), runtime).unwrap();
         assert_eq!(super::voice(&host).unwrap()["staleAudioRejected"], true);
+        assert_eq!(super::styles(&host).unwrap()["persistence"], true);
         host.runtime.block_on(host.backend.shutdown()).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }

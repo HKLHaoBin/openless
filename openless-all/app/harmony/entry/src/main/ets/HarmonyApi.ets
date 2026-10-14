@@ -17,6 +17,7 @@ interface NetworkReply { ok: boolean; value: NetworkState; }
 interface NetworkState { online: boolean; latencyMs: number | null; }
 interface SystemState { microphone: string; deviceCount: number; online: boolean; dataDir: string; cacheDir: string; }
 interface Reply { ok: boolean; value?: Object | null; error?: string; }
+interface ArchiveReply { ok: boolean; value: string; error?: string; }
 interface DeviceInfo { name: string; isDefault: boolean; }
 class CommandArgs { deviceName: string = ''; pane: string = ''; account: string = ''; provider?: string; value: string = ''; fileName: string = ''; message: string = ''; url: string = ''; id: string = ''; zipPath: string = ''; targetPath: string = ''; text: string = ''; }
 
@@ -118,6 +119,16 @@ export class HarmonyApi {
     } finally { fs.closeSync(source); }
     const reply: Reply = {ok: true, value: uri};
     return JSON.stringify(reply);
+  }
+
+  private async downloadArchive(argsJson: string): Promise<void> {
+    const args: CommandArgs = JSON.parse(argsJson);
+    if (!args.targetPath) throw new Error('请选择风格包保存位置');
+    const wire: ArchiveReply = JSON.parse(await this.native('__marketplace_download_archive', argsJson));
+    if (!wire.ok) throw new Error(wire.error || '风格包下载失败');
+    const bytes = new util.Base64Helper().decodeSync(wire.value);
+    const destination = fs.openSync(args.targetPath, fs.OpenMode.CREATE | fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
+    try { fs.writeSync(destination.fd, bytes.buffer); } finally { fs.closeSync(destination); }
   }
 
   private sequence: number = 0;
@@ -256,6 +267,9 @@ export class HarmonyApi {
           break;
         }
         case 'open_external_url': await this.openExternal(args.url); break;
+        case 'marketplace_download': await this.downloadArchive(argsJson); break;
+        case 'export_error_log':
+        case 'export_error_log_to_downloads': value = await this.exportLog(args.fileName); break;
         case 'export_harmony_error_log': value = await this.exportLog(args.fileName); break;
         case 'log_client_error': this.appendLog(args.message); break;
         case 'get_harmony_status': {
