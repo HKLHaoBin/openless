@@ -100,7 +100,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
     }
 
     @Suppress("DEPRECATION")
-    override fun onRetainCustomNonConfigurationInstance(): Any? =
+    override fun onRetainNonConfigurationInstance(): Any? =
         pendingExportMode?.let {
             PendingExportState(it, pendingExportIncludeCredentials, pendingExportPassword)
         }
