@@ -473,7 +473,7 @@ fn read_entries(bytes: &[u8]) -> BundleResult<BTreeMap<String, Vec<u8>>> {
     }
     let mut archive =
         zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| BundleError::MalformedContainer)?;
-    if archive.len() == 0 || archive.len() > MAX_BUNDLE_ENTRIES {
+    if archive.is_empty() || archive.len() > MAX_BUNDLE_ENTRIES {
         return Err(BundleError::TooLarge);
     }
     let mut entries = BTreeMap::new();
@@ -597,8 +597,8 @@ mod tests {
         )
         .unwrap();
         let inspection = inspect_bundle(&artifact.bytes).unwrap();
-        assert_eq!(inspection.credentials_present, false);
-        assert_eq!(inspection.device_profile_migrated, false);
+        assert!(!inspection.credentials_present);
+        assert!(!inspection.device_profile_migrated);
         assert_eq!(inspection.section_counts.channels, 1);
     }
 
