@@ -348,7 +348,7 @@ if (
 }
 assertMatch(
   capsuleTsx,
-  /p\.state === 'idle'\s*\|\|\s*p\.state === 'done'\s*\|\|\s*p\.state === 'cancelled'\s*\|\|\s*p\.state === 'error'[\s\S]*?setLocalAsrText\(''\)/,
+  /p\.state === 'idle'\s*\|\|\s*p\.state === 'done'\s*\|\|\s*p\.state === 'cancelled'\s*\|\|\s*p\.state === 'error'[\s\S]*?clearTranscriptText\(nextTranscript\)[\s\S]*?setLocalAsrText\(nextTranscript\.text\)/,
   'terminal capsule states should clear the transcript visibility source',
 );
 if (capsuleTsx.slice(conditionalReturn).includes('useEffect(')) {
