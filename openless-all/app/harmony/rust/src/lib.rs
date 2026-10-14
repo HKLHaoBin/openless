@@ -1,4 +1,5 @@
 mod credentials;
+mod history;
 mod self_test;
 use openless_core::{BackendConfig, BackendDependencies, OpenLessBackend};
 use serde_json::{json, Value};
@@ -6,19 +7,23 @@ use std::{
     ffi::{CStr, CString},
     os::raw::c_char,
     path::PathBuf,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
+#[derive(Clone)]
 struct Host {
-    runtime: tokio::runtime::Runtime,
-    backend: OpenLessBackend,
+    runtime: Arc<tokio::runtime::Runtime>,
+    backend: Arc<OpenLessBackend>,
     credentials: std::sync::Arc<credentials::HarmonyCredentials>,
 }
 static HOST: OnceLock<Mutex<Host>> = OnceLock::new();
+// Reload and start must use the same host. Cancellation and PCM delivery stay
+// independent so a slow provider cannot block either operation.
+static VOICE_CONTROL: Mutex<()> = Mutex::new(());
 fn capabilities() -> openless_core::shared_types::PlatformCapabilities {
     openless_core::shared_types::PlatformCapabilities {
         platform: "harmony".into(),
-        supports_ime_input: false,
+        supports_ime_input: true,
         supports_overlay: false,
         supports_desktop_hotkey: false,
         supports_tray: false,
@@ -56,42 +61,99 @@ pub unsafe extern "C" fn openless_init(data: *const c_char, cache: *const c_char
             let cache = PathBuf::from(text(cache)?);
             std::fs::create_dir_all(&data).map_err(|e| e.to_string())?;
             std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
-            let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-            let mut dependencies = BackendDependencies::unsupported();
-            dependencies.marketplace_config = Some(openless_core::MarketplaceConfig::production());
-            let credentials = std::sync::Arc::new(credentials::HarmonyCredentials::new(
-                data.join("channels.json"),
-            ));
-            dependencies.credential_store = credentials.clone();
-            dependencies.services.provider =
-                std::sync::Arc::new(openless_core::ProviderService::new(
-                    dependencies.credential_store.clone(),
-                    dependencies.task_spawner.clone(),
-                ));
-            let backend = OpenLessBackend::new(
-                BackendConfig {
-                    data_dir: data,
-                    cache_dir: cache,
-                    platform: capabilities(),
-                    locale: "zh-CN".into(),
-                    ..BackendConfig::default()
-                },
-                dependencies,
-            )
-            .map_err(|e| e.to_string())?;
-            let startup = runtime
-                .block_on(backend.start())
-                .map_err(|e| e.to_string())?;
-            HOST.set(Mutex::new(Host {
-                runtime,
-                backend,
-                credentials,
-            }))
-            .map_err(|_| "backend already initialized".to_string())?;
-            serde_json::to_value(startup).map_err(|e| e.to_string())
+            let runtime = Arc::new(tokio::runtime::Runtime::new().map_err(|e| e.to_string())?);
+            let host = build_host(data, cache, runtime)?;
+            let snapshot =
+                serde_json::to_value(host.backend.snapshot()).map_err(|e| e.to_string())?;
+            HOST.set(Mutex::new(host))
+                .map_err(|_| "backend already initialized".to_string())?;
+            Ok(snapshot)
         })
         .unwrap_or_else(|_| Err("native initialization failed".into())),
     )
+}
+fn build_host(
+    data: PathBuf,
+    cache: PathBuf,
+    runtime: Arc<tokio::runtime::Runtime>,
+) -> Result<Host, String> {
+    let mut dependencies = BackendDependencies::unsupported();
+    dependencies.marketplace_config = Some(openless_core::MarketplaceConfig::production());
+    let credentials = Arc::new(credentials::HarmonyCredentials::new(
+        data.join("channels.json"),
+    ));
+    dependencies.credential_store = credentials.clone();
+    let transcription = Arc::new(openless_core::TranscriptionRouter::default());
+    let cloud: Arc<dyn openless_core::TranscriptionEngine> = Arc::new(
+        openless_core::SharedCloudTranscriptionEngine::with_task_spawner(
+            credentials.clone(),
+            dependencies.task_spawner.clone(),
+        ),
+    );
+    for provider in openless_core::SHARED_CLOUD_ASR_PROVIDER_TYPES {
+        transcription
+            .register(*provider, cloud.clone())
+            .map_err(|e| e.to_string())?;
+    }
+    let polisher = Arc::new(openless_core::TextPolisherRouter::default());
+    let cloud_polisher: Arc<dyn openless_core::TextPolisher> = Arc::new(
+        openless_core::SharedCloudTextPolisher::new(credentials.clone()),
+    );
+    for provider in openless_core::SHARED_CLOUD_LLM_PROVIDER_TYPES {
+        polisher
+            .register(*provider, cloud_polisher.clone())
+            .map_err(|e| e.to_string())?;
+    }
+    let recorder: Arc<dyn openless_core::AudioRecorder> = Arc::new(
+        openless_core::ExternalAudioRecorder::with_recordings_directory(data.join("recordings")),
+    );
+    let traditional = Arc::new(openless_core::PipelineDictationEngine::new(
+        recorder.clone(),
+        transcription.clone(),
+        polisher.clone(),
+    ));
+    let engine = Arc::new(openless_core::DictationEngineRouter::new(traditional));
+    let omni: Arc<dyn openless_core::DictationEngine> = Arc::new(
+        openless_core::SharedOmniDictationEngine::new(credentials.clone(), recorder),
+    );
+    for provider in openless_core::SHARED_OMNI_PROVIDER_TYPES {
+        engine
+            .register_omni(*provider, omni.clone())
+            .map_err(|e| e.to_string())?;
+    }
+    dependencies.dictation_engine = engine;
+    dependencies.services.configure_auxiliary_runtime(
+        Arc::new(openless_core::SharedAuxiliaryTextPolisher::new(
+            credentials.clone(),
+            polisher,
+        )),
+        transcription,
+    );
+    dependencies.services.provider = Arc::new(openless_core::ProviderService::new(
+        credentials.clone(),
+        dependencies.task_spawner.clone(),
+    ));
+    let backend = Arc::new(
+        OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data,
+                cache_dir: cache,
+                platform: capabilities(),
+                locale: "zh-CN".into(),
+                ..BackendConfig::default()
+            },
+            dependencies,
+        )
+        .map_err(|e| e.to_string())?,
+    );
+    runtime
+        .block_on(backend.start())
+        .map_err(|e| e.to_string())?;
+    Ok(Host {
+        runtime,
+        backend,
+        credentials,
+    })
 }
 fn required<'a>(args: &'a Value, field: &str) -> Result<&'a str, String> {
     args[field]
@@ -123,10 +185,54 @@ fn credential_key(args: &Value) -> Result<openless_core::CredentialKey, String> 
 fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
     let b = &host.backend;
     let value = match command {
+        "read_audio_recording" => history::read(host, &args)?,
+        "retranscribe_recording" => history::retranscribe(host, &args)?,
+        "apply_quick_note_repolish" => json!(b
+            .apply_history_repolish(
+                required(&args, "sessionId")?,
+                required(&args, "text")?.into(),
+                args["stylePackId"].as_str().map(str::to_owned)
+            )
+            .map_err(|e| e.to_string())?),
+        "repolish" => json!(host
+            .runtime
+            .block_on(
+                b.services()
+                    .auxiliary
+                    .repolish(openless_core::RepolishRequest {
+                        raw_text: required(&args, "rawText")?.into(),
+                        style_pack_id: args["stylePackId"].as_str().map(str::to_owned),
+                        front_app: None,
+                    })
+            )
+            .map_err(|e| e.to_string())?),
+        "start_dictation" => json!(host
+            .runtime
+            .block_on(b.start_external_dictation_with_options(
+                openless_core::DictationStartOptions {
+                    insert_text: false,
+                    ..Default::default()
+                }
+            ))
+            .map_err(|e| e.to_string())?),
+        "stop_dictation" => json!(host
+            .runtime
+            .block_on(b.stop_dictation_session(
+                serde_json::from_value(args["session"].clone()).map_err(|e| e.to_string())?
+            ))
+            .map_err(|e| e.to_string())?),
+        "cancel_dictation" => {
+            let id = serde_json::from_value(args["session"].clone()).map_err(|e| e.to_string())?;
+            host.runtime
+                .block_on(b.cancel_dictation(id))
+                .map_err(|e| e.to_string())?;
+            Value::Null
+        }
         "get_startup_snapshot" => {
             json!({"contractVersion":openless_core::BACKEND_CONTRACT_VERSION,"backend":b.snapshot()})
         }
         "__test_style_pack_roundtrip" => self_test::styles(host)?,
+        "__test_voice_roundtrip" => self_test::voice(host)?,
         "__revision_snapshot" => json!(b.snapshot()),
         "get_platform_capabilities" => json!(capabilities()),
         "check_network" => host.runtime.block_on(async {
@@ -573,14 +679,76 @@ pub unsafe extern "C" fn openless_invoke(
         std::panic::catch_unwind(|| {
             let command = text(command)?;
             let args = serde_json::from_str(&text(args)?).map_err(|e| e.to_string())?;
+            let _voice_control = if matches!(
+                command.as_str(),
+                "__reload_voice_backend" | "start_dictation"
+            ) {
+                Some(
+                    VOICE_CONTROL
+                        .lock()
+                        .map_err(|_| "voice control lock poisoned")?,
+                )
+            } else {
+                None
+            };
             let host = HOST
                 .get()
                 .ok_or("backend unavailable")?
                 .lock()
-                .map_err(|_| "backend lock poisoned")?;
+                .map_err(|_| "backend lock poisoned")?
+                .clone();
+            if command == "__reload_voice_backend" {
+                if !matches!(
+                    host.backend.snapshot().dictation.phase,
+                    openless_core::DictationPhase::Idle
+                        | openless_core::DictationPhase::Completed
+                        | openless_core::DictationPhase::Cancelled
+                        | openless_core::DictationPhase::Failed
+                ) {
+                    return Err("voice backend is busy".into());
+                }
+                let config = host.backend.config();
+                let refreshed = build_host(
+                    config.data_dir.clone(),
+                    config.cache_dir.clone(),
+                    host.runtime.clone(),
+                )?;
+                *HOST
+                    .get()
+                    .unwrap()
+                    .lock()
+                    .map_err(|_| "backend lock poisoned")? = refreshed;
+                return Ok(Value::Null);
+            }
             dispatch(&host, &command, args)
         })
         .unwrap_or_else(|_| Err("native command failed".into())),
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn openless_feed_pcm(
+    session: *const c_char,
+    pcm: *const u8,
+    length: usize,
+) -> *mut c_char {
+    response(
+        std::panic::catch_unwind(|| {
+            if pcm.is_null() || length == 0 || length > 32768 || length % 2 != 0 {
+                return Err("invalid PCM frame".into());
+            }
+            let id = serde_json::from_value(json!(text(session)?)).map_err(|e| e.to_string())?;
+            let host = HOST
+                .get()
+                .ok_or("backend unavailable")?
+                .lock()
+                .map_err(|_| "backend lock poisoned")?
+                .clone();
+            host.backend
+                .feed_external_pcm(id, std::slice::from_raw_parts(pcm, length))
+                .map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        })
+        .unwrap_or_else(|_| Err("PCM delivery failed".into())),
     )
 }
 #[no_mangle]

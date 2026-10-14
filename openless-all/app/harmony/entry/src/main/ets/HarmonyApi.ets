@@ -6,6 +6,7 @@ import { asset } from '@kit.AssetStoreKit';
 import { util } from '@kit.ArkTS';
 import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
 import nativeHost from 'libopenless_harmony.so';
+import { restoreHarmonyCredentials } from './CredentialVault';
 import { testRime } from './inputmethod/RimeClient';
 
 interface Revisions { preferencesRevision: number; stylePackRevision: number; historyRevision: number; vocabularyRevision: number; }
@@ -149,28 +150,7 @@ export class HarmonyApi {
   private decode(value: Uint8Array): string { return util.TextDecoder.create('utf-8').decodeWithStream(value); }
   private alias(args: CommandArgs): Uint8Array { return this.bytes(JSON.stringify({account: args.account, provider: args.provider})); }
 
-  async restoreCredentials(): Promise<void> {
-    try {
-      const query = new Map<asset.Tag, asset.Value>();
-      query.set(asset.Tag.DATA_LABEL_NORMAL_1, this.bytes('openless.credentials'));
-      query.set(asset.Tag.RETURN_TYPE, asset.ReturnType.ATTRIBUTES);
-      const records = await asset.query(query);
-      for (const record of records) {
-        const args: CommandArgs = JSON.parse(this.decode(record.get(asset.Tag.ALIAS) as Uint8Array));
-        const secretQuery = new Map<asset.Tag, asset.Value>();
-        secretQuery.set(asset.Tag.ALIAS, record.get(asset.Tag.ALIAS) as Uint8Array);
-        secretQuery.set(asset.Tag.RETURN_TYPE, asset.ReturnType.ALL);
-        const secrets = await asset.query(secretQuery);
-        args.value = this.decode(secrets[0].get(asset.Tag.SECRET) as Uint8Array);
-        const wire = await nativeHost.invokeAsync('__hydrate_credential', JSON.stringify(args));
-        const result: Record<string, Object> = JSON.parse(wire);
-        if (result['ok'] !== true) throw new Error('凭据恢复失败');
-      }
-      console.info('[OpenLess Vault] secure credentials restored');
-    } catch (error) {
-      if ((error as BusinessError).code !== 24000002) throw new Error(String(error));
-    }
-  }
+  async restoreCredentials(): Promise<void> { await restoreHarmonyCredentials(); }
 
   private async persistCredential(args: CommandArgs): Promise<void> {
     if (!args.account) throw new Error('凭据字段不能为空');

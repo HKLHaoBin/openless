@@ -35,8 +35,8 @@ pub fn styles(owner: &Host) -> Result<Value, String> {
             .block_on(backend.start())
             .map_err(|e| e.to_string())?;
         let test = Host {
-            runtime,
-            backend,
+            runtime: Arc::new(runtime),
+            backend: Arc::new(backend),
             credentials,
         };
         // Exercise shared IPC argument names and persistence without touching user data.
@@ -144,4 +144,176 @@ pub fn styles(owner: &Host) -> Result<Value, String> {
         std::fs::remove_dir_all(root).map_err(|e| e.to_string())?;
     }
     result
+}
+
+/// Verifies the host's actual dictation dispatcher with fixture providers only.
+/// This deliberately has no microphone, network access or user credentials.
+pub fn voice(owner: &Host) -> Result<Value, String> {
+    use openless_core::{credentials::*, testing::*, SessionId};
+    let root = owner.backend.config().cache_dir.join(format!(
+        "voice-selftest-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let transcription = Arc::new(FixtureTranscriptionEngine::successful("语音管线原文", 1000));
+        let polisher = Arc::new(FixtureTextPolisher::successful("语音管线结果"));
+        let mut dependencies = BackendDependencies::unsupported();
+        let fixture_credentials = Arc::new(InMemoryCredentialStore::default());
+        let runtime = Arc::new(tokio::runtime::Runtime::new().map_err(|e| e.to_string())?);
+        runtime
+            .block_on(
+                fixture_credentials.write(
+                    CredentialKey::new(
+                        CredentialNamespace::Llm,
+                        Some("ark".into()),
+                        LLM_API_KEY_ACCOUNT,
+                    )
+                    .map_err(|e| e.to_string())?,
+                    SecretValue::new("isolated-fixture"),
+                ),
+            )
+            .map_err(|e| e.to_string())?;
+        dependencies.credential_store = fixture_credentials.clone();
+        dependencies.services.configure_auxiliary_runtime(
+            Arc::new(openless_core::SharedAuxiliaryTextPolisher::new(
+                fixture_credentials,
+                polisher.clone(),
+            )),
+            transcription.clone(),
+        );
+        dependencies.dictation_engine = Arc::new(openless_core::PipelineDictationEngine::new(
+            Arc::new(
+                openless_core::ExternalAudioRecorder::with_recordings_directory(
+                    root.join("data/recordings"),
+                ),
+            ),
+            transcription.clone(),
+            polisher.clone(),
+        ));
+        let backend = Arc::new(
+            OpenLessBackend::new(
+                BackendConfig {
+                    data_dir: root.join("data"),
+                    cache_dir: root.clone(),
+                    platform: crate::capabilities(),
+                    ..Default::default()
+                },
+                dependencies,
+            )
+            .map_err(|e| e.to_string())?,
+        );
+        runtime
+            .block_on(backend.start())
+            .map_err(|e| e.to_string())?;
+        let mut prefs = backend.get_preferences();
+        prefs.record_audio_for_debug = true;
+        {
+            let _entered = runtime.enter();
+            backend
+                .update_settings(
+                    prefs,
+                    openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
+                    &openless_core::settings::NoopSettingsRuntime,
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        let test = Host {
+            runtime,
+            backend,
+            credentials: Arc::new(HarmonyCredentials::new(root.join("channels.json"))),
+        };
+        let session = dispatch(&test, "start_dictation", json!({}))?;
+        let id: SessionId = serde_json::from_value(session.clone()).map_err(|e| e.to_string())?;
+        let pcm = vec![1u8; 32000];
+        test.backend
+            .feed_external_pcm(id, &pcm)
+            .map_err(|e| e.to_string())?;
+        let result = dispatch(&test, "stop_dictation", json!({"session":session}))?;
+        if result["rawText"] != "语音管线原文"
+            || result["polishedText"] != "语音管线结果"
+            || result["inserted"] != json!("notRequested")
+            || transcription.pcm() != pcm
+        {
+            return Err("voice PCM and preview roundtrip failed".into());
+        }
+        if test.backend.feed_external_pcm(id, &[1, 0]).is_ok() {
+            return Err("completed session accepted stale audio".into());
+        }
+        let audio = dispatch(
+            &test,
+            "read_audio_recording",
+            json!({"sessionId":id.to_string()}),
+        )?;
+        if !audio
+            .as_str()
+            .is_some_and(|value| value.starts_with("data:audio/wav;base64,UklGR"))
+        {
+            return Err("archived audio was not returned as WAV".into());
+        }
+        if dispatch(
+            &test,
+            "read_audio_recording",
+            json!({"sessionId":"../channels"}),
+        )
+        .is_ok()
+        {
+            return Err("recording path escaped session UUID validation".into());
+        }
+        let history_before = test.backend.list_history().map_err(|e| e.to_string())?;
+        let retried = dispatch(
+            &test,
+            "retranscribe_recording",
+            json!({"sessionId":id.to_string()}),
+        )?;
+        if retried["text"] != "语音管线原文"
+            || !retried["updatedEntry"].is_null()
+            || json!(history_before)
+                != json!(test.backend.list_history().map_err(|e| e.to_string())?)
+        {
+            return Err("retranscription overwrote completed history".into());
+        }
+        if dispatch(&test, "repolish", json!({"rawText":"再次润色"}))? != "语音管线结果" {
+            return Err("history repolish did not use the shared runtime".into());
+        }
+        let next = dispatch(&test, "start_dictation", json!({}))?;
+        let next_id: SessionId = serde_json::from_value(next.clone()).map_err(|e| e.to_string())?;
+        if test.backend.feed_external_pcm(id, &[1, 0]).is_ok() {
+            return Err("new session accepted previous session audio".into());
+        }
+        dispatch(&test, "cancel_dictation", json!({"session":next}))?;
+        if test.backend.feed_external_pcm(next_id, &[1, 0]).is_ok()
+            || transcription.cancel_count() == 0
+        {
+            return Err("cancelled session still accepts audio".into());
+        }
+        test.runtime
+            .block_on(test.backend.shutdown())
+            .map_err(|e| e.to_string())?;
+        Ok(
+            json!({"fixtureProviders":true,"pcm":true,"preview":true,"noAutoInsert":true,
+                "cancel":true,"staleAudioRejected":true,"audioRead":true,"retranscribe":true,"repolish":true}),
+        )
+    })();
+    if result.is_ok() {
+        std::fs::remove_dir_all(root).map_err(|e| e.to_string())?;
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn offline_voice_dispatch_and_session_boundaries() {
+        let root = std::env::temp_dir().join(format!("openless-host-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let runtime = std::sync::Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let host = crate::build_host(root.join("data"), root.join("cache"), runtime).unwrap();
+        assert_eq!(super::voice(&host).unwrap()["staleAudioRejected"], true);
+        host.runtime.block_on(host.backend.shutdown()).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -1,6 +1,7 @@
 import { inputMethodEngine, InputMethodExtensionContext } from '@kit.IMEKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { initializeRime, rimeRequest, RimeState, testRime } from './RimeClient';
+import { VoiceClient } from './VoiceClient';
 
 class InputPanelState {
   connected: boolean = false;
@@ -13,6 +14,10 @@ class InputPanelState {
   page: number = 0;
   hasNext: boolean = false;
   password: boolean = false;
+  voicePhase: string = 'idle';
+  voiceText: string = '';
+  voiceLevel: number = 0;
+  pendingCommit: boolean = false;
 }
 
 export const imeStorage: LocalStorage = new LocalStorage(new InputPanelState());
@@ -29,6 +34,8 @@ class InputSession {
   private rimeSession: string = '';
   private encoding: string = '';
   private candidateRevision: number = 0;
+  private voice: VoiceClient = new VoiceClient();
+  private voiceGeneration: number = 0;
 
   attach(context: InputMethodExtensionContext, keyboard: inputMethodEngine.KeyboardController,
     client: inputMethodEngine.InputClient): void {
@@ -40,9 +47,10 @@ class InputSession {
     this.client = client;
     this.action = inputMethodEngine.ENTER_KEY_TYPE_UNSPECIFIED;
     imeStorage.setOrCreate('connected', true);
-    imeStorage.setOrCreate('status', '可输入 · 语音功能接线中');
+    imeStorage.setOrCreate('status', '可输入');
     imeStorage.setOrCreate('enterLabel', '换行');
     imeStorage.setOrCreate('rimeReady', false);
+    imeStorage.setOrCreate('password', true);
     this.resetCandidates();
     client.getEditorAttribute().then((attribute: inputMethodEngine.EditorAttribute) => {
       if (this.client !== client || generation !== this.generation) return;
@@ -73,6 +81,7 @@ class InputSession {
   }
 
   detach(): void {
+    this.cancelVoice();
     this.generation++;
     this.client = undefined;
     this.keyboard = undefined;
@@ -95,7 +104,7 @@ class InputSession {
         const ok = await operation(client);
         console.info('[OpenLess IME] ' + kind + ' result=' + ok);
         if (this.client === client && this.generation === generation) {
-          imeStorage.setOrCreate('status', ok ? '可输入 · 语音功能接线中' : '输入未成功，请重新选择输入框');
+          imeStorage.setOrCreate('status', ok ? '可输入' : '输入未成功，请重新选择输入框');
         }
       } catch (error) {
         if (this.client === client && this.generation === generation) imeStorage.setOrCreate('status', '输入未成功，请重新选择输入框');
@@ -123,6 +132,7 @@ class InputSession {
     this.encoding = '';
     imeStorage.setOrCreate('preedit', '');
     imeStorage.setOrCreate('candidates', [] as string[]);
+    imeStorage.setOrCreate('pendingCommit', false);
   }
 
   private publish(state: RimeState): void {
@@ -132,7 +142,8 @@ class InputSession {
     imeStorage.setOrCreate('candidates', state.candidates);
     imeStorage.setOrCreate('page', state.page);
     imeStorage.setOrCreate('hasNext', state.hasNext);
-    imeStorage.setOrCreate('status', 'Rime 拼音 · 语音功能接线中');
+    imeStorage.setOrCreate('pendingCommit', !!state.commit);
+    imeStorage.setOrCreate('status', 'Rime 拼音');
   }
 
   private rimeOperation(operation: string, argument: string): void {
@@ -152,6 +163,7 @@ class InputSession {
       let state = await rimeRequest(operation === 'backspace' || operation === 'space' ? 'key' : operation === 'literal' ? 'confirm' : operation, this.rimeSession, key);
       if (generation !== this.generation || client !== this.client) return;
       if (state.commit) {
+        this.publish(state);
         if (!await client.insertText(state.commit)) throw new Error('文字写入失败，请重新确认');
         if (generation !== this.generation) return;
         state = await rimeRequest('ack', this.rimeSession);
@@ -171,20 +183,116 @@ class InputSession {
   }
 
   enter(): void {
-    if (this.encoding) { this.rimeOperation('key', '65293'); return; }
     const action = this.action;
-    if (action === inputMethodEngine.ENTER_KEY_TYPE_UNSPECIFIED || action === inputMethodEngine.ENTER_KEY_TYPE_NEWLINE) {
-      this.insert('\n');
-    } else {
-      this.perform('enter', (client: inputMethodEngine.InputClient) => client.sendKeyFunction(action));
+    const generation = this.generation;
+    this.perform('enter', async (client: inputMethodEngine.InputClient): Promise<boolean> => {
+      if (this.encoding && this.rimeSession) {
+        const state = await rimeRequest('key', this.rimeSession, '65293');
+        if (generation !== this.generation || client !== this.client) return false;
+        this.publish(state);
+        if (state.commit) {
+          if (!await client.insertText(state.commit)) return false;
+          if (generation !== this.generation || client !== this.client) return false;
+          this.publish(await rimeRequest('ack', this.rimeSession));
+        }
+        return true;
+      }
+      return action === inputMethodEngine.ENTER_KEY_TYPE_UNSPECIFIED || action === inputMethodEngine.ENTER_KEY_TYPE_NEWLINE ?
+        await client.insertText('\n') : await client.sendKeyFunction(action);
+    });
+  }
+
+  retryCommit(): void { this.rimeOperation('state', ''); }
+
+  async startVoice(): Promise<void> {
+    const context = this.context;
+    const client = this.client;
+    if (!context || !client || imeStorage.get<boolean>('password') || imeStorage.get<string>('voicePhase') !== 'idle') return;
+    if (imeStorage.get<boolean>('pendingCommit')) { imeStorage.setOrCreate('status', '请先重新确认待写入的候选词'); return; }
+    const generation = this.generation;
+    const voiceGeneration = ++this.voiceGeneration;
+    imeStorage.setOrCreate('voicePhase', 'starting');
+    imeStorage.setOrCreate('voiceText', '');
+    imeStorage.setOrCreate('status', '正在准备麦克风');
+    try {
+      // Clear the composition in the same queue as normal keyboard operations.
+      await this.queue;
+      if (generation !== this.generation || voiceGeneration !== this.voiceGeneration) return;
+      if (this.rimeSession) this.publish(await rimeRequest('clear', this.rimeSession));
+      if (generation !== this.generation || voiceGeneration !== this.voiceGeneration) return;
+      await this.voice.start(context, (level: number) => {
+        if (generation === this.generation && voiceGeneration === this.voiceGeneration) imeStorage.setOrCreate('voiceLevel', level);
+      }, (message: string) => {
+        if (generation === this.generation && voiceGeneration === this.voiceGeneration) {
+          imeStorage.setOrCreate('voicePhase', 'idle');
+          imeStorage.setOrCreate('status', message);
+        }
+      });
+      if (generation !== this.generation || voiceGeneration !== this.voiceGeneration) return;
+      imeStorage.setOrCreate('voicePhase', 'recording');
+      imeStorage.setOrCreate('status', '正在录音，点结束开始识别');
+    } catch (error) {
+      if (generation === this.generation && voiceGeneration === this.voiceGeneration) {
+        imeStorage.setOrCreate('voicePhase', 'idle');
+        imeStorage.setOrCreate('status', (error as Error).message);
+      }
     }
   }
 
+  async stopVoice(): Promise<void> {
+    if (imeStorage.get<string>('voicePhase') !== 'recording') return;
+    const generation = this.generation;
+    const voiceGeneration = this.voiceGeneration;
+    imeStorage.setOrCreate('voicePhase', 'processing');
+    imeStorage.setOrCreate('voiceLevel', 0);
+    imeStorage.setOrCreate('status', '正在识别');
+    try {
+      const result = await this.voice.stop();
+      if (generation !== this.generation || voiceGeneration !== this.voiceGeneration) return;
+      const text = result.polishedText || result.rawText;
+      imeStorage.setOrCreate('voiceText', text);
+      imeStorage.setOrCreate('voicePhase', text ? 'review' : 'idle');
+      imeStorage.setOrCreate('status', text ? '确认后写入当前输入框' : '未识别到文字，请重新录音');
+    } catch (error) {
+      if (generation === this.generation && voiceGeneration === this.voiceGeneration) {
+        imeStorage.setOrCreate('voicePhase', 'idle');
+        imeStorage.setOrCreate('status', (error as Error).message);
+      }
+    }
+  }
+
+  confirmVoice(): void {
+    if (imeStorage.get<string>('voicePhase') !== 'review') return;
+    const text = imeStorage.get<string>('voiceText') || '';
+    const generation = this.generation;
+    const voiceGeneration = this.voiceGeneration;
+    imeStorage.setOrCreate('voicePhase', 'inserting');
+    this.perform('voice insert', async (client: inputMethodEngine.InputClient): Promise<boolean> => {
+      let ok = false;
+      try { ok = await client.insertText(text); return ok; } finally {
+        if (generation === this.generation && voiceGeneration === this.voiceGeneration) {
+          imeStorage.setOrCreate('voicePhase', ok ? 'idle' : 'review');
+          if (ok) imeStorage.setOrCreate('voiceText', '');
+        }
+      }
+    });
+  }
+
+  cancelVoice(): void {
+    this.voiceGeneration++;
+    this.voice.cancel().catch(() => {});
+    imeStorage.setOrCreate('voicePhase', 'idle');
+    imeStorage.setOrCreate('voiceText', '');
+    imeStorage.setOrCreate('voiceLevel', 0);
+  }
+
   hide(): void {
+    this.cancelVoice();
     this.keyboard?.hide().catch(() => {});
   }
 
   settings(): void {
+    this.cancelVoice();
     this.context?.startAbility({ bundleName: 'openless.hm.com', abilityName: 'EntryAbility' })
       .catch(() => { imeStorage.setOrCreate('status', '无法打开设置'); });
   }

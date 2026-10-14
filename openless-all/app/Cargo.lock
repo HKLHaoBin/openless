@@ -3698,6 +3698,7 @@ dependencies = [
 name = "openless-harmony-host"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "futures-util",
  "openless-core",
  "serde_json",

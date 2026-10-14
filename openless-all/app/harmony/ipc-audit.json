@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC command coverage; excludes event subscriptions, dynamic commands and desktop-only calls outside src/lib/ipc.",
   "total": 190,
-  "wired": 82,
-  "missing": 108,
+  "wired": 89,
+  "missing": 101,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -51,14 +51,14 @@
       "calledFrom": [
         "src/lib/ipc/history.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "cancel_dictation",
       "calledFrom": [
         "src/lib/ipc/dictation.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "cancel_selection_polish_preview",
@@ -891,7 +891,7 @@
       "calledFrom": [
         "src/lib/ipc/history.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "read_credential",
@@ -961,7 +961,7 @@
       "calledFrom": [
         "src/lib/ipc/style-packs.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "report_insert_fallback_card_height",
@@ -1010,7 +1010,7 @@
       "calledFrom": [
         "src/lib/ipc/history.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "revert_selection_voice_preview",
@@ -1227,7 +1227,7 @@
       "calledFrom": [
         "src/lib/ipc/dictation.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "start_microphone_level_monitor",
@@ -1255,7 +1255,7 @@
       "calledFrom": [
         "src/lib/ipc/dictation.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "stop_microphone_level_monitor",

@@ -14,6 +14,10 @@ struct InputMethodPanel {
   @LocalStorageLink('page') page: number = 0;
   @LocalStorageLink('hasNext') hasNext: boolean = false;
   @LocalStorageLink('password') password: boolean = false;
+  @LocalStorageLink('voicePhase') voicePhase: string = 'idle';
+  @LocalStorageLink('voiceText') voiceText: string = '';
+  @LocalStorageLink('voiceLevel') voiceLevel: number = 0;
+  @LocalStorageLink('pendingCommit') pendingCommit: boolean = false;
   @State uppercase: boolean = false;
   @State symbols: boolean = false;
 
@@ -65,9 +69,37 @@ struct InputMethodPanel {
       Row() {
         Text(this.preedit || this.status).fontSize(12).fontColor('#6B7280').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         Blank()
-        Button('语音 · 待接入').fontSize(12).height(28).enabled(false)
-          .fontColor('#6B7280').backgroundColor('#DFE2E7')
+        Button(this.voicePhase === 'recording' ? '结束录音' : '语音').fontSize(12).height(28).focusable(false)
+          .enabled(this.connected && !this.password && (this.voicePhase === 'idle' || this.voicePhase === 'recording'))
+          .fontColor('#FFFFFF').backgroundColor('#202124')
+          .onClick(() => { if (this.voicePhase === 'recording') inputSession.stopVoice(); else inputSession.startVoice(); })
       }.width('100%').height(30)
+      if (this.voicePhase !== 'idle') {
+        Column({ space: 12 }) {
+          if (this.voicePhase === 'review' || this.voicePhase === 'inserting') {
+            Scroll() { Text(this.voiceText).fontSize(20).fontColor('#202124').width('100%') }
+              .height(140).width('100%')
+            Row({ space: 12 }) {
+              Button('确认写入').focusable(false).enabled(this.voicePhase === 'review')
+                .onClick(() => { inputSession.confirmVoice(); })
+              Button('丢弃').focusable(false).enabled(this.voicePhase === 'review')
+                .onClick(() => { inputSession.cancelVoice(); })
+            }
+          } else {
+            Text(this.voicePhase === 'recording' ? '正在听你说话' : this.voicePhase === 'processing' ? '正在识别，请稍候' : '正在准备录音')
+              .fontSize(20).fontColor('#202124')
+            if (this.voicePhase === 'recording') {
+              Progress({ value: this.voiceLevel * 100, total: 100, type: ProgressType.Linear })
+                .width('80%').color('#202124')
+            }
+            Button('取消').focusable(false).onClick(() => { inputSession.cancelVoice(); })
+          }
+        }.height(210).width('100%').justifyContent(FlexAlign.Center)
+      } else {
+        if (this.pendingCommit) {
+          Button('文字未写入 · 重新确认').focusable(false).height(32)
+            .onClick(() => { inputSession.retryCommit(); })
+        }
       Row({ space: 4 }) {
         Scroll() {
           Row({ space: 4 }) {
@@ -75,7 +107,7 @@ struct InputMethodPanel {
               Button(candidate, { type: ButtonType.Normal }).fontSize(18).height(34)
                 .fontColor('#202124').backgroundColor('#FFFFFF').borderRadius(6).focusable(false)
                 .onClick(() => { inputSession.selectCandidate(index); })
-            }, (candidate: string) => candidate)
+            }, (candidate: string, index: number) => index.toString() + ':' + candidate)
           }
         }.scrollable(ScrollDirection.Horizontal).layoutWeight(1).height(36)
         Button('‹').height(34).enabled(this.page > 0).onClick(() => { inputSession.page(false); })
@@ -96,6 +128,7 @@ struct InputMethodPanel {
         Button(this.enterLabel).height(44).layoutWeight(1.5).fontSize(14).fontColor('#FFFFFF').backgroundColor('#202124')
           .enabled(this.connected).onClick(() => { inputSession.enter(); })
       }.width('100%')
+      }
     }.width('100%').height('100%').padding({ left: 8, right: 8, top: 6, bottom: 12 }).backgroundColor('#F0F1F4')
   }
 }

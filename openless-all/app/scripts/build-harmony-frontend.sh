@@ -46,7 +46,7 @@ window.addEventListener('load', function() {
   setTimeout(function() {
     if (window.OpenLessHarmonyApi && window.OpenLessHarmonyApi.request) {
       var api = window.OpenLessHarmonyApi;
-      ['get_startup_snapshot', 'get_settings', 'list_history', 'list_vocab', 'list_microphone_devices', 'check_microphone_permission', 'check_network', 'list_channels', 'list_provider_descriptors', 'marketplace_auth_status', '__test_style_pack_roundtrip', '__test_rime_roundtrip'].forEach(function(cmd) {
+      ['get_startup_snapshot', 'get_settings', 'list_history', 'list_vocab', 'list_microphone_devices', 'check_microphone_permission', 'check_network', 'list_channels', 'list_provider_descriptors', 'marketplace_auth_status', '__test_style_pack_roundtrip', '__test_rime_roundtrip', '__test_voice_roundtrip'].forEach(function(cmd) {
         var id = api.request(cmd, JSON.stringify({kind:'asr'}));
         var poll = function() {
           var wire = api.takeResult(id);
