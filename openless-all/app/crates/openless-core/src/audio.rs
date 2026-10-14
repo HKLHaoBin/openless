@@ -495,11 +495,11 @@ mod tests {
         let mut enhancer = AudioEnhancer::new(AudioProcessingConfig {
             enhancement_enabled: true,
         });
-        let mut speech = [0.2_f32; 160];
         for _ in 0..1_000 {
+            let mut speech = [0.2_f32; 160];
             enhancer.process_in_place(&mut speech);
+            assert!(speech[0] > 0.25);
         }
-        assert!(speech[0] > 0.25);
     }
 
     #[test]
