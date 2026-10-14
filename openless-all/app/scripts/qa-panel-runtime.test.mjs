@@ -120,6 +120,8 @@ function context(native = true, embedded = false) {
       preview: [],
       polishPreview: 0,
       polishConfirm: [],
+      polishEvents: [],
+      requestIds: [],
       confirm: [],
       revert: [],
       dismiss: 0,
@@ -146,6 +148,14 @@ function context(native = true, embedded = false) {
     useChatPanelLifecycle: () => lifecycle,
     isTauri: native,
     ...helpers,
+    createSelectionPolishPreviewRequestId: () => {
+      const id = `fixture-preview-${calls.requestIds.length + 1}`;
+      calls.requestIds.push(id);
+      return id;
+    },
+    logSelectionPolishPreviewEvent: async (event) => {
+      calls.polishEvents.push(event);
+    },
     qaWindowSetExpanded: async (next) => {
       calls.resize.push(next);
       return pending.resize?.(next);

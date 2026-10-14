@@ -1085,6 +1085,9 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
                 replacement_text.chars().count()
             );
             if !reactivation.succeeded() {
+                log::info!(
+                    "[selection-polish] event=apply_failure stage=reactivation path=preview"
+                );
                 return Err(BackendError::new(
                     BackendErrorCode::Platform,
                     "selectionPolishTargetUnavailable",
@@ -1110,7 +1113,7 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         );
         if let Some(code) = validation.error_code() {
             log::info!(
-                "[selection-polish] apply validation={} path={}",
+                "[selection-polish] apply validation={} path={} failure_stage=target_or_uia_validation",
                 code,
                 if reactivate { "preview" } else { "direct" }
             );
@@ -1138,11 +1141,28 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             ));
         }
         let preferences = self.preferences()?;
-        let mapped = map_insert_status(crate::insertion::TextInserter::new().insert(
+        let status = crate::insertion::TextInserter::new().insert(
             replacement_text,
             preferences.restore_clipboard_after_paste,
             preferences.paste_shortcut,
-        ));
+        );
+        log::info!(
+            "[selection-polish] event=inserter_status status={} path={} delivery={}",
+            match status {
+                crate::types::InsertStatus::Inserted => "inserted",
+                crate::types::InsertStatus::PasteSent => "paste_sent",
+                crate::types::InsertStatus::CopiedFallback => "copied_fallback",
+                crate::types::InsertStatus::Failed => "failed",
+                crate::types::InsertStatus::NotRequested => "not_requested",
+            },
+            if reactivate { "preview" } else { "direct" },
+            if matches!(status, crate::types::InsertStatus::PasteSent) {
+                "unverified"
+            } else {
+                "confirmed_or_failed"
+            },
+        );
+        let mapped = map_insert_status(status);
         log::info!(
             "[selection-polish] apply insertion_result={} path={}",
             if mapped.is_ok() { "success" } else { "error" },
@@ -1219,18 +1239,60 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
         let bridge = Arc::clone(&self.bridge);
         let targets = Arc::clone(&self.targets);
         Box::pin(async move {
-            let target = targets.lock().get(&session_id).cloned().ok_or_else(|| {
-                BackendError::new(
-                    BackendErrorCode::Cancelled,
-                    "selection target is no longer active",
-                )
-            })?;
-            bridge.apply(
+            let started = std::time::Instant::now();
+            let target = match targets.lock().get(&session_id).cloned() {
+                Some(target) => target,
+                None => {
+                    log::info!(
+                        "[selection-polish] event=runtime_apply_error session_id={} failure=target_missing",
+                        session_id.as_uuid(),
+                    );
+                    return Err(BackendError::new(
+                        BackendErrorCode::Cancelled,
+                        "selection target is no longer active",
+                    ));
+                }
+            };
+            let path = if target.preview { "preview" } else { "direct" };
+            log::info!(
+                "[selection-polish] event=runtime_apply_start session_id={} path={} source_chars={} replacement_chars={}",
+                session_id.as_uuid(),
+                path,
+                source_text.chars().count(),
+                replacement_text.chars().count(),
+            );
+            let result = bridge.apply(
                 &target.target,
                 &source_text,
                 &replacement_text,
                 target.preview,
-            )
+            );
+            match &result {
+                Ok(outcome) => log::info!(
+                    "[selection-polish] event=runtime_apply_result session_id={} path={} outcome={} delivery={} elapsed_ms={}",
+                    session_id.as_uuid(),
+                    path,
+                    match outcome {
+                        InsertOutcome::Inserted => "inserted",
+                        InsertOutcome::PasteSent => "paste_sent",
+                        InsertOutcome::CopiedFallback => "copied_fallback",
+                    },
+                    if matches!(outcome, InsertOutcome::PasteSent) {
+                        "unverified"
+                    } else {
+                        "confirmed"
+                    },
+                    started.elapsed().as_millis(),
+                ),
+                Err(error) => log::info!(
+                    "[selection-polish] event=runtime_apply_error session_id={} path={} failure={:?} elapsed_ms={}",
+                    session_id.as_uuid(),
+                    path,
+                    error.code,
+                    started.elapsed().as_millis(),
+                ),
+            }
+            result
         })
     }
 

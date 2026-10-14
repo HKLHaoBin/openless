@@ -158,6 +158,11 @@ pub(crate) fn begin_selection_polish_preview(
         generation: SELECTION_POLISH_PREVIEW_GENERATION.fetch_add(1, Ordering::SeqCst) + 1,
     };
     *SELECTION_POLISH_PREVIEW_LEASE.lock() = Some(owner);
+    log::info!(
+        "[selection-polish] event=preview_owner_begin session_id={} generation={}",
+        session_id.map_or_else(|| "-".to_string(), |value| value.as_uuid().to_string()),
+        owner.generation,
+    );
     owner
 }
 
@@ -174,9 +179,24 @@ pub(crate) fn clear_selection_polish_preview_pending_for_owner(
 ) -> bool {
     let mut lease = SELECTION_POLISH_PREVIEW_LEASE.lock();
     if lease.as_ref() != Some(&owner) {
+        log::info!(
+            "[selection-polish] event=preview_owner_clear_ignored session_id={} generation={} current_generation={}",
+            owner
+                .session_id
+                .map_or_else(|| "-".to_string(), |value| value.as_uuid().to_string()),
+            owner.generation,
+            lease.as_ref().map_or_else(|| "-".to_string(), |value| value.generation.to_string()),
+        );
         return false;
     }
     *lease = None;
+    log::info!(
+        "[selection-polish] event=preview_owner_clear session_id={} generation={}",
+        owner
+            .session_id
+            .map_or_else(|| "-".to_string(), |value| value.as_uuid().to_string()),
+        owner.generation,
+    );
     true
 }
 
@@ -193,10 +213,26 @@ pub(crate) fn clear_selection_polish_preview_pending_for_session(
         _ => false,
     };
     if !matches {
+        log::info!(
+            "[selection-polish] event=preview_owner_clear_ignored session_id={} current_generation={}",
+            session_id.map_or_else(|| "-".to_string(), |value| value.as_uuid().to_string()),
+            lease.as_ref().map_or_else(|| "-".to_string(), |value| value.generation.to_string()),
+        );
         return None;
     }
     let owner = lease.take();
-    owner
+    if let Some(owner) = owner {
+        log::info!(
+            "[selection-polish] event=preview_owner_clear session_id={} generation={}",
+            owner
+                .session_id
+                .map_or_else(|| "-".to_string(), |value| value.as_uuid().to_string()),
+            owner.generation,
+        );
+        Some(owner)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn clear_selection_polish_preview_pending() {
@@ -395,6 +431,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::confirm_selection_polish_preview,
             #[cfg(not(mobile))]
             commands::cancel_selection_polish_preview,
+            commands::log_selection_polish_preview_event,
             commands::repolish,
             commands::list_style_packs,
             commands::create_style_pack_from_template,
@@ -2670,6 +2707,10 @@ pub(crate) fn set_qa_window_expanded<R: tauri::Runtime>(
 /// React view decides which to render. **Never** steals focus from the frontmost app
 /// (keeps the Cmd+C fallback able to read the selection from the original app).
 pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind: &str) {
+    log::info!(
+        "[selection-polish] event=qa_window_show_requested content_kind={}",
+        content_kind,
+    );
     #[cfg(target_os = "android")]
     {
         match crate::android::jni::android::with_android_env(|env, context| {
@@ -2690,9 +2731,14 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
     }
 
     let Some(window) = ensure_qa_window(app) else {
+        log::info!("[selection-polish] event=qa_window_show_result outcome=missing_window");
         log::info!("[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})");
         return;
     };
+    log::info!(
+        "[selection-polish] event=qa_window_show_state visible_before={}",
+        window.is_visible().unwrap_or(false),
+    );
     // Center only on first show; afterwards keep the user-dragged position.
     if !QA_WINDOW_POSITIONED.load(Ordering::Relaxed) {
         if let Err(e) = position_qa_window(&window) {
@@ -2738,14 +2784,20 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
     #[cfg(target_os = "windows")]
     if !show_qa_window_no_activate(&window) {
         log::warn!("[qa] show_no_activate failed; falling back to window.show()");
-        if let Err(e) = window.show() {
-            log::warn!("[qa] show fallback failed: {e}");
-        }
+        let outcome = if window.show().is_ok() { "ok" } else { "error" };
+        log::info!(
+            "[selection-polish] event=qa_window_show_path path=fallback outcome={}",
+            outcome,
+        );
     }
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     if let Err(e) = window.show() {
         log::warn!("[qa] show failed: {e}");
     }
+    log::info!(
+        "[selection-polish] event=qa_window_show_result outcome=shown visible_after={}",
+        window.is_visible().unwrap_or(false),
+    );
     // Cancel the pending exit-hide (fast close-open) and replay the entrance animation.
     QA_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
     let _ = app.emit_to("qa", "chat-panel:shown", serde_json::json!({}));
@@ -2854,8 +2906,10 @@ fn make_chat_window_draggable_macos<R: tauri::Runtime>(
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::WebviewWindow<R>> {
     if let Some(w) = app.get_webview_window("qa") {
+        log::info!("[selection-polish] event=qa_window_ready outcome=reused");
         return Some(w);
     }
+    log::info!("[selection-polish] event=qa_window_create_start");
     let built =
         WebviewWindowBuilder::new(app, "qa", WebviewUrl::App("index.html?window=qa".into()))
             .title("OpenLess QA")
@@ -2872,6 +2926,7 @@ fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::Webv
             .build();
     match built {
         Ok(w) => {
+            log::info!("[selection-polish] event=qa_window_create_result outcome=created");
             // ⚠️ NSWindow operations must run on the main thread (macOS 26 hard
             // requirement). ensure_qa_window is often entered from a tokio worker (hotkey
             // bridge loop); calling setMovable directly on the worker thread makes AppKit
@@ -2889,6 +2944,7 @@ fn ensure_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<tauri::Webv
             Some(w)
         }
         Err(e) => {
+            log::info!("[selection-polish] event=qa_window_create_result outcome=error");
             log::warn!("[qa] lazy window create failed: {e}");
             None
         }
@@ -2993,26 +3049,71 @@ fn hide_chat_window_animated<R: tauri::Runtime>(
     app: &AppHandle<R>,
     label: &str,
     epoch: &'static std::sync::atomic::AtomicU64,
+    reason: &str,
 ) {
     let Some(window) = app.get_webview_window(label) else {
+        log::info!(
+            "[selection-polish] event=qa_window_hide_result label={} reason={} outcome=missing_window",
+            label,
+            reason,
+        );
         return;
     };
-    if !window.is_visible().unwrap_or(false) {
+    let visible_before = window.is_visible().unwrap_or(false);
+    if !visible_before {
+        log::info!(
+            "[selection-polish] event=qa_window_hide_result label={} reason={} outcome=already_hidden",
+            label,
+            reason,
+        );
         let _ = window.hide();
         return;
     }
     let token = epoch.fetch_add(1, Ordering::SeqCst) + 1;
+    log::info!(
+        "[selection-polish] event=qa_window_hide_requested label={} reason={} visible_before=true token={}",
+        label,
+        reason,
+        token,
+    );
     let _ = app.emit_to(label, "chat-panel:closing", serde_json::json!({}));
+    log::info!(
+        "[selection-polish] event=qa_window_closing_emitted label={} reason={} token={}",
+        label,
+        reason,
+        token,
+    );
+    let label = label.to_string();
+    let reason = reason.to_string();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(240)).await;
         if epoch.load(Ordering::SeqCst) == token {
-            let _ = window.hide();
+            let outcome = if window.hide().is_ok() {
+                "hidden"
+            } else {
+                "error"
+            };
+            log::info!(
+                "[selection-polish] event=qa_window_hide_timer_fired label={} reason={} token={} outcome={}",
+                label,
+                reason,
+                token,
+                outcome,
+            );
+        } else {
+            log::info!(
+                "[selection-polish] event=qa_window_hide_timer_cancelled label={} reason={} token={}",
+                label,
+                reason,
+                token,
+            );
         }
     });
 }
 
 /// Hides the QA window. Shared by commands::qa_window_dismiss and coordinator session teardown.
 pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    log::info!("[selection-polish] event=qa_window_dismiss reason=qa_window_dismiss");
     #[cfg(target_os = "android")]
     {
         let _ = app.emit_to("main", "qa:dismiss", serde_json::json!({}));
@@ -3020,7 +3121,7 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    hide_chat_window_animated(app, "qa", &QA_PANEL_EPOCH);
+    hide_chat_window_animated(app, "qa", &QA_PANEL_EPOCH, "qa_window_dismiss");
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -3029,10 +3130,28 @@ pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(
     session_id: Option<openless_core::SessionId>,
 ) {
     let owner = begin_selection_polish_preview(session_id);
+    log::info!(
+        "[selection-polish] event=preview_show_requested session_id={} generation={}",
+        session_id.map_or_else(|| "-".to_string(), |value| value.as_uuid().to_string()),
+        owner.generation,
+    );
     show_qa_window(app, "polish-preview");
     // The event is only a wake-up signal. The QA panel also hydrates from the owner-aware
     // command on mount, so a lazy WebView cannot lose the preview payload when this fires early.
-    let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_SHOWN, owner);
+    let outcome = if app
+        .emit_to("qa", SELECTION_POLISH_PREVIEW_SHOWN, owner)
+        .is_ok()
+    {
+        "ok"
+    } else {
+        "error"
+    };
+    log::info!(
+        "[selection-polish] event=preview_show_event outcome={} session_id={} generation={}",
+        outcome,
+        session_id.map_or_else(|| "-".to_string(), |value| value.as_uuid().to_string()),
+        owner.generation,
+    );
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -3049,12 +3168,40 @@ pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(
     session_id: Option<openless_core::SessionId>,
 ) {
     let Some(owner) = clear_selection_polish_preview_pending_for_session(session_id) else {
+        log::info!(
+            "[selection-polish] event=preview_hide_ignored session_id={} reason=owner_missing",
+            session_id.map_or_else(|| "-".to_string(), |value| value.as_uuid().to_string()),
+        );
         return;
     };
+    log::info!(
+        "[selection-polish] event=preview_hide_requested session_id={} generation={}",
+        owner
+            .session_id
+            .map_or_else(|| "-".to_string(), |value| value.as_uuid().to_string()),
+        owner.generation,
+    );
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let _ = app;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let _ = app.emit_to("qa", SELECTION_POLISH_PREVIEW_HIDE, owner);
+    {
+        let outcome = if app
+            .emit_to("qa", SELECTION_POLISH_PREVIEW_HIDE, owner)
+            .is_ok()
+        {
+            "ok"
+        } else {
+            "error"
+        };
+        log::info!(
+            "[selection-polish] event=preview_hide_event outcome={} session_id={} generation={}",
+            outcome,
+            owner
+                .session_id
+                .map_or_else(|| "-".to_string(), |value| value.as_uuid().to_string()),
+            owner.generation,
+        );
+    }
 }
 
 const VOICE_EDIT_WINDOW_WIDTH: f64 = 480.0;
@@ -3351,7 +3498,12 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(
 /// Hides the Less Computer window. Shared by the dismiss command / session teardown.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn hide_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
-    hide_chat_window_animated(app, "less-computer", &LESS_COMPUTER_PANEL_EPOCH);
+    hide_chat_window_animated(
+        app,
+        "less-computer",
+        &LESS_COMPUTER_PANEL_EPOCH,
+        "less_computer",
+    );
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -3410,10 +3562,13 @@ fn show_qa_window_no_activate<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     // (see the same-issue comment in coordinator.rs), and refocus_qa_window takes it back
     // afterwards — the selection path still works; issue #164 being briefly violated for
     // "the frame the QA window appears" is the cost of the #466 fix.
-    if window.show().is_err() {
+    if let Err(error) = window.show() {
+        log::info!("[selection-polish] event=qa_window_show_path path=no_activate outcome=error");
+        log::debug!("[qa] show_no_activate failed: {error}");
         return false;
     }
     let _ = window.set_focus();
+    log::info!("[selection-polish] event=qa_window_show_path path=no_activate outcome=ok");
     true
 }
 

@@ -75,25 +75,26 @@ if (
   violations.push('hide_selection_polish_preview no longer clears its matching preview owner');
 }
 
-// 4. IPC: preview reads are gated by an owner lease, not a stale snapshot.
 if (
-  !/fn get_selection_polish_preview[\s\S]{0,400}?selection_polish_preview_owner\(\)/.test(commands)
+  lib
+    .slice(lib.indexOf('macro_rules! app_invoke_handler_mobile'))
+    .includes('commands::log_selection_polish_preview_event')
 ) {
-  violations.push('get_selection_polish_preview lost its owner lease gate');
+  violations.push('mobile invoke handler registers the desktop-only preview logger');
 }
-if (
-  !/fn confirm_selection_polish_preview[\s\S]{0,400}?selection_polish_preview_owner\(\)/.test(
-    commands,
-  )
-) {
-  violations.push('confirm_selection_polish_preview lost its owner validation');
-}
-if (
-  !/fn cancel_selection_polish_preview[\s\S]{0,400}?selection_polish_preview_owner\(\)/.test(
-    commands,
-  )
-) {
-  violations.push('cancel_selection_polish_preview lost its owner validation');
+
+const commandBody = (name) => {
+  const start = commands.indexOf(`pub async fn ${name}`);
+  if (start < 0) return '';
+  const nextCommand = commands.indexOf('\n#[tauri::command]', start + 1);
+  return commands.slice(start, nextCommand < 0 ? commands.length : nextCommand);
+};
+for (const [name, message] of [
+  ['get_selection_polish_preview', 'get_selection_polish_preview lost its owner lease gate'],
+  ['confirm_selection_polish_preview', 'confirm_selection_polish_preview lost its owner validation'],
+  ['cancel_selection_polish_preview', 'cancel_selection_polish_preview lost its owner validation'],
+]) {
+  if (!commandBody(name).includes('selection_polish_preview_owner()')) violations.push(message);
 }
 
 for (const eventName of ['selection-polish-preview:shown', 'selection-polish-preview:hide']) {
@@ -114,13 +115,14 @@ if (!qaPanel.includes('polishLoadEpochRef') || !qaPanel.includes('polishOwnerRef
 }
 if (
   !qaPanel.includes('polishDismissedOwnerRef') ||
-  !qaPanel.includes('if (!polishActiveRef.current && currentOwner === null) return')
+  !/if\s*\(\s*!polishActiveRef\.current\s*&&\s*currentOwner === null\s*\)/.test(qaPanel) ||
+  !qaPanel.includes("reason: 'already_dismissed'")
 ) {
   violations.push('QaPanel.tsx lost idempotent owner-scoped preview dismissal');
 }
 if (
   !qaPanel.includes('event.payload') ||
-  !qaPanel.includes('confirmSelectionPolishPreview(text, owner)')
+  !/confirmSelectionPolishPreview\(text, owner(?:, requestId)?\)/.test(qaPanel)
 ) {
   violations.push('QaPanel.tsx no longer carries preview ownership through events and confirm');
 }

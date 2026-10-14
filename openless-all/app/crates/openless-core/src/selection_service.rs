@@ -775,16 +775,43 @@ impl SelectionApi for SelectionService {
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
+            let started = std::time::Instant::now();
             let _runtime = inner.begin_runtime_work()?;
             let (source_text, replacement_text) = inner.applying_text(session_id, text)?;
             let replacement_text = inner.corrected_replacement(session_id, replacement_text)?;
+            log::info!(
+                "[selection-polish] event=confirm_start session_id={} source_chars={} replacement_chars={} elapsed_ms={}",
+                session_id.as_uuid(),
+                source_text.chars().count(),
+                replacement_text.chars().count(),
+                started.elapsed().as_millis(),
+            );
             let result = inner
                 .runtime
                 .apply(session_id, source_text, replacement_text)
                 .await;
             match result {
                 Ok(outcome) => {
+                    log::info!(
+                        "[selection-polish] event=confirm_apply_result session_id={} outcome={} delivery={} elapsed_ms={}",
+                        session_id.as_uuid(),
+                        match outcome {
+                            crate::ports::InsertOutcome::Inserted => "inserted",
+                            crate::ports::InsertOutcome::PasteSent => "paste_sent",
+                            crate::ports::InsertOutcome::CopiedFallback => "copied_fallback",
+                        },
+                        if matches!(outcome, crate::ports::InsertOutcome::PasteSent) {
+                            "unverified"
+                        } else {
+                            "confirmed"
+                        },
+                        started.elapsed().as_millis(),
+                    );
                     inner.complete(session_id, outcome)?;
+                    log::info!(
+                        "[selection-polish] event=core_hide_requested session_id={} reason=confirm_success",
+                        session_id.as_uuid(),
+                    );
                     inner.hide_preview(Some(session_id));
                     Ok(())
                 }
@@ -794,8 +821,20 @@ impl SelectionApi for SelectionService {
                     // recheck jitter) keep the preview retryable — otherwise the
                     // window is hidden and busy sticks, looking like an unresponsive
                     // confirm button.
-                    if inner.settle_confirm_failure(session_id, &error) {
+                    let settled = inner.settle_confirm_failure(session_id, &error);
+                    log::info!(
+                        "[selection-polish] event=confirm_apply_error session_id={} failure={:?} settled={} elapsed_ms={}",
+                        session_id.as_uuid(),
+                        error.code,
+                        if settled { "failed" } else { "retryable" },
+                        started.elapsed().as_millis(),
+                    );
+                    if settled {
                         inner.cancel_runtime_best_effort(session_id).await;
+                        log::info!(
+                            "[selection-polish] event=core_hide_requested session_id={} reason=confirm_dead_session",
+                            session_id.as_uuid(),
+                        );
                         inner.hide_preview(Some(session_id));
                     }
                     Err(error)

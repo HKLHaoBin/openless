@@ -172,11 +172,17 @@ export {
   qaSetEditInstructionMode,
 } from './qa';
 
-export type { SelectionPolishPreviewOwner, SelectionPolishPreview } from './selection-polish-preview';
+export type {
+  SelectionPolishPreviewOwner,
+  SelectionPolishPreview,
+  SelectionPolishPreviewClientEvent,
+} from './selection-polish-preview';
 export {
   getSelectionPolishPreview,
   confirmSelectionPolishPreview,
   cancelSelectionPolishPreview,
+  createSelectionPolishPreviewRequestId,
+  logSelectionPolishPreviewEvent,
 } from './selection-polish-preview';
 
 export {

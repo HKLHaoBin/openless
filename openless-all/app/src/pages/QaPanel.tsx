@@ -29,8 +29,11 @@ import {
   chatPanelFocusKeyboard,
   confirmSelectionPolishPreview,
   confirmSelectionVoicePreview,
+  createSelectionPolishPreviewRequestId,
   getSelectionPolishPreview,
   getSelectionVoicePreview,
+  logSelectionPolishPreviewEvent,
+  type SelectionPolishPreviewClientEvent,
   type SelectionPolishPreviewOwner,
   isTauri,
   qaSetEditInstructionMode,
@@ -106,41 +109,129 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     (expected.generation === actual.generation &&
       (expected.sessionId === undefined || expected.sessionId === actual.sessionId));
 
+  const logPolishEvent = (
+    event: string,
+    details: Omit<SelectionPolishPreviewClientEvent, 'event'> = {},
+  ) => {
+    void logSelectionPolishPreviewEvent({ event, ...details });
+  };
+
+  const ownerLogFields = (owner: SelectionPolishPreviewOwner | null | undefined) => ({
+    sessionId: owner?.sessionId,
+    generation: owner?.generation,
+  });
+
   /** Hydrate the current preview with a bounded retry and a request epoch guard. */
   const loadPolishResult = async (expectedOwner?: PolishPreviewSignal) => {
+    const requestId = createSelectionPolishPreviewRequestId();
+    const started = performance.now();
     const requestEpoch = ++polishLoadEpochRef.current;
+    logPolishEvent('hydrate_start', {
+      requestId,
+      ...ownerLogFields(expectedOwner),
+      epoch: requestEpoch,
+    });
     if (expectedOwner !== undefined) {
       polishOwnerRef.current = expectedOwner ?? null;
       polishDismissedOwnerRef.current = null;
     }
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      if (requestEpoch !== polishLoadEpochRef.current) return;
+      if (requestEpoch !== polishLoadEpochRef.current) {
+        logPolishEvent('hydrate_discard', {
+          requestId,
+          ...ownerLogFields(expectedOwner),
+          attempt,
+          epoch: requestEpoch,
+          reason: 'stale_epoch',
+          outcome: 'ignored',
+          elapsedMs: Math.round(performance.now() - started),
+        });
+        return;
+      }
+      if (attempt > 0) {
+        logPolishEvent('hydrate_retry', {
+          requestId,
+          ...ownerLogFields(expectedOwner),
+          attempt,
+          epoch: requestEpoch,
+        });
+      }
       try {
         const payload = await getSelectionPolishPreview(
           expectedOwner?.generation === undefined ? undefined : expectedOwner,
+          requestId,
         );
-        if (requestEpoch !== polishLoadEpochRef.current) return;
+        if (requestEpoch !== polishLoadEpochRef.current) {
+          logPolishEvent('hydrate_discard', {
+            requestId,
+            ...ownerLogFields(expectedOwner),
+            attempt,
+            epoch: requestEpoch,
+            reason: 'stale_epoch',
+            outcome: 'ignored',
+            elapsedMs: Math.round(performance.now() - started),
+          });
+          return;
+        }
         if (payload) {
           const owner: SelectionPolishPreviewOwner = {
             sessionId: payload.sessionId,
             generation: payload.generation,
           };
-          if (!polishOwnersMatch(expectedOwner, owner)) return;
+          if (!polishOwnersMatch(expectedOwner, owner)) {
+            logPolishEvent('hydrate_discard', {
+              requestId,
+              ...ownerLogFields(owner),
+              attempt,
+              epoch: requestEpoch,
+              reason: 'owner_mismatch',
+              outcome: 'ignored',
+              elapsedMs: Math.round(performance.now() - started),
+            });
+            return;
+          }
           polishOwnerRef.current = owner;
           polishDismissedOwnerRef.current = null;
           setPolishResult({ text: payload.text, sourceText: payload.sourceText, owner });
           setPolishError('');
+          logPolishEvent('hydrate_result', {
+            requestId,
+            ...ownerLogFields(owner),
+            attempt,
+            epoch: requestEpoch,
+            textChars: payload.text.length,
+            sourceChars: payload.sourceText.length,
+            outcome: 'ok',
+            elapsedMs: Math.round(performance.now() - started),
+          });
           return;
         }
-      } catch (error) {
+      } catch {
         if (attempt === 4) {
-          console.error('[QaPanel] load polish preview failed', error);
+          logPolishEvent('hydrate_discard', {
+            requestId,
+            ...ownerLogFields(expectedOwner),
+            attempt,
+            epoch: requestEpoch,
+            reason: 'ipc_error',
+            outcome: 'error',
+            elapsedMs: Math.round(performance.now() - started),
+          });
         }
       }
       if (attempt < 4) {
         await new Promise((resolve) => setTimeout(resolve, 60 * (attempt + 1)));
       }
     }
+    logPolishEvent('hydrate_discard', {
+      requestId,
+      ...ownerLogFields(expectedOwner),
+      attempt: 5,
+      epoch: requestEpoch,
+      reason: 'null_payload',
+      outcome: 'ignored',
+      elapsedMs: Math.round(performance.now() - started),
+    });
   };
   const loadPolishResultRef = useRef(loadPolishResult);
   loadPolishResultRef.current = loadPolishResult;
@@ -320,6 +411,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         // `HostAction::ShowSelectionPreview` 的落点一致。
         handles.push(
           await listen<PolishPreviewSignal>('selection-polish-preview:shown', (event) => {
+            logPolishEvent('shown', { ...ownerLogFields(event.payload), outcome: 'pending' });
             void loadPolishResultRef.current(event.payload);
           }),
           await listen<PolishPreviewSignal>('selection-polish-preview:hide', (event) => {
@@ -336,16 +428,36 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
                 currentOwner === null &&
                 dismissedOwner !== null) ||
               ((owner === null || owner === undefined) && currentOwner?.generation !== undefined)
-            )
+            ) {
+              logPolishEvent('hide_event', {
+                ...ownerLogFields(owner),
+                reason: 'already_dismissed',
+                outcome: 'ignored',
+              });
               return;
+            }
+            if (!polishActiveRef.current && currentOwner === null) {
+              logPolishEvent('hide_event', {
+                ...ownerLogFields(owner),
+                reason: 'inactive',
+                outcome: 'ignored',
+              });
+              return;
+            }
             if (
-              (!polishActiveRef.current && currentOwner === null) ||
-              (owner !== null &&
-                owner !== undefined &&
-                currentOwner !== null &&
-                !polishOwnersMatch(owner, currentOwner))
-            )
+              owner !== null &&
+              owner !== undefined &&
+              currentOwner !== null &&
+              !polishOwnersMatch(owner, currentOwner)
+            ) {
+              logPolishEvent('hide_event', {
+                ...ownerLogFields(owner),
+                reason: 'owner_mismatch',
+                outcome: 'ignored',
+              });
               return;
+            }
+            logPolishEvent('hide_event', { ...ownerLogFields(owner), outcome: 'ok' });
             polishLoadEpochRef.current += 1;
             polishDismissedOwnerRef.current = owner ?? currentOwner;
             polishOwnerRef.current = null;
@@ -483,11 +595,31 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
       event.preventDefault();
       // 润色结果模式下 Esc = 取消并关闭：只 hide 的话待处理标记会留在后端。
       if (polishActiveRef.current) {
-        void cancelSelectionPolishPreview()
-          .catch((error) => {
-            console.error('[QaPanel] cancel selection polish failed', error);
-          })
+        const owner = polishOwnerRef.current;
+        const requestId = createSelectionPolishPreviewRequestId();
+        logPolishEvent('cancel_click', {
+          requestId,
+          ...ownerLogFields(owner),
+          reason: 'cancel',
+          outcome: 'pending',
+        });
+        void cancelSelectionPolishPreview(owner, requestId)
+          .then(() =>
+            logPolishEvent('cancel_result', {
+              requestId,
+              ...ownerLogFields(owner),
+              outcome: 'ok',
+            }),
+          )
+          .catch(() =>
+            logPolishEvent('cancel_error', {
+              requestId,
+              ...ownerLogFields(owner),
+              outcome: 'error',
+            }),
+          )
           .finally(() => {
+            logPolishEvent('cancel_finally', { requestId, ...ownerLogFields(owner) });
             setPolishResult(null);
             void qaWindowDismiss();
             onRequestCloseRef.current?.();
@@ -666,7 +798,10 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   };
 
   // ── 润色结果模式：取消 / 确认并替换 ──────────────────────────────
-  const closePolishResult = (owner = polishOwnerRef.current) => {
+  const closePolishResult = (
+    owner = polishOwnerRef.current,
+    reason: 'confirm_success' | 'cancel' = 'cancel',
+  ) => {
     const currentOwner = polishOwnerRef.current;
     const dismissedOwner = polishDismissedOwnerRef.current;
     if (
@@ -675,16 +810,36 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
       dismissedOwner !== null &&
       polishOwnersMatch(owner, dismissedOwner) &&
       polishOwnersMatch(dismissedOwner, owner)
-    )
+    ) {
+      logPolishEvent('close_result', {
+        ...ownerLogFields(owner),
+        reason: 'already_dismissed',
+        outcome: 'ignored',
+      });
       return;
+    }
     if (
       owner !== null &&
       owner !== undefined &&
       currentOwner !== null &&
       !polishOwnersMatch(owner, currentOwner)
-    )
+    ) {
+      logPolishEvent('close_result', {
+        ...ownerLogFields(owner),
+        reason: 'owner_mismatch',
+        outcome: 'ignored',
+      });
       return;
-    if (!polishActiveRef.current && currentOwner === null) return;
+    }
+    if (!polishActiveRef.current && currentOwner === null) {
+      logPolishEvent('close_result', {
+        ...ownerLogFields(owner),
+        reason: 'inactive',
+        outcome: 'ignored',
+      });
+      return;
+    }
+    logPolishEvent('close_result', { ...ownerLogFields(owner), reason, outcome: 'ok' });
     polishLoadEpochRef.current += 1;
     polishDismissedOwnerRef.current = owner ?? currentOwner;
     polishOwnerRef.current = null;
@@ -697,13 +852,35 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const onPolishCancel = () => {
     if (polishBusy) return;
     const owner = polishOwnerRef.current;
+    const requestId = createSelectionPolishPreviewRequestId();
+    const started = performance.now();
     setPolishBusy(true);
-    void cancelSelectionPolishPreview(owner)
-      .then(() => closePolishResult(owner))
+    logPolishEvent('cancel_click', {
+      requestId,
+      ...ownerLogFields(owner),
+      outcome: 'pending',
+    });
+    void cancelSelectionPolishPreview(owner, requestId)
+      .then(() => {
+        logPolishEvent('cancel_result', {
+          requestId,
+          ...ownerLogFields(owner),
+          outcome: 'ok',
+          elapsedMs: Math.round(performance.now() - started),
+        });
+        closePolishResult(owner, 'cancel');
+      })
       .catch((error) => {
+        logPolishEvent('cancel_error', {
+          requestId,
+          ...ownerLogFields(owner),
+          outcome: 'error',
+          elapsedMs: Math.round(performance.now() - started),
+        });
         setPolishError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => {
+        logPolishEvent('cancel_finally', { requestId, ...ownerLogFields(owner) });
         setPolishBusy(false);
       });
   };
@@ -712,15 +889,44 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const onPolishConfirm = () => {
     const text = polishResult?.text ?? '';
     const owner = polishResult?.owner ?? polishOwnerRef.current;
+    const requestId = createSelectionPolishPreviewRequestId();
+    const started = performance.now();
     if (polishBusy || !text.trim()) return;
     setPolishBusy(true);
     setPolishError('');
-    void confirmSelectionPolishPreview(text, owner)
-      .then(() => closePolishResult(owner))
+    logPolishEvent('confirm_click', {
+      requestId,
+      ...ownerLogFields(owner),
+      textChars: text.length,
+      outcome: 'pending',
+    });
+    void confirmSelectionPolishPreview(text, owner, requestId)
+      .then(() => {
+        logPolishEvent('confirm_result', {
+          requestId,
+          ...ownerLogFields(owner),
+          textChars: text.length,
+          outcome: 'ok',
+          elapsedMs: Math.round(performance.now() - started),
+        });
+        closePolishResult(owner, 'confirm_success');
+      })
       .catch((error) => {
+        logPolishEvent('confirm_error', {
+          requestId,
+          ...ownerLogFields(owner),
+          textChars: text.length,
+          outcome: 'error',
+          elapsedMs: Math.round(performance.now() - started),
+        });
         setPolishError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => {
+        logPolishEvent('confirm_finally', {
+          requestId,
+          ...ownerLogFields(owner),
+          textChars: text.length,
+        });
         setPolishBusy(false);
       });
   };

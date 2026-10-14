@@ -32,11 +32,18 @@ pub fn set_qa_hotkey(
 /// User clicks ✕ or presses Esc to close the QA panel.
 #[tauri::command]
 pub async fn qa_window_dismiss(core: CoreState<'_>) -> Result<(), String> {
-    core.services()
+    log::info!("[selection-polish] event=qa_window_dismiss_start");
+    let result = core
+        .services()
         .qa
         .dismiss()
         .await
-        .map_err(|error| error.message)
+        .map_err(|error| error.message);
+    log::info!(
+        "[selection-polish] event=qa_window_dismiss_result outcome={}",
+        if result.is_ok() { "ok" } else { "error" },
+    );
+    result
 }
 
 /// Mobile QA panel record button: Idle -> begin_qa_session, Recording ->
