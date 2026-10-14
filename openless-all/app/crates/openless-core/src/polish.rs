@@ -518,6 +518,7 @@ impl ActiveLLMProvider {
 
 pub struct OpenAICompatibleLLMProvider {
     config: OpenAICompatibleConfig,
+    dictation_session_id: Option<crate::types::SessionId>,
     /// Polish-dedicated client: no input-length-dependent whole-request timeout, only a
     /// connection-leak hard cap. The real criteria live at call sites (streaming two
     /// criteria / non-streaming total budget).
@@ -546,8 +547,13 @@ impl OpenAICompatibleLLMProvider {
             });
         Self {
             config,
+            dictation_session_id: None,
             polish_client,
         }
+    }
+
+    pub(crate) fn set_dictation_session(&mut self, session_id: crate::types::SessionId) {
+        self.dictation_session_id = Some(session_id);
     }
 
     pub async fn polish(
@@ -854,11 +860,14 @@ impl OpenAICompatibleLLMProvider {
         budget: Duration,
     ) -> Result<String, LLMError> {
         let request_id = uuid::Uuid::new_v4();
-        match tokio::time::timeout(
-            budget,
-            self.send_chat_request_inner(url, body, budget, request_id),
-        )
-        .await
+        log::info!(
+            "[llm] request_id={} session_id={} stream=false",
+            request_id,
+            self.dictation_session_id
+                .map_or_else(|| "none".to_string(), |id| id.to_string()),
+        );
+        match tokio::time::timeout(budget, self.send_chat_request_inner(url, body, request_id))
+            .await
         {
             Ok(result) => result,
             Err(_) => {
@@ -872,7 +881,6 @@ impl OpenAICompatibleLLMProvider {
         &self,
         url: &str,
         body: &serde_json::Value,
-        _budget: Duration,
         request_id: uuid::Uuid,
     ) -> Result<String, LLMError> {
         self.config
@@ -990,9 +998,10 @@ impl OpenAICompatibleLLMProvider {
         let request_id = uuid::Uuid::new_v4();
         let body = self.chat_body(true, messages);
         log::info!(
-            "[llm] POST {} request_id={} provider={} model={} format={:?} stream=true",
+            "[llm] POST {} request_id={} session_id={} provider={} model={} format={:?} stream=true",
             crate::net::sanitized_url_for_logs(&url),
             request_id,
+            self.dictation_session_id.map_or_else(|| "none".to_string(), |id| id.to_string()),
             self.config.provider_id,
             self.config.model,
             self.config.protocol.format
@@ -3073,6 +3082,8 @@ mod tests {
     /// guaranteed failure.
     #[tokio::test]
     async fn non_streaming_request_succeeds_within_budget() {
+        crate::testing::logging::start();
+        let session_id = crate::types::SessionId::new();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -3087,13 +3098,26 @@ mod tests {
             );
         });
 
-        let out = streaming_test_provider(addr)
+        let mut provider = streaming_test_provider(addr);
+        provider.set_dictation_session(session_id);
+        let out = provider
             .chat_completion("sys", "user", std::time::Duration::from_secs(30))
             .await
             .expect("预算充足时应当正常返回");
 
         assert_eq!(out, "整理好的文本");
         server.join().unwrap();
+        let logs = crate::testing::logging::matching(&format!("session_id={session_id} "));
+        assert_eq!(logs.len(), 1);
+        let request_id = logs[0]
+            .split_whitespace()
+            .find(|field| field.starts_with("request_id="))
+            .unwrap();
+        let records = crate::testing::logging::matching(request_id);
+        assert!(records
+            .iter()
+            .any(|line| line.contains("extracted_chars=6")));
+        assert!(!records.iter().any(|line| line.contains("整理好的文本")));
     }
 
     /// Core of the fix: as long as the stream keeps producing text, a total duration

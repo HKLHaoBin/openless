@@ -58,10 +58,17 @@ fn sentence_like_segments(content: &str) -> Vec<&str> {
     let mut segments = Vec::new();
     let mut start = 0;
     for (index, character) in content.char_indices() {
+        let period_boundary = character == '.'
+            && content[index + 1..]
+                .chars()
+                .next()
+                .is_none_or(char::is_whitespace)
+            && !is_abbreviation(&content[start..index]);
         if matches!(
             character,
             '\n' | '。' | '！' | '？' | '!' | '?' | ';' | '；'
-        ) {
+        ) || period_boundary
+        {
             let end = index + character.len_utf8();
             let segment = content[start..end].trim();
             if !segment.is_empty() {
@@ -75,6 +82,20 @@ fn sentence_like_segments(content: &str) -> Vec<&str> {
         segments.push(tail);
     }
     segments
+}
+
+fn is_abbreviation(before_period: &str) -> bool {
+    let word = before_period.split_whitespace().next_back().unwrap_or("");
+    // shortcut: recognize common English titles and initials; extend for observed false boundaries.
+    (word.len() == 1 && word.bytes().all(|byte| byte.is_ascii_alphabetic()))
+        || (word.contains('.')
+            && word
+                .split('.')
+                .all(|part| part.len() == 1 && part.bytes().all(|byte| byte.is_ascii_alphabetic())))
+        || matches!(
+            word.to_ascii_lowercase().as_str(),
+            "mr" | "mrs" | "ms" | "dr" | "prof" | "sr" | "jr" | "st" | "vs" | "etc"
+        )
 }
 
 fn near_duplicate_finding(left: &str, right: &str) -> Option<AdjacentNearDuplicate> {
@@ -422,7 +443,43 @@ mod tests {
 
     #[test]
     fn near_duplicate_observation_never_changes_cleaned_text() {
-        let content = "非常非常重要。";
+        let content = "这个问题需要及时处理，避免重复内容。这个问题需要及时处理，避免重复内容。";
+        assert_eq!(find_adjacent_near_duplicates(content).len(), 1);
         assert_eq!(clean_polish_output(content), content);
+    }
+
+    #[test]
+    fn adjacent_near_duplicates_support_english_sentence_endings() {
+        for separator in [". ", "! ", "? ", "\n"] {
+            let text = format!(
+                "Please submit the final report today{separator}Please submit the final report today."
+            );
+            assert_eq!(
+                find_adjacent_near_duplicates(&text).len(),
+                1,
+                "{separator:?}"
+            );
+        }
+        assert_eq!(
+            find_adjacent_near_duplicates(
+                "Please submit the final report today. Please submit the revised final report today."
+            ).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn sentence_boundaries_preserve_decimals_and_abbreviations() {
+        assert_eq!(
+            sentence_like_segments("Dr. A. Smith paid 3.14 dollars, e.g. in cash. Next sentence."),
+            [
+                "Dr. A. Smith paid 3.14 dollars, e.g. in cash.",
+                "Next sentence."
+            ]
+        );
+        assert_eq!(
+            sentence_like_segments("The price is 3.14. Next sentence."),
+            ["The price is 3.14.", "Next sentence."]
+        );
     }
 }
