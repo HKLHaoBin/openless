@@ -1040,13 +1040,14 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         let (selection, target, capture_diag) =
             crate::selection::resolve_selection_workspace_capture_with_diag();
         log::info!(
-            "[selection-polish] event=capture_bridge_result capture_id={} reason={} used_prefetch={} target_captured={} target_current={} anchor_captured={} source_chars={}",
+            "[selection-polish] event=capture_bridge_result capture_id={} reason={} used_prefetch={} target_captured={} target_current={} anchor_captured={} anchor_stage={} source_chars={}",
             capture_diag.capture_id,
             capture_diag.reason.as_str(),
             capture_diag.used_prefetch,
             capture_diag.target_captured,
             capture_diag.target_current,
             capture_diag.anchor_captured,
+            capture_diag.anchor_stage,
             capture_diag
                 .char_count
                 .map_or_else(|| "-".to_string(), |count| count.to_string()),

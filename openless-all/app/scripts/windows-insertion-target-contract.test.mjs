@@ -76,12 +76,12 @@ assert.ok(
 );
 assert.match(
   selectionAnchorRefresh,
-  /selection_insertion_target_is_current\(target\)[\s\S]*?capture_focused_selection_anchor\(&selection\.text\)[\s\S]*?selection_insertion_target_is_current\(target\)[\s\S]*?windows_selection_anchor = Some/,
-  'anchor refresh must fence the target before and after the bounded UIA read',
+  /selection_insertion_target_is_current\(target\)[\s\S]*?capture_focused_selection_anchor_with_stage\(&selection\.text\)[\s\S]*?position\.matches_anchor\(&anchor\)[\s\S]*?selection_insertion_target_is_current\(target\)[\s\S]*?windows_selection_anchor = Some/,
+  'anchor refresh must fence the target before and after the bounded UIA read and retain only an exact position match',
 );
 assert.match(
   selectionAnchorRefresh,
-  /windows_selection_position[\s\S]*?matches_expected\(&selection\.text\)[\s\S]*?capture_focused_selection_anchor\(&selection\.text\)[\s\S]*?matches_anchor\(&anchor\)[\s\S]*?windows_selection_anchor = Some/,
+  /windows_selection_position[\s\S]*?matches_expected\(&selection\.text\)[\s\S]*?capture_focused_selection_anchor_with_stage\(&selection\.text\)[\s\S]*?matches_anchor\(&anchor\)/,
   'anchor refresh must require the pre-capture position and exact offsets before retaining a post-capture anchor',
 );
 assert.match(
@@ -95,18 +95,13 @@ assert.doesNotMatch(
   'anchor refresh must not simulate another copy or read the clipboard',
 );
 const captureTarget = selection.match(
-  /pub\(crate\) fn capture_selection_insertion_target\([\s\S]*?(?=\n    \/\/\/|\n    pub\(crate\) fn selection_insertion_target_is_captured)/,
+  /fn capture_selection_insertion_target_impl\([\s\S]*?(?=\n    \/\/\/|\n    pub\(crate\) fn selection_insertion_target_is_captured)/,
 )?.[0];
 assert.ok(captureTarget, 'the insertion target capture helper must exist');
 assert.match(
   captureTarget,
-  /capture_selection_insertion_target_impl\(true\)[\s\S]*?capture_focused_selection_position/,
-  'the PreviewConfirm capture path must retain a lightweight UIA position before clipboard capture',
-);
-assert.doesNotMatch(
-  captureTarget,
-  /capture_focused_selection_anchor/,
-  'the initial target snapshot must not depend on an early context-rich UIA anchor read',
+  /capture_focused_selection_position_with_stage[\s\S]*?windows_selection_position_stage/,
+  'the PreviewConfirm capture path must retain the lightweight UIA failure stage before clipboard capture',
 );
 assert.match(
   selection,
@@ -125,13 +120,18 @@ assert.match(
 );
 assert.match(
   adapters,
-  /event=capture_bridge_result[\s\S]*?anchor_captured=/,
-  'capture diagnostics must expose whether the UIA anchor was retained',
+  /event=capture_bridge_result[\s\S]*?anchor_captured=[\s\S]*?anchor_stage=/,
+  'capture diagnostics must expose whether the UIA anchor was retained and why',
+);
+assert.match(
+  windowsHost,
+  /FocusedSelectionCaptureStage[\s\S]*?focused_element_unavailable[\s\S]*?selection_not_single[\s\S]*?runtime_id_unavailable[\s\S]*?context_after_unavailable/,
+  'UIA anchor diagnostics must distinguish metadata-only failure stages',
 );
 assert.match(
   selection,
-  /anchor_captured: bool[\s\S]*?target_current=.*anchor_captured=.*capture_id/,
-  'capture diagnostics must include anchor_captured metadata without text',
+  /anchor_captured: bool[\s\S]*?anchor_stage: &\x27static str[\x27[\s\S]*?target_current=.*anchor_captured=.*anchor_stage=.*capture_id/,
+  'capture diagnostics must include anchor stage metadata without text',
 );
 const restoreTarget = selection.match(
   /pub\(crate\) fn reactivate_selection_insertion_target[\s\S]*?(?=\n    #\[cfg\(target_os = "macos"\)\])/,

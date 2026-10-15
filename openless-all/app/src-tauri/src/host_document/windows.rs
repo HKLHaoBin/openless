@@ -74,6 +74,72 @@ fn with_voice_edit_uia<T>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FocusedSelectionCaptureStage {
+    Matched,
+    UiAutomationUnavailable,
+    FocusedElementUnavailable,
+    TextPatternUnavailable,
+    SelectionUnavailable,
+    SelectionCountUnavailable,
+    SelectionNotSingle,
+    SelectionRangeUnavailable,
+    SelectedTextUnavailable,
+    EmptySelection,
+    RuntimeIdUnavailable,
+    ProcessIdUnavailable,
+    StartOffsetUnavailable,
+    EndOffsetUnavailable,
+    ContextBeforeUnavailable,
+    ContextAfterUnavailable,
+    ExpectedMismatch,
+}
+
+impl FocusedSelectionCaptureStage {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Matched => "matched",
+            Self::UiAutomationUnavailable => "uia_unavailable",
+            Self::FocusedElementUnavailable => "focused_element_unavailable",
+            Self::TextPatternUnavailable => "text_pattern_unavailable",
+            Self::SelectionUnavailable => "selection_unavailable",
+            Self::SelectionCountUnavailable => "selection_count_unavailable",
+            Self::SelectionNotSingle => "selection_not_single",
+            Self::SelectionRangeUnavailable => "selection_range_unavailable",
+            Self::SelectedTextUnavailable => "selected_text_unavailable",
+            Self::EmptySelection => "empty_selection",
+            Self::RuntimeIdUnavailable => "runtime_id_unavailable",
+            Self::ProcessIdUnavailable => "process_id_unavailable",
+            Self::StartOffsetUnavailable => "start_offset_unavailable",
+            Self::EndOffsetUnavailable => "end_offset_unavailable",
+            Self::ContextBeforeUnavailable => "context_before_unavailable",
+            Self::ContextAfterUnavailable => "context_after_unavailable",
+            Self::ExpectedMismatch => "expected_mismatch",
+        }
+    }
+}
+
+fn capture_stage(error: &str) -> FocusedSelectionCaptureStage {
+    match error {
+        "focused_element" => FocusedSelectionCaptureStage::FocusedElementUnavailable,
+        "text_pattern" => FocusedSelectionCaptureStage::TextPatternUnavailable,
+        "selection" => FocusedSelectionCaptureStage::SelectionUnavailable,
+        "selection_count" => FocusedSelectionCaptureStage::SelectionCountUnavailable,
+        "selection_not_single" => FocusedSelectionCaptureStage::SelectionNotSingle,
+        "selection_range" => FocusedSelectionCaptureStage::SelectionRangeUnavailable,
+        "selected_text" => FocusedSelectionCaptureStage::SelectedTextUnavailable,
+        "empty_selection" => FocusedSelectionCaptureStage::EmptySelection,
+        "runtime_id" => FocusedSelectionCaptureStage::RuntimeIdUnavailable,
+        "process_id" => FocusedSelectionCaptureStage::ProcessIdUnavailable,
+        "start_offset" => FocusedSelectionCaptureStage::StartOffsetUnavailable,
+        "end_offset" => FocusedSelectionCaptureStage::EndOffsetUnavailable,
+        "context_before" => FocusedSelectionCaptureStage::ContextBeforeUnavailable,
+        "context_after" => FocusedSelectionCaptureStage::ContextAfterUnavailable,
+        "expected_mismatch" => FocusedSelectionCaptureStage::ExpectedMismatch,
+        _ => FocusedSelectionCaptureStage::UiAutomationUnavailable,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FocusedSelectionStatus {
     Matched,
     Changed,
@@ -298,123 +364,130 @@ fn selection_endpoint_offset(
 
 /// Capture a lightweight selection position before clipboard capture. This snapshot contains only
 /// the range identity needed to prove that a later, context-rich anchor refers to the same range.
-pub(crate) fn capture_focused_selection_position() -> Option<FocusedSelectionPosition> {
-    with_voice_edit_uia(|uia| unsafe {
+pub(crate) fn capture_focused_selection_position_with_stage() -> (
+    Option<FocusedSelectionPosition>,
+    FocusedSelectionCaptureStage,
+) {
+    let result = with_voice_edit_uia(|uia| unsafe {
         let element = uia
             .GetFocusedElement()
-            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+            .map_err(|_| "focused_element".to_string())?;
         let pattern = element
             .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
-            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+            .map_err(|_| "text_pattern".to_string())?;
         let ranges = pattern
             .GetSelection()
-            .map_err(|_| "selectionTargetUnavailable".to_string())?;
-        if ranges
-            .Length()
-            .map_err(|_| "selectionTargetUnavailable".to_string())?
-            != 1
-        {
-            return Ok(None);
+            .map_err(|_| "selection".to_string())?;
+        if ranges.Length().map_err(|_| "selection_count".to_string())? != 1 {
+            return Err("selection_not_single".to_string());
         }
         let selected = ranges
             .GetElement(0)
-            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+            .map_err(|_| "selection_range".to_string())?;
         let selected_text = selected
             .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)
-            .map_err(|_| "selectionTargetUnavailable".to_string())?
+            .map_err(|_| "selected_text".to_string())?
             .to_string();
         if selected_text.trim().is_empty() {
-            return Ok(None);
+            return Err("empty_selection".to_string());
         }
-        Ok(Some(FocusedSelectionPosition {
-            runtime_id: runtime_id(&element)
-                .map_err(|_| "selectionTargetUnavailable".to_string())?,
+        Ok(FocusedSelectionPosition {
+            runtime_id: runtime_id(&element).map_err(|_| "runtime_id".to_string())?,
             process_id: element
                 .CurrentProcessId()
-                .map_err(|_| "selectionTargetUnavailable".to_string())?,
+                .map_err(|_| "process_id".to_string())?,
             start_offset: selection_endpoint_offset(
                 &pattern,
                 &selected,
                 TextPatternRangeEndpoint_Start,
             )
-            .map_err(|_| "selectionTargetUnavailable".to_string())?,
+            .map_err(|_| "start_offset".to_string())?,
             end_offset: selection_endpoint_offset(
                 &pattern,
                 &selected,
                 TextPatternRangeEndpoint_End,
             )
-            .map_err(|_| "selectionTargetUnavailable".to_string())?,
+            .map_err(|_| "end_offset".to_string())?,
             selected_text,
-        }))
-    })
-    .ok()
-    .flatten()
+        })
+    });
+    match result {
+        Ok(position) => (Some(position), FocusedSelectionCaptureStage::Matched),
+        Err(error) => (None, capture_stage(&error)),
+    }
+}
+
+pub(crate) fn capture_focused_selection_position() -> Option<FocusedSelectionPosition> {
+    capture_focused_selection_position_with_stage().0
 }
 
 /// Capture the focused UIA element and bounded text around the expected selection. The anchor is
 /// kept in memory only; its contents are never logged. Matching the already-captured selection
 /// prevents a delayed UIA read from attaching an unrelated same-text range.
-pub(crate) fn capture_focused_selection_anchor(expected: &str) -> Option<FocusedSelectionAnchor> {
+pub(crate) fn capture_focused_selection_anchor_with_stage(
+    expected: &str,
+) -> (Option<FocusedSelectionAnchor>, FocusedSelectionCaptureStage) {
     let expected = expected.trim();
     if expected.is_empty() {
-        return None;
+        return (None, FocusedSelectionCaptureStage::EmptySelection);
     }
 
-    with_voice_edit_uia(|uia| unsafe {
+    let result = with_voice_edit_uia(|uia| unsafe {
         let element = uia
             .GetFocusedElement()
-            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+            .map_err(|_| "focused_element".to_string())?;
         let pattern = element
             .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
-            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+            .map_err(|_| "text_pattern".to_string())?;
         let ranges = pattern
             .GetSelection()
-            .map_err(|_| "selectionTargetUnavailable".to_string())?;
-        if ranges
-            .Length()
-            .map_err(|_| "selectionTargetUnavailable".to_string())?
-            != 1
-        {
-            return Ok(None);
+            .map_err(|_| "selection".to_string())?;
+        if ranges.Length().map_err(|_| "selection_count".to_string())? != 1 {
+            return Err("selection_not_single".to_string());
         }
         let selected = ranges
             .GetElement(0)
-            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+            .map_err(|_| "selection_range".to_string())?;
         let selected_text = selected
             .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)
-            .map_err(|_| "selectionTargetUnavailable".to_string())?
+            .map_err(|_| "selected_text".to_string())?
             .to_string();
         if selection_observation(expected, Some(&selected_text)).status
             != FocusedSelectionStatus::Matched
         {
-            return Ok(None);
+            return Err("expected_mismatch".to_string());
         }
-        Ok(Some(FocusedSelectionAnchor {
-            runtime_id: runtime_id(&element)
-                .map_err(|_| "selectionTargetUnavailable".to_string())?,
-            process_id: element
-                .CurrentProcessId()
-                .map_err(|_| "selectionTargetUnavailable".to_string())?,
-            start_offset: selection_endpoint_offset(
-                &pattern,
-                &selected,
-                TextPatternRangeEndpoint_Start,
-            )
-            .map_err(|_| "selectionTargetUnavailable".to_string())?,
-            end_offset: selection_endpoint_offset(
-                &pattern,
-                &selected,
-                TextPatternRangeEndpoint_End,
-            )
-            .map_err(|_| "selectionTargetUnavailable".to_string())?,
-            before: selection_context_before(&pattern, &selected)
-                .map_err(|_| "selectionTargetUnavailable".to_string())?,
-            after: selection_context_after(&pattern, &selected)
-                .map_err(|_| "selectionTargetUnavailable".to_string())?,
-        }))
-    })
-    .ok()
-    .flatten()
+        let runtime_id = runtime_id(&element).map_err(|_| "runtime_id".to_string())?;
+        let process_id = element
+            .CurrentProcessId()
+            .map_err(|_| "process_id".to_string())?;
+        let start_offset =
+            selection_endpoint_offset(&pattern, &selected, TextPatternRangeEndpoint_Start)
+                .map_err(|_| "start_offset".to_string())?;
+        let end_offset =
+            selection_endpoint_offset(&pattern, &selected, TextPatternRangeEndpoint_End)
+                .map_err(|_| "end_offset".to_string())?;
+        let before = selection_context_before(&pattern, &selected)
+            .map_err(|_| "context_before".to_string())?;
+        let after = selection_context_after(&pattern, &selected)
+            .map_err(|_| "context_after".to_string())?;
+        Ok(FocusedSelectionAnchor {
+            runtime_id,
+            process_id,
+            start_offset,
+            end_offset,
+            before,
+            after,
+        })
+    });
+    match result {
+        Ok(anchor) => (Some(anchor), FocusedSelectionCaptureStage::Matched),
+        Err(error) => (None, capture_stage(&error)),
+    }
+}
+
+pub(crate) fn capture_focused_selection_anchor(expected: &str) -> Option<FocusedSelectionAnchor> {
+    capture_focused_selection_anchor_with_stage(expected).0
 }
 
 fn selection_context_matches(actual: &str, expected: &str) -> bool {
@@ -902,6 +975,23 @@ mod voice_edit_tests {
         assert!(moved.matches_expected("same"));
         assert!(!moved.matches_anchor(&anchor));
         assert!(!original.matches_expected("different"));
+    }
+
+    #[test]
+    fn selection_capture_stage_names_are_metadata_only() {
+        assert_eq!(
+            FocusedSelectionCaptureStage::FocusedElementUnavailable.as_str(),
+            "focused_element_unavailable"
+        );
+        assert_eq!(
+            FocusedSelectionCaptureStage::SelectionNotSingle.as_str(),
+            "selection_not_single"
+        );
+        assert_eq!(
+            FocusedSelectionCaptureStage::ContextAfterUnavailable.as_str(),
+            "context_after_unavailable"
+        );
+        assert_eq!(FocusedSelectionCaptureStage::Matched.as_str(), "matched");
     }
 
     #[test]
