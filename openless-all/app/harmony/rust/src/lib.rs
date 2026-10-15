@@ -293,9 +293,16 @@ fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
             .map_err(|e| e.to_string())?),
         "cancel_dictation" => {
             let id = serde_json::from_value(args["session"].clone()).map_err(|e| e.to_string())?;
-            host.runtime
-                .block_on(b.cancel_dictation(id))
-                .map_err(|e| e.to_string())?;
+            if let Err(error) = host.runtime.block_on(b.cancel_dictation(id)) {
+                // Cleanup may race a completed stop or a previous cancel.
+                // Never absorb a mismatched ID targeting a newer session.
+                if error.code != openless_core::BackendErrorCode::InvalidState
+                    || error.message != "no active dictation session"
+                    || b.snapshot().dictation.session_id.is_some()
+                {
+                    return Err(error.to_string());
+                }
+            }
             Value::Null
         }
         "get_startup_snapshot" => {

@@ -264,6 +264,7 @@ pub fn voice(owner: &Host) -> Result<Value, String> {
         if test.backend.feed_external_pcm(id, &[1, 0]).is_ok() {
             return Err("completed session accepted stale audio".into());
         }
+        dispatch(&test, "cancel_dictation", json!({"session":id.to_string()}))?;
         let audio = dispatch(
             &test,
             "read_audio_recording",
@@ -302,9 +303,13 @@ pub fn voice(owner: &Host) -> Result<Value, String> {
         }
         let next = dispatch(&test, "start_dictation", json!({}))?;
         let next_id: SessionId = serde_json::from_value(next.clone()).map_err(|e| e.to_string())?;
+        if dispatch(&test, "cancel_dictation", json!({"session":id.to_string()})).is_ok() {
+            return Err("stale cancellation targeted a newer session".into());
+        }
         if test.backend.feed_external_pcm(id, &[1, 0]).is_ok() {
             return Err("new session accepted previous session audio".into());
         }
+        dispatch(&test, "cancel_dictation", json!({"session":next}))?;
         dispatch(&test, "cancel_dictation", json!({"session":next}))?;
         if test.backend.feed_external_pcm(next_id, &[1, 0]).is_ok()
             || transcription.cancel_count() == 0

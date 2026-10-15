@@ -41,8 +41,7 @@ export class VoiceClient {
     run.startup = this.begin(run, context, level, failed);
     try { await run.startup; } catch (error) {
       if (this.run === run) this.run = undefined;
-      await this.dispose(run, true);
-      throw new Error((error as Error).message);
+      try { await this.dispose(run, true); } finally { throw new Error((error as Error).message); }
     }
   }
 
@@ -158,8 +157,8 @@ export class VoiceClient {
       if (!reply.ok) throw new Error(reply.error || '识别失败，请检查渠道设置');
       return reply.value;
     } catch (error) {
-      if (!run.cancelled) await this.dispose(run, true);
-      throw new Error((error as Error).message);
+      try { if (!run.cancelled) await this.dispose(run, true); }
+      finally { throw new Error((error as Error).message); }
     } finally { if (this.run === run) this.run = undefined; }
   }
 
@@ -169,7 +168,10 @@ export class VoiceClient {
     run.cancelled = true;
     run.accepting = false;
     this.run = undefined;
-    this.cleanup = run.startup.catch(() => {}).then(async (): Promise<void> => { await this.dispose(run, true); });
-    await this.cleanup;
+    const cleanup = run.startup.catch(() => {}).then(async (): Promise<void> => { await this.dispose(run, true); });
+    // Wait for release without permanently poisoning starts after a system
+    // capture error. Core still rejects a genuinely busy recording.
+    this.cleanup = cleanup.catch(() => {});
+    await cleanup;
   }
 }
