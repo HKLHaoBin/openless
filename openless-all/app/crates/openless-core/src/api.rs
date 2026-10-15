@@ -3942,7 +3942,9 @@ impl OpenLessBackend {
                 self.deps
                     .services
                     .selection
-                    .cancel(snapshot.session_id)
+                    // Shutdown is the ownerless cancellation path; it must be
+                    // allowed to tear down an in-flight native apply.
+                    .cancel(None)
                     .await
             }
             Ok(_) => Ok(()),

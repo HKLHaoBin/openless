@@ -1037,7 +1037,19 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         ),
         BackendError,
     > {
-        let (selection, target) = crate::selection::resolve_selection_workspace_capture();
+        let (selection, target, capture_diag) =
+            crate::selection::resolve_selection_workspace_capture_with_diag();
+        log::info!(
+            "[selection-polish] event=capture_bridge_result capture_id={} reason={} used_prefetch={} target_captured={} target_current={} source_chars={}",
+            capture_diag.capture_id,
+            capture_diag.reason.as_str(),
+            capture_diag.used_prefetch,
+            capture_diag.target_captured,
+            capture_diag.target_current,
+            capture_diag
+                .char_count
+                .map_or_else(|| "-".to_string(), |count| count.to_string()),
+        );
         let selection = selection.ok_or_else(|| {
             BackendError::new(
                 BackendErrorCode::InvalidArgument,
@@ -1053,7 +1065,15 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
                 "selectionPolishSelectionTooLong",
             ));
         }
-        if !crate::selection::selection_insertion_target_is_captured(&target) {
+        let target_captured = crate::selection::selection_insertion_target_is_captured(&target);
+        let target_current = crate::selection::selection_insertion_target_is_current(&target);
+        if !target_captured || !target_current {
+            log::info!(
+                "[selection-polish] event=capture_rejected capture_id={} reason=target_unavailable target_captured={} target_current={}",
+                target.capture_id(),
+                target_captured,
+                target_current,
+            );
             return Err(BackendError::new(
                 BackendErrorCode::Platform,
                 "selectionPolishTargetUnavailable",
@@ -1079,14 +1099,16 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             let reactivation =
                 crate::selection::reactivate_selection_insertion_target_detailed(target);
             log::info!(
-                "[selection-polish] apply path=preview reactivation={} source_chars={} replacement_chars={}",
+                "[selection-polish] event=apply_start capture_id={} path=preview reactivation={} source_chars={} replacement_chars={}",
+                target.capture_id(),
                 reactivation.as_str(),
                 source_text.chars().count(),
                 replacement_text.chars().count()
             );
             if !reactivation.succeeded() {
                 log::info!(
-                    "[selection-polish] event=apply_failure stage=reactivation path=preview"
+                    "[selection-polish] event=apply_failure capture_id={} stage=reactivation path=preview",
+                    target.capture_id(),
                 );
                 return Err(BackendError::new(
                     BackendErrorCode::Platform,
@@ -1098,7 +1120,8 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
                 crate::selection::restore_selection_insertion_target_selection(target, source_text);
             #[cfg(target_os = "windows")]
             log::info!(
-                "[selection-polish] preview_selection_restore result={}",
+                "[selection-polish] event=selection_restore capture_id={} result={}",
+                target.capture_id(),
                 match selection_restore {
                     crate::selection::SelectionInsertionTargetSelectionRestore::Matched => {
                         "matched"
@@ -1133,7 +1156,8 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             }
         } else {
             log::info!(
-                "[selection-polish] apply path=direct source_chars={} replacement_chars={}",
+                "[selection-polish] event=apply_start capture_id={} path=direct source_chars={} replacement_chars={}",
+                target.capture_id(),
                 source_text.chars().count(),
                 replacement_text.chars().count()
             );
@@ -1151,7 +1175,8 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         );
         if let Some(code) = validation.error_code() {
             log::info!(
-                "[selection-polish] apply validation={} path={} failure_stage=target_or_uia_validation",
+                "[selection-polish] event=apply_validation capture_id={} validation={} path={} failure_stage=target_or_uia_validation",
+                target.capture_id(),
                 code,
                 if reactivate { "preview" } else { "direct" }
             );
@@ -1185,7 +1210,8 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             preferences.paste_shortcut,
         );
         log::info!(
-            "[selection-polish] event=inserter_status status={} path={} delivery={}",
+            "[selection-polish] event=inserter_status capture_id={} status={} path={} delivery={}",
+            target.capture_id(),
             match status {
                 crate::types::InsertStatus::Inserted => "inserted",
                 crate::types::InsertStatus::PasteSent => "paste_sent",
@@ -1202,7 +1228,8 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         );
         let mapped = map_insert_status(status);
         log::info!(
-            "[selection-polish] apply insertion_result={} path={}",
+            "[selection-polish] event=apply_insertion_result capture_id={} result={} path={}",
+            target.capture_id(),
             if mapped.is_ok() { "success" } else { "error" },
             if reactivate { "preview" } else { "direct" }
         );
@@ -1282,8 +1309,9 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
                 Some(target) => target,
                 None => {
                     log::info!(
-                        "[selection-polish] event=runtime_apply_error session_id={} failure=target_missing",
+                        "[selection-polish] event=runtime_apply_error session_id={} capture_id={} failure=target_missing",
                         session_id.as_uuid(),
+                        "-",
                     );
                     return Err(BackendError::new(
                         BackendErrorCode::Cancelled,
@@ -1292,9 +1320,11 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
                 }
             };
             let path = if target.preview { "preview" } else { "direct" };
+            let capture_id = target.target.capture_id();
             log::info!(
-                "[selection-polish] event=runtime_apply_start session_id={} path={} source_chars={} replacement_chars={}",
+                "[selection-polish] event=runtime_apply_start session_id={} capture_id={} path={} source_chars={} replacement_chars={}",
                 session_id.as_uuid(),
+                capture_id,
                 path,
                 source_text.chars().count(),
                 replacement_text.chars().count(),
@@ -1307,8 +1337,9 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
             );
             match &result {
                 Ok(outcome) => log::info!(
-                    "[selection-polish] event=runtime_apply_result session_id={} path={} outcome={} delivery={} elapsed_ms={}",
+                    "[selection-polish] event=runtime_apply_result session_id={} capture_id={} path={} outcome={} delivery={} elapsed_ms={}",
                     session_id.as_uuid(),
+                    capture_id,
                     path,
                     match outcome {
                         InsertOutcome::Inserted => "inserted",
@@ -1323,8 +1354,9 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
                     started.elapsed().as_millis(),
                 ),
                 Err(error) => log::info!(
-                    "[selection-polish] event=runtime_apply_error session_id={} path={} failure={:?} elapsed_ms={}",
+                    "[selection-polish] event=runtime_apply_error session_id={} capture_id={} path={} failure={:?} elapsed_ms={}",
                     session_id.as_uuid(),
+                    capture_id,
                     path,
                     error.code,
                     started.elapsed().as_millis(),

@@ -86,6 +86,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const [polishResult, setPolishResult] = useState<PolishResult | null>(null);
   const [polishError, setPolishError] = useState<string>('');
   const [polishBusy, setPolishBusy] = useState(false);
+  const polishConfirmInFlightRef = useRef<string | null>(null);
   const [level, setLevel] = useState(0);
   const [submitted, setSubmitted] = useState(false);
   const [submitBusy, setSubmitBusy] = useState(false);
@@ -603,26 +604,45 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           reason: 'cancel',
           outcome: 'pending',
         });
+        const ownerAtCancel = owner;
+        const epochAtCancel = polishLoadEpochRef.current;
         void cancelSelectionPolishPreview(owner, requestId)
-          .then(() =>
+          .then(() => {
+            const currentOwner = polishOwnerRef.current;
+            const ownerStillCurrent =
+              epochAtCancel === polishLoadEpochRef.current &&
+              ((ownerAtCancel === null && currentOwner === null) ||
+                (ownerAtCancel !== null &&
+                  currentOwner !== null &&
+                  ownerAtCancel.generation === currentOwner.generation &&
+                  ownerAtCancel.sessionId === currentOwner.sessionId));
+            if (!ownerStillCurrent) {
+              logPolishEvent('cancel_result', {
+                requestId,
+                ...ownerLogFields(ownerAtCancel),
+                reason: 'stale_owner',
+                outcome: 'ignored',
+              });
+              return;
+            }
             logPolishEvent('cancel_result', {
               requestId,
-              ...ownerLogFields(owner),
+              ...ownerLogFields(ownerAtCancel),
               outcome: 'ok',
-            }),
-          )
-          .catch(() =>
+            });
+            setPolishResult(null);
+            void qaWindowDismiss();
+            onRequestCloseRef.current?.();
+          })
+          .catch(() => {
             logPolishEvent('cancel_error', {
               requestId,
               ...ownerLogFields(owner),
               outcome: 'error',
-            }),
-          )
+            });
+          })
           .finally(() => {
             logPolishEvent('cancel_finally', { requestId, ...ownerLogFields(owner) });
-            setPolishResult(null);
-            void qaWindowDismiss();
-            onRequestCloseRef.current?.();
           });
         return;
       }
@@ -891,15 +911,37 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     const owner = polishResult?.owner ?? polishOwnerRef.current;
     const requestId = createSelectionPolishPreviewRequestId();
     const started = performance.now();
-    if (polishBusy || !text.trim()) return;
+    if (polishConfirmInFlightRef.current !== null || polishBusy) {
+      logPolishEvent('confirm_ignored', {
+        requestId,
+        ...ownerLogFields(owner),
+        textChars: text.length,
+        reason: 'duplicate_in_flight',
+        outcome: 'ignored',
+      });
+      return;
+    }
+    if (!text.trim()) {
+      logPolishEvent('confirm_ignored', {
+        requestId,
+        ...ownerLogFields(owner),
+        textChars: text.length,
+        reason: 'empty_text',
+        outcome: 'ignored',
+      });
+      return;
+    }
+    polishConfirmInFlightRef.current = requestId;
     setPolishBusy(true);
     setPolishError('');
     logPolishEvent('confirm_click', {
       requestId,
       ...ownerLogFields(owner),
       textChars: text.length,
+      reason: 'button',
       outcome: 'pending',
     });
+
     void confirmSelectionPolishPreview(text, owner, requestId)
       .then(() => {
         logPolishEvent('confirm_result', {
@@ -927,6 +969,9 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           ...ownerLogFields(owner),
           textChars: text.length,
         });
+        if (polishConfirmInFlightRef.current === requestId) {
+          polishConfirmInFlightRef.current = null;
+        }
         setPolishBusy(false);
       });
   };

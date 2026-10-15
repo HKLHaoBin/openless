@@ -17,6 +17,7 @@
 //! Linux 的选区读取路径。
 
 // 仅 macOS / Windows 的模拟复制路径用 sleep。
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::Duration;
 
@@ -56,12 +57,21 @@ pub struct SelectionContext {
 /// paste.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SelectionInsertionTarget {
+    /// Opaque correlation id for one target/selection capture workspace. It is
+    /// logged only as metadata and never derived from document content.
+    capture_id: u64,
     #[cfg(target_os = "windows")]
     windows: Option<WindowsSelectionTarget>,
     #[cfg(target_os = "windows")]
     windows_selection_anchor: Option<crate::host_document::FocusedSelectionAnchor>,
     #[cfg(target_os = "macos")]
     macos: Option<MacosSelectionTarget>,
+}
+
+impl SelectionInsertionTarget {
+    pub(crate) fn capture_id(&self) -> u64 {
+        self.capture_id
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -147,6 +157,14 @@ struct PrefetchedSelectionWorkspace {
     insertion_target: SelectionInsertionTarget,
 }
 
+static NEXT_SELECTION_CAPTURE_ID: AtomicU64 = AtomicU64::new(0);
+
+fn next_selection_capture_id() -> u64 {
+    NEXT_SELECTION_CAPTURE_ID
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1)
+}
+
 /// Why a selection capture failed / was skipped. Written to the user-exportable openless.log to
 /// distinguish "no selection at all" vs "simulated copy did not overwrite the clipboard" vs
 /// "clipboard API failure".
@@ -189,16 +207,20 @@ pub(crate) struct SelectionCaptureDiag {
     pub front_app: Option<String>,
     pub used_prefetch: bool,
     pub target_captured: bool,
+    pub target_current: bool,
+    pub capture_id: u64,
     pub char_count: Option<usize>,
 }
 
 impl SelectionCaptureDiag {
     pub(crate) fn summary(&self) -> String {
         format!(
-            "reason={} used_prefetch={} target_captured={} chars={} front_app={}",
+            "reason={} used_prefetch={} target_captured={} target_current={} capture_id={} chars={} front_app={}",
             self.reason.as_str(),
             self.used_prefetch,
             self.target_captured,
+            self.target_current,
+            self.capture_id,
             self.char_count
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| "-".into()),
@@ -216,30 +238,47 @@ static PREFETCHED_SELECTION_WORKSPACE: std::sync::Mutex<Option<PrefetchedSelecti
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn prefetch_selection_workspace_capture() {
     let insertion_target = capture_selection_insertion_target();
+    let capture_id = insertion_target.capture_id();
     let (capture, reason) = capture_selection_with_status_diag();
+    let target_captured = selection_insertion_target_is_captured(&insertion_target);
+    let target_current = selection_insertion_target_is_current(&insertion_target);
     let mut guard = PREFETCHED_SELECTION_WORKSPACE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     match capture.selection {
-        Some(selection) => {
+        Some(selection) if target_captured && target_current => {
             let chars = selection.text.chars().count();
             log::info!(
-                "[selection] prefetched workspace selection ({} chars) reason={} front_app={}",
-                chars,
+                "[selection-polish] event=capture_prefetch_ready capture_id={} reason={} target_captured=true target_current=true source_chars={} front_app={}",
+                capture_id,
                 reason.as_str(),
-                selection.source_app.as_deref().unwrap_or("-")
+                chars,
+                selection.source_app.as_deref().unwrap_or("-"),
             );
             *guard = Some(PrefetchedSelectionWorkspace {
                 selection,
                 insertion_target,
             });
         }
+        Some(selection) => {
+            log::info!(
+                "[selection-polish] event=capture_prefetch_discard capture_id={} reason=target_changed_during_capture target_captured={} target_current={} source_chars={} front_app={}",
+                capture_id,
+                target_captured,
+                target_current,
+                selection.text.chars().count(),
+                selection.source_app.as_deref().unwrap_or("-"),
+            );
+            guard.take();
+        }
         None => {
             log::info!(
-                "[selection] prefetch missed (no selection at hotkey edge) reason={} front_app={} target_captured={}",
+                "[selection-polish] event=capture_prefetch_miss capture_id={} reason={} target_captured={} target_current={} front_app={}",
+                capture_id,
                 reason.as_str(),
+                target_captured,
+                target_current,
                 capture_selection_source_app_hint().as_deref().unwrap_or("-"),
-                selection_insertion_target_is_captured(&insertion_target)
             );
             guard.take();
         }
@@ -283,19 +322,28 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
         let char_count = selection.text.chars().count();
         let front_app = selection.source_app.clone();
         let target_captured = selection_insertion_target_is_captured(&insertion_target);
+        let target_current = selection_insertion_target_is_current(&insertion_target);
+        let capture_id = insertion_target.capture_id();
         let diag = SelectionCaptureDiag {
             reason: SelectionCaptureMissReason::PrefetchHit,
             front_app,
             used_prefetch: true,
             target_captured,
+            target_current,
+            capture_id,
             char_count: Some(char_count),
         };
-        log::info!("[selection] resolve used prefetch {}", diag.summary());
+        log::info!(
+            "[selection-polish] event=capture_resolved {}",
+            diag.summary()
+        );
         return (Some(selection), insertion_target, diag);
     }
     let insertion_target = capture_selection_insertion_target();
+    let capture_id = insertion_target.capture_id();
     let (capture, reason) = capture_selection_with_status_diag();
     let target_captured = selection_insertion_target_is_captured(&insertion_target);
+    let target_current = selection_insertion_target_is_current(&insertion_target);
     let (front_app, char_count) = match &capture.selection {
         Some(selection) => (
             selection.source_app.clone(),
@@ -313,9 +361,14 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
         front_app,
         used_prefetch: false,
         target_captured,
+        target_current,
+        capture_id,
         char_count,
     };
-    log::info!("[selection] resolve live capture {}", diag.summary());
+    log::info!(
+        "[selection-polish] event=capture_resolved {}",
+        diag.summary()
+    );
     (capture.selection, insertion_target, diag)
 }
 
@@ -333,8 +386,10 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
     SelectionCaptureDiag,
 ) {
     let insertion_target = capture_selection_insertion_target();
+    let capture_id = insertion_target.capture_id();
     let (capture, reason) = capture_selection_with_status_diag();
     let target_captured = selection_insertion_target_is_captured(&insertion_target);
+    let target_current = selection_insertion_target_is_current(&insertion_target);
     let (front_app, char_count) = match &capture.selection {
         Some(selection) => (
             selection.source_app.clone(),
@@ -347,9 +402,14 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
         front_app,
         used_prefetch: false,
         target_captured,
+        target_current,
+        capture_id,
         char_count,
     };
-    log::info!("[selection] resolve live capture {}", diag.summary());
+    log::info!(
+        "[selection-polish] event=capture_resolved {}",
+        diag.summary()
+    );
     (capture.selection, insertion_target, diag)
 }
 
@@ -366,6 +426,7 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     {
         return SelectionInsertionTarget {
+            capture_id: next_selection_capture_id(),
             windows: capture_windows_selection_target(),
             windows_selection_anchor: crate::host_document::capture_focused_selection_anchor(),
         };
@@ -381,6 +442,7 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
             (None, None) => None,
         };
         return SelectionInsertionTarget {
+            capture_id: next_selection_capture_id(),
             macos: Some(MacosSelectionTarget {
                 front_app,
                 bundle_id,
@@ -1820,13 +1882,15 @@ mod tests {
             front_app: Some("Editor".to_string()),
             used_prefetch: true,
             target_captured: true,
+            target_current: true,
+            capture_id: 42,
             char_count: Some(selected_text.chars().count()),
         }
         .summary();
 
         assert_eq!(
             summary,
-            "reason=prefetch_hit used_prefetch=true target_captured=true chars=11 front_app=Editor"
+            "reason=prefetch_hit used_prefetch=true target_captured=true target_current=true capture_id=42 chars=11 front_app=Editor"
         );
         assert!(!summary.contains(selected_text));
     }

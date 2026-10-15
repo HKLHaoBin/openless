@@ -81,7 +81,11 @@ assert.match(
   /if capture_windows_selection_target\(\)\.as_ref\(\) == Some\(&captured\)/,
   'restoring a window must still verify the original window and control fingerprint',
 );
-assert.match(restoreTarget, /AttachThreadInput[\s\S]*?SetFocus\(focused\)/, 'restoring a window must restore the original focused child');
+assert.match(
+  restoreTarget,
+  /AttachThreadInput[\s\S]*?SetFocus\(focused\)/,
+  'restoring a window must restore the original focused child',
+);
 const normalActivationCheck = restoreTarget.indexOf(
   'if capture_windows_selection_target().as_ref() == Some(&captured)',
 );
@@ -91,6 +95,11 @@ assert.ok(
   'SetFocus must remain a fallback after normal activation is checked so browser editors keep their selection',
 );
 assert.match(restoreTarget, /for attempt in 0\.\.20/, 'focus restoration must use bounded polling');
+assert.match(
+  windowsHost,
+  /pub\(crate\) struct FocusedSelectionAnchor[\s\S]*?start_offset: i32[\s\S]*?end_offset: i32/,
+  'the captured UIA anchor must retain exact document-relative selection offsets',
+);
 assert.match(
   windowsHost,
   /pub\(crate\) struct FocusedSelectionObservation[\s\S]*?newline_normalized_match/,
@@ -132,6 +141,26 @@ assert.doesNotMatch(
   'selection restoration must not fall back to synthetic Ctrl+C',
 );
 assert.match(
+  restoreSelection,
+  /Compare\(existing\)[\s\S]*?matching_candidates\.len\(\) > 1[\s\S]*?FocusedSelectionRestoreStatus::Changed[\s\S]*?\.Select\(\)/,
+  'selection restoration must fail closed when bounded context matches multiple distinct ranges',
+);
+assert.doesNotMatch(
+  restoreSelection,
+  /result=ambiguous[^\n]*source_text|result=ambiguous[^\n]*replacement_text/,
+  'ambiguous selection diagnostics must remain metadata-only',
+);
+assert.match(
+  restoreSelection,
+  /current[\s\S]*?Compare\(&latest\)[\s\S]*?FocusedSelectionRestoreStatus::Changed[\s\S]*?\.Select\(\)/,
+  'selection restoration must revalidate the collapsed caret before selecting a repaired range',
+);
+assert.match(
+  restoreSelection,
+  /current_start_offset[\s\S]*?anchor\.start_offset[\s\S]*?current_end_offset[\s\S]*?anchor\.end_offset[\s\S]*?FocusedSelectionRestoreStatus::Changed/,
+  'selection restoration must reject a caret or range that moved from the captured document offsets',
+);
+assert.match(
   adapters,
   /restore_selection_insertion_target_selection\(target, source_text\)[\s\S]*?validate_selection_insertion_target_for_apply\(/,
   'PreviewConfirm must attempt bounded UIA selection restoration before final validation',
@@ -140,6 +169,17 @@ assert.match(
   adapters,
   /match selection_restore[\s\S]*?SelectionInsertionTargetSelectionRestore::Changed[\s\S]*?BackendErrorCode::Cancelled[\s\S]*?selectionPolishSelectionChanged/,
   'a changed or ambiguous selection restore must fail closed before text-only validation',
+);
+
+assert.match(
+  adapters,
+  /event=capture_bridge_result[\s\S]*?capture_id=[\s\S]*?target_current=/,
+  'PreviewConfirm capture diagnostics must correlate the target workspace with an opaque capture id',
+);
+assert.match(
+  adapters,
+  /event=selection_restore capture_id=[\s\S]*?event=apply_validation capture_id=/,
+  'PreviewConfirm must log selection restoration before final validation for the same capture',
 );
 
 console.log('Windows insertion target contract passed');

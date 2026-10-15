@@ -91,7 +91,10 @@ const commandBody = (name) => {
 };
 for (const [name, message] of [
   ['get_selection_polish_preview', 'get_selection_polish_preview lost its owner lease gate'],
-  ['confirm_selection_polish_preview', 'confirm_selection_polish_preview lost its owner validation'],
+  [
+    'confirm_selection_polish_preview',
+    'confirm_selection_polish_preview lost its owner validation',
+  ],
   ['cancel_selection_polish_preview', 'cancel_selection_polish_preview lost its owner validation'],
 ]) {
   if (!commandBody(name).includes('selection_polish_preview_owner()')) violations.push(message);
@@ -113,6 +116,28 @@ if (
 if (!qaPanel.includes('polishLoadEpochRef') || !qaPanel.includes('polishOwnerRef')) {
   violations.push('QaPanel.tsx dropped preview request/owner guards');
 }
+if (!qaPanel.includes('polishConfirmInFlightRef')) {
+  violations.push('QaPanel.tsx lacks synchronous confirmation single-flight guard');
+}
+if (
+  !qaPanel.includes("event='confirm_ignored'") &&
+  !qaPanel.includes("logPolishEvent('confirm_ignored'")
+) {
+  violations.push('QaPanel.tsx does not diagnose duplicate or empty confirmation clicks');
+}
+const confirmHandlerStart = qaPanel.indexOf('const onPolishConfirm');
+const confirmHandler = qaPanel.slice(
+  confirmHandlerStart,
+  qaPanel.indexOf('\n  const lastRole', confirmHandlerStart),
+);
+if (
+  confirmHandlerStart < 0 ||
+  !/polishConfirmInFlightRef\.current = requestId[\s\S]*?confirmSelectionPolishPreview\(text, owner, requestId\)/.test(
+    confirmHandler,
+  )
+) {
+  violations.push('QaPanel.tsx must claim confirmation before invoking native IPC');
+}
 if (
   !qaPanel.includes('polishDismissedOwnerRef') ||
   !/if\s*\(\s*!polishActiveRef\.current\s*&&\s*currentOwner === null\s*\)/.test(qaPanel) ||
@@ -125,6 +150,26 @@ if (
   !/confirmSelectionPolishPreview\(text, owner(?:, requestId)?\)/.test(qaPanel)
 ) {
   violations.push('QaPanel.tsx no longer carries preview ownership through events and confirm');
+}
+const escapeCancelStart = qaPanel.indexOf('cancelSelectionPolishPreview(owner, requestId)');
+const escapeCancelEnd = qaPanel.indexOf('\n        return;', escapeCancelStart);
+const escapeCancelHandler = qaPanel.slice(escapeCancelStart, escapeCancelEnd);
+if (
+  escapeCancelStart < 0 ||
+  !/\.then\(\(\) => \{[\s\S]*?setPolishResult\(null\)[\s\S]*?qaWindowDismiss\(\)/.test(
+    escapeCancelHandler,
+  ) ||
+  !/\.catch\(\(\) => \{[\s\S]*?cancel_error/.test(escapeCancelHandler) ||
+  /\.finally\(\(\) => \{[\s\S]*?setPolishResult\(null\)|\.finally\(\(\) => \{[\s\S]*?qaWindowDismiss/.test(
+    escapeCancelHandler,
+  ) ||
+  !escapeCancelHandler.includes('epochAtCancel') ||
+  !escapeCancelHandler.includes('ownerStillCurrent') ||
+  !/if \(!ownerStillCurrent\)\s*\{[\s\S]*?return;[\s\S]*?setPolishResult\(null\)/.test(
+    escapeCancelHandler,
+  )
+) {
+  violations.push('Escape cancellation must close only after successful Core cancellation');
 }
 const expandedStart = qaPanel.indexOf('const expanded');
 if (

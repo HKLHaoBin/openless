@@ -65,6 +65,7 @@ fn safe_event_label(value: &str) -> &'static str {
         "hydrate_result" => "hydrate_result",
         "hydrate_discard" => "hydrate_discard",
         "confirm_click" => "confirm_click",
+        "confirm_ignored" => "confirm_ignored",
         "confirm_result" => "confirm_result",
         "confirm_error" => "confirm_error",
         "confirm_finally" => "confirm_finally",
@@ -90,6 +91,9 @@ fn safe_reason_label(value: Option<&str>) -> &'static str {
         Some("begin_failure") => "begin_failure",
         Some("qa_window_dismiss") => "qa_window_dismiss",
         Some("ipc_error") => "ipc_error",
+        Some("duplicate_in_flight") => "duplicate_in_flight",
+        Some("empty_text") => "empty_text",
+        Some("button") => "button",
         Some("inactive") => "inactive",
         _ => "-",
     }
@@ -114,6 +118,7 @@ fn error_class(message: &str) -> &'static str {
         "selectionPolishTargetChanged" => "target_changed",
         "selectionPolishInsertFailed" => "insertion_error",
         "selection session is stale" => "cancelled",
+        "selection confirmation is already in progress" => "busy",
         "selection session is not awaiting confirmation" => "invalid_state",
         _ => "other",
     }
@@ -473,6 +478,15 @@ mod tests {
         assert_eq!(request_label(Some(&"x".repeat(200))).len(), 96);
         assert_eq!(safe_event_label("source_text"), "unknown");
         assert_eq!(safe_reason_label(Some("clipboard")), "-");
+        assert_eq!(
+            safe_reason_label(Some("duplicate_in_flight")),
+            "duplicate_in_flight"
+        );
+        assert_eq!(safe_reason_label(Some("button")), "button");
+        assert_eq!(
+            error_class("selection confirmation is already in progress"),
+            "busy"
+        );
         assert_eq!(safe_outcome_label(Some("inserted")), "-");
     }
 }

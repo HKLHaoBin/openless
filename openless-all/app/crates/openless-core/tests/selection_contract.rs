@@ -304,6 +304,77 @@ async fn completed_selection_history_survives_a_concurrent_new_capture() {
     std::fs::remove_dir_all(data_dir).unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn duplicate_confirmation_is_busy_and_cannot_replace_the_first_payload() {
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let mut runtime = RecordingSelectionRuntime::new("source text");
+    runtime.apply_gate = Some((entered.clone(), release.clone()));
+    let runtime_for_assert = runtime.clone();
+    let (backend, data_dir) = backend_with_selection(runtime);
+    let mut preferences = backend.get_preferences();
+    preferences.selection_polish_output_mode = SelectionPolishOutputMode::PreviewConfirm;
+    write_preferences(&backend, preferences);
+
+    let selection = Arc::clone(&backend.services().selection);
+    let session_id = selection
+        .begin_polish(SelectionPolishRequest {
+            selected_text: None,
+            mode: PolishMode::Light,
+            instruction: None,
+        })
+        .await
+        .expect("preview session should start");
+    let first = tokio::spawn({
+        let selection = Arc::clone(&selection);
+        async move {
+            selection
+                .confirm(session_id, Some("first replacement".into()))
+                .await
+        }
+    });
+    entered.notified().await;
+
+    let duplicate = selection
+        .confirm(session_id, Some("second replacement".into()))
+        .await
+        .expect_err("a duplicate confirmation must not enter the runtime");
+    assert_eq!(duplicate.code, BackendErrorCode::Busy);
+    assert_eq!(runtime_for_assert.applied().len(), 1);
+    assert_eq!(
+        runtime_for_assert.applied()[0].2,
+        "first replacement",
+        "the first confirmation owns the only native apply"
+    );
+    let cancel = selection
+        .cancel(Some(session_id))
+        .await
+        .expect_err("cancellation must not interrupt an in-flight native apply");
+    assert_eq!(cancel.code, BackendErrorCode::Busy);
+    assert_eq!(runtime_for_assert.cancel_count(), 0);
+
+    let shutdown = tokio::spawn({
+        let selection = Arc::clone(&selection);
+        async move { selection.cancel(None).await }
+    });
+    tokio::task::yield_now().await;
+    release.notify_one();
+    first
+        .await
+        .expect("first confirmation task should join")
+        .expect("first confirmation should complete");
+    shutdown
+        .await
+        .expect("shutdown cancellation task should join")
+        .expect("shutdown cancellation should complete");
+    assert_eq!(runtime_for_assert.cancel_count(), 0);
+    assert_eq!(
+        selection.snapshot().await.unwrap().phase,
+        SelectionPhase::Completed
+    );
+    std::fs::remove_dir_all(data_dir).unwrap();
+}
+
 fn backend_with_selection(
     runtime: RecordingSelectionRuntime,
 ) -> (OpenLessBackend, std::path::PathBuf) {

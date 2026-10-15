@@ -39,6 +39,52 @@ struct SelectionState {
     reverting: bool,
 }
 
+struct ApplyingCompletionSignal {
+    inner: Arc<SelectionServiceInner>,
+    session_id: SessionId,
+    finished: bool,
+}
+
+impl ApplyingCompletionSignal {
+    fn finish(&mut self) {
+        self.finished = true;
+    }
+}
+
+impl Drop for ApplyingCompletionSignal {
+    fn drop(&mut self) {
+        if !self.finished {
+            let snapshot = {
+                let mut state = self
+                    .inner
+                    .state
+                    .write()
+                    .expect("selection state lock poisoned");
+                if state.snapshot.session_id == Some(self.session_id)
+                    && state.snapshot.phase == SelectionPhase::Applying
+                {
+                    state.snapshot.phase = SelectionPhase::Cancelled;
+                    Some(state.snapshot.clone())
+                } else {
+                    None
+                }
+            };
+            if let Some(snapshot) = snapshot {
+                log::info!(
+                    "[selection-polish] event=apply_dropped session_id={} outcome=cancelled",
+                    self.session_id.as_uuid(),
+                );
+                self.inner.events.publish(
+                    Some(self.session_id),
+                    BackendEventKind::SelectionStateChanged(snapshot),
+                );
+                self.inner.hide_preview(Some(self.session_id));
+            }
+        }
+        self.inner.applying_done.notify_waiters();
+    }
+}
+
 struct SelectionServiceInner {
     preferences: Arc<PreferencesStore>,
     style_packs: Arc<StylePackStore>,
@@ -56,6 +102,7 @@ struct SelectionServiceInner {
     credential_store: Arc<dyn CredentialStore>,
     state: RwLock<SelectionState>,
     runtime_work: Arc<crate::voice_session::RuntimeActivityGate>,
+    applying_done: Arc<tokio::sync::Notify>,
 }
 
 pub(crate) struct SelectionService {
@@ -99,6 +146,7 @@ impl SelectionService {
                 credential_store: dependencies.credential_store,
                 state: RwLock::new(SelectionState::default()),
                 runtime_work: Arc::new(crate::voice_session::RuntimeActivityGate::default()),
+                applying_done: Arc::new(tokio::sync::Notify::new()),
             }),
         }
     }
@@ -330,10 +378,26 @@ impl SelectionServiceInner {
             ));
         }
         if state.snapshot.phase != SelectionPhase::Preview {
-            return Err(BackendError::new(
-                BackendErrorCode::InvalidState,
-                "selection preview is not awaiting confirmation",
-            ));
+            let (code, message) = if state.snapshot.phase == SelectionPhase::Applying {
+                log::info!(
+                    "[selection-polish] event=confirm_duplicate session_id={} reason=in_flight outcome=busy",
+                    session_id.as_uuid(),
+                );
+                (
+                    BackendErrorCode::Busy,
+                    "selection confirmation is already in progress",
+                )
+            } else {
+                log::info!(
+                    "[selection-polish] event=confirm_rejected session_id={} reason=invalid_phase outcome=error",
+                    session_id.as_uuid(),
+                );
+                (
+                    BackendErrorCode::InvalidState,
+                    "selection preview is not awaiting confirmation",
+                )
+            };
+            return Err(BackendError::new(code, message));
         }
         let source_text = state.snapshot.source_text.clone().ok_or_else(|| {
             BackendError::new(
@@ -748,13 +812,35 @@ impl SelectionApi for SelectionService {
                         inner.set_preview(session_id, output.text)?;
                         let (source_text, replacement_text) =
                             inner.applying_text(session_id, None)?;
+                        let mut applying_done = ApplyingCompletionSignal {
+                            inner: Arc::clone(&inner),
+                            session_id,
+                            finished: false,
+                        };
                         let replacement_text =
-                            inner.corrected_replacement(session_id, replacement_text)?;
-                        let outcome = inner
+                            match inner.corrected_replacement(session_id, replacement_text) {
+                                Ok(text) => text,
+                                Err(error) => {
+                                    applying_done.finish();
+                                    return Err(error);
+                                }
+                            };
+                        let outcome = match inner
                             .runtime
                             .apply(session_id, source_text, replacement_text)
-                            .await?;
-                        inner.complete(session_id, outcome)?;
+                            .await
+                        {
+                            Ok(outcome) => outcome,
+                            Err(error) => {
+                                applying_done.finish();
+                                return Err(error);
+                            }
+                        };
+                        if let Err(error) = inner.complete(session_id, outcome) {
+                            applying_done.finish();
+                            return Err(error);
+                        }
+                        applying_done.finish();
                     }
                 }
                 Ok(session_id)
@@ -764,6 +850,7 @@ impl SelectionApi for SelectionService {
                 inner.cancel_runtime_best_effort(session_id).await;
                 inner.hide_preview(Some(session_id));
             }
+            inner.applying_done.notify_waiters();
             result
         })
     }
@@ -778,6 +865,11 @@ impl SelectionApi for SelectionService {
             let started = std::time::Instant::now();
             let _runtime = inner.begin_runtime_work()?;
             let (source_text, replacement_text) = inner.applying_text(session_id, text)?;
+            let mut applying_done = ApplyingCompletionSignal {
+                inner: Arc::clone(&inner),
+                session_id,
+                finished: false,
+            };
             let replacement_text = inner.corrected_replacement(session_id, replacement_text)?;
             log::info!(
                 "[selection-polish] event=confirm_start session_id={} source_chars={} replacement_chars={} elapsed_ms={}",
@@ -790,7 +882,7 @@ impl SelectionApi for SelectionService {
                 .runtime
                 .apply(session_id, source_text, replacement_text)
                 .await;
-            match result {
+            let result = match result {
                 Ok(outcome) => {
                     log::info!(
                         "[selection-polish] event=confirm_apply_result session_id={} outcome={} delivery={} elapsed_ms={}",
@@ -839,7 +931,9 @@ impl SelectionApi for SelectionService {
                     }
                     Err(error)
                 }
-            }
+            };
+            applying_done.finish();
+            result
         })
     }
 
@@ -849,23 +943,65 @@ impl SelectionApi for SelectionService {
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let inner = Arc::clone(&self.inner);
         self.inner.runtime_work.cleanup(Box::pin(async move {
-            let active_session = {
-                let mut state = inner.state.write().expect("selection state lock poisoned");
-                let Some(active_session) = state.snapshot.session_id else {
-                    return Ok(());
+            let active_session = loop {
+                let notified = inner.applying_done.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                let decision = {
+                    let mut state = inner.state.write().expect("selection state lock poisoned");
+                    let Some(active_session) = state.snapshot.session_id else {
+                        return Ok(());
+                    };
+                    if session_id.is_some() && session_id != Some(active_session) {
+                        return Err(BackendError::new(
+                            BackendErrorCode::Cancelled,
+                            "selection session is stale",
+                        ));
+                    }
+                    if session_id.is_none()
+                        && matches!(
+                            state.snapshot.phase,
+                            SelectionPhase::Idle
+                                | SelectionPhase::Completed
+                                | SelectionPhase::Failed
+                        )
+                    {
+                        return Ok(());
+                    }
+                    if state.snapshot.phase == SelectionPhase::Applying {
+                        if session_id.is_some() {
+                            log::info!(
+                                "[selection-polish] event=cancel_rejected session_id={} reason=confirm_in_flight outcome=busy",
+                                active_session.as_uuid(),
+                            );
+                            return Err(BackendError::new(
+                                BackendErrorCode::Busy,
+                                "selection confirmation is already in progress",
+                            ));
+                        }
+                        None
+                    } else {
+                        if state.snapshot.phase == SelectionPhase::Cancelled {
+                            if session_id.is_some() {
+                                return Ok(());
+                            }
+                            let snapshot = state.snapshot.clone();
+                            Some((active_session, snapshot))
+                        } else {
+                            state.snapshot.phase = SelectionPhase::Cancelled;
+                            let snapshot = state.snapshot.clone();
+                            Some((active_session, snapshot))
+                        }
+                    }
                 };
-                if session_id.is_some() && session_id != Some(active_session) {
-                    return Err(BackendError::new(
-                        BackendErrorCode::Cancelled,
-                        "selection session is stale",
-                    ));
-                }
-                if state.snapshot.phase == SelectionPhase::Cancelled {
-                    return Ok(());
-                }
-                state.snapshot.phase = SelectionPhase::Cancelled;
-                let snapshot = state.snapshot.clone();
-                (active_session, snapshot)
+                let Some(active_session) = decision else {
+                    log::info!(
+                        "[selection-polish] event=cancel_shutdown_wait reason=confirm_in_flight outcome=pending"
+                    );
+                    notified.await;
+                    continue;
+                };
+                break active_session;
             };
             inner.events.publish(
                 Some(active_session.0),
