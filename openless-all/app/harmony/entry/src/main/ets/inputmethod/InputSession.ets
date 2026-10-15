@@ -279,11 +279,13 @@ class InputSession {
   }
 
   cancelVoice(): void {
+    const phase = imeStorage.get<string>('voicePhase');
     this.voiceGeneration++;
     this.voice.cancel().catch(() => {});
     imeStorage.setOrCreate('voicePhase', 'idle');
     imeStorage.setOrCreate('voiceText', '');
     imeStorage.setOrCreate('voiceLevel', 0);
+    if (phase !== 'idle') imeStorage.setOrCreate('status', '录音已取消');
   }
 
   hide(): void {

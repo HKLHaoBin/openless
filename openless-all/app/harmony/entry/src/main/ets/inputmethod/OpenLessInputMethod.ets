@@ -27,6 +27,7 @@ export default class OpenLessInputMethod extends InputMethodExtensionAbility {
     }).catch(() => { imeStorage.setOrCreate('status', '键盘加载失败'); });
   };
   private onHide = (): void => {
+    inputSession.cancelVoice();
     this.visible = false;
     this.panel?.hide().catch(() => {});
   };
