@@ -24,7 +24,7 @@ std::string quote(const std::string& value) {
     }
     return out + "\"";
 }
-std::string snapshot(RimeSessionId id) {
+std::string snapshot(RimeSessionId id, bool expanded = false) {
     auto& session = sessions.at(id);
     RIME_STRUCT(RimeCommit, commit);
     if (api->get_commit(id, &commit)) {
@@ -34,15 +34,29 @@ std::string snapshot(RimeSessionId id) {
     RIME_STRUCT(RimeContext, context);
     if (!api->get_context(id, &context)) throw std::runtime_error("Rime context unavailable");
     std::string out = "{\"ok\":true,\"session\":" + quote(std::to_string(id)) +
-        ",\"revision\":" + std::to_string(++session.revision) +
+        ",\"revision\":" + std::to_string(session.revision) +
         ",\"commit\":" + quote(session.pending) +
         ",\"input\":" + quote(api->get_input(id) ? api->get_input(id) : "") +
         ",\"preedit\":" + quote(context.composition.preedit ? context.composition.preedit : "") +
         ",\"page\":" + std::to_string(context.menu.page_no) +
         ",\"hasNext\":" + (context.menu.is_last_page ? "false" : "true") + ",\"candidates\":[";
-    for (int i = 0; i < context.menu.num_candidates; ++i) {
-        if (i) out += ',';
-        out += quote(context.menu.candidates[i].text ? context.menu.candidates[i].text : "");
+    if (expanded) {
+        // Android's existing overflow list needs more than a single menu page.
+        // Keep the native order and use absolute indices for this bounded list.
+        RimeCandidateListIterator iterator{};
+        if (api->candidate_list_begin(id, &iterator)) {
+            int count = 0;
+            while (count < 64 && api->candidate_list_next(&iterator)) {
+                if (count++) out += ',';
+                out += quote(iterator.candidate.text ? iterator.candidate.text : "");
+            }
+            api->candidate_list_end(&iterator);
+        }
+    } else {
+        for (int i = 0; i < context.menu.num_candidates; ++i) {
+            if (i) out += ',';
+            out += quote(context.menu.candidates[i].text ? context.menu.candidates[i].text : "");
+        }
     }
     out += "]}";
     api->free_context(&context);
@@ -96,7 +110,7 @@ std::string request(const std::string& op, const std::string& handle, const std:
     auto& session = sessions.at(id);
     if (op == "ack") session.pending.clear();
     else if (op == "clear") { api->clear_composition(id); session.pending.clear(); }
-    else if (op != "state") {
+    else if (op != "state" && op != "candidates") {
         if (!session.pending.empty()) throw std::runtime_error("Rime commit requires acknowledgement");
         if (op == "key") {
             size_t n = 0; auto key = std::stoi(arg, &n);
@@ -104,17 +118,19 @@ std::string request(const std::string& op, const std::string& handle, const std:
             api->process_key(id, key, 0);
         } else if (op == "confirm") {
             api->commit_composition(id);
-        } else if (op == "select") {
+        } else if (op == "select" || op == "select_absolute") {
             const auto separator = arg.find('@');
             if (separator == std::string::npos) throw std::runtime_error("Rime candidate revision required");
             size_t n = 0; auto index = std::stoul(arg.substr(0, separator), &n);
             size_t r = 0; auto revision = std::stoul(arg.substr(separator + 1), &r);
             if (n != separator || r != arg.size() - separator - 1 || revision != session.revision ||
-                !api->select_candidate_on_current_page(id, index))
+                !(op == "select_absolute" ? api->select_candidate(id, index) : api->select_candidate_on_current_page(id, index)))
                 throw std::runtime_error("Rime candidate is stale");
         } else throw std::runtime_error("Unknown Rime operation");
     }
-    return snapshot(id);
+    // Observing a composition must not invalidate the displayed candidates.
+    if (op != "state" && op != "candidates") ++session.revision;
+    return snapshot(id, op == "candidates");
 }
 }
 extern "C" char* openless_rime_request(const char* operation, const char* session, const char* argument) {

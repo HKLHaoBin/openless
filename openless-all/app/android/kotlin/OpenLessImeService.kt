@@ -581,9 +581,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      */
     private fun refreshLatinCandidateBar() {
         if (latinInputMode == LatinInputMode.PINYIN) {
-            litePinyinController.preloadAsync()
+            litePinyinController.refresh { renderPinyinCandidates(it) }
             englishCandidateBarContainer?.visibility = View.VISIBLE
-            renderPinyinCandidates(emptyList())
         } else {
             updateEnglishCandidates()
         }
@@ -1553,7 +1552,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // and before that a padding-pushed overlay), both of which fought
         // this row's actual (tighter than assumed) real height.
         val spaceButton = keyboardKey("Space", 5f, action = {
-            if (latinInputMode == LatinInputMode.PINYIN && litePinyinController.confirmFirst { renderPinyinCandidates(it) }) {
+            if (latinInputMode == LatinInputMode.PINYIN) {
+                litePinyinController.space { renderPinyinCandidates(it) }
                 return@keyboardKey
             }
             finalizeEnglishComposingWord()
@@ -1610,18 +1610,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 5f)
         }
         val returnButton = keyboardKey("Return", 1.7f, action = {
-            // Plan 3.3: "Enter 有候选时提交第一候选，无编码时使用原有回车行为"
-            // — reuses candidateOverlayEntries (already the current row's
-            // (label, action) pairs, pinyin or English, set by whichever
-            // render*Candidates() last ran) rather than a second field
-            // duplicating the same list.
-            val firstPinyinCandidate = candidateOverlayEntries.firstOrNull()
-            if (latinInputMode == LatinInputMode.PINYIN && firstPinyinCandidate != null) {
-                firstPinyinCandidate.second.invoke()
-            } else {
-                finalizeEnglishComposingWord()
-                sendEnterKey()
-            }
+            if (latinInputMode != LatinInputMode.PINYIN) finalizeEnglishComposingWord()
+            sendEnterKey()
         }).apply {
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             // Same cherry red as the stroke panel's own right-side action
@@ -1706,7 +1696,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     /** Backspace on the English keyboard: same field edit as everywhere else, plus keeping englishComposingWord (and therefore the candidate bar) in sync. In Pinyin mode, deletes from the (never-committed) encoding instead — falls back to the normal field edit only once the encoding is already empty (plan 3.3: "编码为空时 Backspace 恢复现有普通删除"). */
     private fun englishDeleteBackward() {
-        if (latinInputMode == LatinInputMode.PINYIN && litePinyinController.backspace { renderPinyinCandidates(it) }) {
+        if (latinInputMode == LatinInputMode.PINYIN) {
+            litePinyinController.backspace({ renderPinyinCandidates(it) }, { deleteBackward() })
             return
         }
         deleteBackward()
@@ -3355,9 +3346,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     internal fun sendEnterKey() {
-        if (latinInputMode == LatinInputMode.PINYIN &&
-            !ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0) &&
-            litePinyinController.confirmFirst { renderPinyinCandidates(it) }) return
+        if (inputMode == InputMode.ENGLISH && latinInputMode == LatinInputMode.PINYIN &&
+            !ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) {
+            litePinyinController.confirmFirst({ renderPinyinCandidates(it) }, { sendEditorEnterKey() })
+            return
+        }
+        sendEditorEnterKey()
+    }
+
+    private fun sendEditorEnterKey() {
         currentInputConnection?.sendKeyEvent(android.view.KeyEvent(
             android.view.KeyEvent.ACTION_DOWN,
             android.view.KeyEvent.KEYCODE_ENTER,

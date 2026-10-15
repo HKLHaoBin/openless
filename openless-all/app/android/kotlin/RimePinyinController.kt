@@ -22,6 +22,7 @@ internal class RimePinyinController(context: Context) {
     @Volatile private var candidateRevision = 0L
     private var session = ""
     private var pending = ""
+    private var pendingLiteral = ""
     private var commit: (String) -> Boolean = { false }
     private val confirmedText = StringBuilder()
     private var associationEpoch = 0L
@@ -29,14 +30,15 @@ internal class RimePinyinController(context: Context) {
     fun currentEncoding(): String = encoding
     fun isEmpty(): Boolean = encoding.isEmpty()
     fun setLearningAllowed(allowed: Boolean) { learning = allowed; clear(); resetAssociationContext() }
-    fun preloadAsync() { submit("state", "") {} }
-    private fun deliver(text: String, epoch: Long): Boolean {
+    fun refresh(update: (List<String>) -> Unit) { submit("state", "", update) }
+    private fun deliver(text: String, epoch: Long): Boolean = onEditor(epoch) { commit(text) }
+    private fun onEditor(epoch: Long, action: () -> Boolean): Boolean {
         val ready = CountDownLatch(1)
         val delivery = AtomicInteger(0) // waiting, executing, complete, cancelled
         var accepted = false
         if (!main.post {
             if (!delivery.compareAndSet(0, 1)) { ready.countDown(); return@post }
-            try { if (epoch == generation) accepted = commit(text) }
+            try { if (epoch == generation) accepted = runCatching(action).getOrDefault(false) }
             finally { delivery.set(2); ready.countDown() }
         }) return false
         if (!ready.await(5, TimeUnit.SECONDS)) {
@@ -46,7 +48,7 @@ internal class RimePinyinController(context: Context) {
         }
         return accepted && epoch == generation
     }
-    private fun submit(operation: String, argument: String, update: (List<String>) -> Unit) {
+    private fun submit(operation: String, argument: String, update: (List<String>) -> Unit, emptyAction: (() -> Unit)? = null) {
         val epoch = generation
         val revision = ++requestId
         worker.execute {
@@ -58,15 +60,43 @@ internal class RimePinyinController(context: Context) {
                     check(deliver(pending, epoch)) { "Editor write failed" }
                     OpenLessRime.request("ack", session); pending = ""
                 }
-                var state = OpenLessRime.request(if (operation == "literal") "confirm" else operation, session, argument)
+                if (pendingLiteral.isNotEmpty()) {
+                    check(deliver(pendingLiteral, epoch)) { "Editor write failed" }
+                    pendingLiteral = ""
+                }
+                // Inspect the native composition on the worker, after all earlier keys.
+                // UI snapshots may lag behind fast typing or an in-flight commit.
+                var state = OpenLessRime.request("state", session)
+                val composing = state.optString("input").isNotEmpty()
+                val nativeOperation = when (operation) {
+                    "backspace", "space", "confirmFirst" -> if (composing) "key" else "state"
+                    "literal" -> if (argument == "'" && composing) "key" else "confirm"
+                    else -> operation
+                }
+                val nativeArgument = when (operation) {
+                    "backspace" -> "65288"
+                    "space", "confirmFirst" -> "32"
+                    "literal" -> if (argument == "'" && composing) "39" else argument
+                    else -> argument
+                }
+                if (!composing && operation in listOf("backspace", "space", "confirmFirst")) {
+                    if (operation == "space") check(deliver(" ", epoch)) { "Editor write failed" }
+                    else check(onEditor(epoch) { emptyAction?.invoke(); true }) { "Editor unavailable" }
+                } else {
+                    state = OpenLessRime.request(nativeOperation, session, nativeArgument)
+                }
+                if (operation == "literal" && nativeOperation == "confirm") pendingLiteral = argument
                 pending = state.optString("commit")
                 if (pending.isNotEmpty()) {
                     check(deliver(pending, epoch)) { "Editor write failed" }
                     state = OpenLessRime.request("ack", session); pending = ""
                 }
-                if (operation == "literal" && pending.isEmpty() && argument.isNotEmpty()) {
-                    check(deliver(argument, epoch)) { "Editor write failed" }
+                if (pendingLiteral.isNotEmpty()) {
+                    check(deliver(pendingLiteral, epoch)) { "Editor write failed" }
+                    pendingLiteral = ""
                 }
+                if (epoch != generation || revision != requestId) return@execute
+                state = OpenLessRime.request("candidates", session)
                 val input = state.optString("input")
                 val rows = state.optJSONArray("candidates")
                 val result = if (rows == null) emptyList() else (0 until rows.length()).map { rows.getString(it) }
@@ -76,31 +106,42 @@ internal class RimePinyinController(context: Context) {
                 }
             } catch (error: Throwable) {
                 Log.e("OpenLessRime", "engine request failed: ${error.javaClass.simpleName}")
-                main.post { if (epoch == generation) update(emptyList()) }
+                // Retain the native composition on a rejected stale selection or
+                // failed editor write, rather than presenting an empty candidate bar.
+                runCatching {
+                    val state = OpenLessRime.request("candidates", session)
+                    val rows = state.getJSONArray("candidates")
+                    val result = (0 until rows.length()).map { rows.getString(it) }
+                    main.post {
+                        if (epoch == generation && revision == requestId) {
+                            encoding = state.optString("input"); candidates = result
+                            candidateRevision = state.optLong("revision"); update(result)
+                        }
+                    }
+                }
             }
         }
     }
     fun appendLetter(letter: Char, update: (List<String>) -> Unit) {
-        encoding += letter.lowercaseChar(); submit("key", letter.lowercaseChar().code.toString(), update)
+        submit("key", letter.lowercaseChar().code.toString(), update)
     }
-    fun backspace(update: (List<String>) -> Unit): Boolean {
-        if (encoding.isEmpty()) return false
-        encoding = encoding.dropLast(1); submit("key", "65288", update); return true
+    fun backspace(update: (List<String>) -> Unit, deleteFromEditor: () -> Unit) {
+        submit("backspace", "", update, deleteFromEditor)
     }
     fun selectCandidate(text: String, update: (List<String>) -> Unit) {
         val index = candidates.indexOf(text)
-        if (index >= 0) submit("select", "$index@$candidateRevision", update)
+        if (index >= 0) submit("select_absolute", "$index@$candidateRevision", update)
     }
-    fun confirmFirst(update: (List<String>) -> Unit): Boolean {
-        if (encoding.isEmpty()) return false
-        submit("key", "32", update); return true
+    fun space(update: (List<String>) -> Unit) { submit("space", "", update) }
+    fun confirmFirst(update: (List<String>) -> Unit, emptyAction: () -> Unit) {
+        submit("confirmFirst", "", update, emptyAction)
     }
     fun insertLiteral(text: String, update: (List<String>) -> Unit) { submit("literal", text, update) }
     fun clear() {
         generation++; requestId++; encoding = ""; candidates = emptyList()
         worker.execute {
             try { if (session.isNotEmpty()) OpenLessRime.request("destroy", session) }
-            catch (_: Throwable) {} finally { session = ""; pending = "" }
+            catch (_: Throwable) {} finally { session = ""; pending = ""; pendingLiteral = "" }
         }
     }
     fun shutdown() { clear(); worker.shutdown() }
