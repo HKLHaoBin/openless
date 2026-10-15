@@ -64,6 +64,8 @@ pub(crate) struct SelectionInsertionTarget {
     windows: Option<WindowsSelectionTarget>,
     #[cfg(target_os = "windows")]
     windows_selection_anchor: Option<crate::host_document::FocusedSelectionAnchor>,
+    #[cfg(target_os = "windows")]
+    windows_selection_position: Option<crate::host_document::FocusedSelectionPosition>,
     #[cfg(target_os = "macos")]
     macos: Option<MacosSelectionTarget>,
 }
@@ -208,6 +210,7 @@ pub(crate) struct SelectionCaptureDiag {
     pub used_prefetch: bool,
     pub target_captured: bool,
     pub target_current: bool,
+    pub anchor_captured: bool,
     pub capture_id: u64,
     pub char_count: Option<usize>,
 }
@@ -215,11 +218,12 @@ pub(crate) struct SelectionCaptureDiag {
 impl SelectionCaptureDiag {
     pub(crate) fn summary(&self) -> String {
         format!(
-            "reason={} used_prefetch={} target_captured={} target_current={} capture_id={} chars={} front_app={}",
+            "reason={} used_prefetch={} target_captured={} target_current={} anchor_captured={} capture_id={} chars={} front_app={}",
             self.reason.as_str(),
             self.used_prefetch,
             self.target_captured,
             self.target_current,
+            self.anchor_captured,
             self.capture_id,
             self.char_count
                 .map(|n| n.to_string())
@@ -233,15 +237,48 @@ impl SelectionCaptureDiag {
 static PREFETCHED_SELECTION_WORKSPACE: std::sync::Mutex<Option<PrefetchedSelectionWorkspace>> =
     std::sync::Mutex::new(None);
 
+fn refresh_selection_insertion_target_anchor(
+    target: &mut SelectionInsertionTarget,
+    selection: &SelectionContext,
+) {
+    #[cfg(target_os = "windows")]
+    {
+        let Some(position) = target.windows_selection_position.as_ref() else {
+            return;
+        };
+        if target.windows_selection_anchor.is_some()
+            || selection.omits_middle
+            || selection.text.trim().is_empty()
+            || !position.matches_expected(&selection.text)
+            || !selection_insertion_target_is_current(target)
+        {
+            return;
+        }
+        let Some(anchor) = crate::host_document::capture_focused_selection_anchor(&selection.text)
+        else {
+            return;
+        };
+        if position.matches_anchor(&anchor) && selection_insertion_target_is_current(target) {
+            target.windows_selection_anchor = Some(anchor);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (target, selection);
+}
+
 /// Snapshot the selection early, on the modifier hotkey edge, before the target app can lose its
 /// selection as a side effect (e.g. an Alt menu opening).
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn prefetch_selection_workspace_capture() {
-    let insertion_target = capture_selection_insertion_target();
+    let mut insertion_target = capture_selection_insertion_target_with_position();
     let capture_id = insertion_target.capture_id();
     let (capture, reason) = capture_selection_with_status_diag();
+    if let Some(selection) = capture.selection.as_ref() {
+        refresh_selection_insertion_target_anchor(&mut insertion_target, selection);
+    }
     let target_captured = selection_insertion_target_is_captured(&insertion_target);
     let target_current = selection_insertion_target_is_current(&insertion_target);
+    let anchor_captured = selection_insertion_target_anchor_is_captured(&insertion_target);
     let mut guard = PREFETCHED_SELECTION_WORKSPACE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -249,9 +286,10 @@ pub(crate) fn prefetch_selection_workspace_capture() {
         Some(selection) if target_captured && target_current => {
             let chars = selection.text.chars().count();
             log::info!(
-                "[selection-polish] event=capture_prefetch_ready capture_id={} reason={} target_captured=true target_current=true source_chars={} front_app={}",
+                "[selection-polish] event=capture_prefetch_ready capture_id={} reason={} target_captured=true target_current=true anchor_captured={} source_chars={} front_app={}",
                 capture_id,
                 reason.as_str(),
+                anchor_captured,
                 chars,
                 selection.source_app.as_deref().unwrap_or("-"),
             );
@@ -262,10 +300,11 @@ pub(crate) fn prefetch_selection_workspace_capture() {
         }
         Some(selection) => {
             log::info!(
-                "[selection-polish] event=capture_prefetch_discard capture_id={} reason=target_changed_during_capture target_captured={} target_current={} source_chars={} front_app={}",
+                "[selection-polish] event=capture_prefetch_discard capture_id={} reason=target_changed_during_capture target_captured={} target_current={} anchor_captured={} source_chars={} front_app={}",
                 capture_id,
                 target_captured,
                 target_current,
+                anchor_captured,
                 selection.text.chars().count(),
                 selection.source_app.as_deref().unwrap_or("-"),
             );
@@ -273,11 +312,12 @@ pub(crate) fn prefetch_selection_workspace_capture() {
         }
         None => {
             log::info!(
-                "[selection-polish] event=capture_prefetch_miss capture_id={} reason={} target_captured={} target_current={} front_app={}",
+                "[selection-polish] event=capture_prefetch_miss capture_id={} reason={} target_captured={} target_current={} anchor_captured={} front_app={}",
                 capture_id,
                 reason.as_str(),
                 target_captured,
                 target_current,
+                anchor_captured,
                 capture_selection_source_app_hint().as_deref().unwrap_or("-"),
             );
             guard.take();
@@ -318,11 +358,13 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
     SelectionInsertionTarget,
     SelectionCaptureDiag,
 ) {
-    if let Some((selection, insertion_target)) = take_prefetched_selection_workspace() {
+    if let Some((selection, mut insertion_target)) = take_prefetched_selection_workspace() {
+        refresh_selection_insertion_target_anchor(&mut insertion_target, &selection);
         let char_count = selection.text.chars().count();
         let front_app = selection.source_app.clone();
         let target_captured = selection_insertion_target_is_captured(&insertion_target);
         let target_current = selection_insertion_target_is_current(&insertion_target);
+        let anchor_captured = selection_insertion_target_anchor_is_captured(&insertion_target);
         let capture_id = insertion_target.capture_id();
         let diag = SelectionCaptureDiag {
             reason: SelectionCaptureMissReason::PrefetchHit,
@@ -330,6 +372,7 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
             used_prefetch: true,
             target_captured,
             target_current,
+            anchor_captured,
             capture_id,
             char_count: Some(char_count),
         };
@@ -339,11 +382,15 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
         );
         return (Some(selection), insertion_target, diag);
     }
-    let insertion_target = capture_selection_insertion_target();
+    let mut insertion_target = capture_selection_insertion_target_with_position();
     let capture_id = insertion_target.capture_id();
     let (capture, reason) = capture_selection_with_status_diag();
+    if let Some(selection) = capture.selection.as_ref() {
+        refresh_selection_insertion_target_anchor(&mut insertion_target, selection);
+    }
     let target_captured = selection_insertion_target_is_captured(&insertion_target);
     let target_current = selection_insertion_target_is_current(&insertion_target);
+    let anchor_captured = selection_insertion_target_anchor_is_captured(&insertion_target);
     let (front_app, char_count) = match &capture.selection {
         Some(selection) => (
             selection.source_app.clone(),
@@ -362,6 +409,7 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
         used_prefetch: false,
         target_captured,
         target_current,
+        anchor_captured,
         capture_id,
         char_count,
     };
@@ -385,11 +433,15 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
     SelectionInsertionTarget,
     SelectionCaptureDiag,
 ) {
-    let insertion_target = capture_selection_insertion_target();
+    let mut insertion_target = capture_selection_insertion_target();
     let capture_id = insertion_target.capture_id();
     let (capture, reason) = capture_selection_with_status_diag();
+    if let Some(selection) = capture.selection.as_ref() {
+        refresh_selection_insertion_target_anchor(&mut insertion_target, selection);
+    }
     let target_captured = selection_insertion_target_is_captured(&insertion_target);
     let target_current = selection_insertion_target_is_current(&insertion_target);
+    let anchor_captured = selection_insertion_target_anchor_is_captured(&insertion_target);
     let (front_app, char_count) = match &capture.selection {
         Some(selection) => (
             selection.source_app.clone(),
@@ -403,6 +455,7 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
         used_prefetch: false,
         target_captured,
         target_current,
+        anchor_captured,
         capture_id,
         char_count,
     };
@@ -423,12 +476,27 @@ fn capture_selection_source_app_hint() -> Option<String> {
 /// it can prove (by app + selection-text fingerprint) that the target did not
 /// change before inserting.
 pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
+    capture_selection_insertion_target_impl(false)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn capture_selection_insertion_target_with_position() -> SelectionInsertionTarget {
+    capture_selection_insertion_target_impl(true)
+}
+
+fn capture_selection_insertion_target_impl(capture_position: bool) -> SelectionInsertionTarget {
+    #[cfg(not(target_os = "windows"))]
+    let _ = capture_position;
+
     #[cfg(target_os = "windows")]
     {
         return SelectionInsertionTarget {
             capture_id: next_selection_capture_id(),
             windows: capture_windows_selection_target(),
-            windows_selection_anchor: crate::host_document::capture_focused_selection_anchor(),
+            windows_selection_anchor: None,
+            windows_selection_position: capture_position
+                .then(crate::host_document::capture_focused_selection_position)
+                .flatten(),
         };
     }
 
@@ -480,6 +548,39 @@ pub(crate) fn selection_insertion_target_is_captured(target: &SelectionInsertion
         // 移动端不提供选区润色；此处保留非桌面平台的类型兜底。
         let _ = target;
         true
+    }
+}
+
+/// PreviewConfirm needs the stronger UIA anchor; DirectReplace deliberately does not.
+pub(crate) fn selection_insertion_target_anchor_is_captured(
+    target: &SelectionInsertionTarget,
+) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        target.windows_selection_anchor.is_some()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = target;
+        true
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+pub(crate) fn test_preview_target_with_anchor() -> SelectionInsertionTarget {
+    SelectionInsertionTarget {
+        capture_id: 1,
+        windows: Some(WindowsSelectionTarget {
+            foreground_window: 1,
+            focused_window: 2,
+            foreground_process_id: 3,
+            foreground_thread_id: 4,
+            focused_process_id: 5,
+            focused_thread_id: 6,
+        }),
+        windows_selection_anchor: Some(crate::host_document::FocusedSelectionAnchor::for_test()),
+        windows_selection_position: None,
     }
 }
 
@@ -1883,6 +1984,7 @@ mod tests {
             used_prefetch: true,
             target_captured: true,
             target_current: true,
+            anchor_captured: false,
             capture_id: 42,
             char_count: Some(selected_text.chars().count()),
         }
@@ -1890,7 +1992,7 @@ mod tests {
 
         assert_eq!(
             summary,
-            "reason=prefetch_hit used_prefetch=true target_captured=true target_current=true capture_id=42 chars=11 front_app=Editor"
+            "reason=prefetch_hit used_prefetch=true target_captured=true target_current=true anchor_captured=false capture_id=42 chars=11 front_app=Editor"
         );
         assert!(!summary.contains(selected_text));
     }
@@ -1933,6 +2035,17 @@ mod tests {
                 ..Default::default()
             }
         ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn direct_target_capture_is_independent_of_preview_anchor_readiness() {
+        let target = SelectionInsertionTarget {
+            windows: Some(windows_target(10)),
+            ..Default::default()
+        };
+        assert!(selection_insertion_target_is_captured(&target));
+        assert!(!selection_insertion_target_anchor_is_captured(&target));
     }
 
     #[cfg(target_os = "windows")]

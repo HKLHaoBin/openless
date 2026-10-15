@@ -166,6 +166,29 @@ pub(crate) fn focused_selection_status(expected: &str) -> FocusedSelectionStatus
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct FocusedSelectionPosition {
+    runtime_id: Vec<i32>,
+    process_id: i32,
+    start_offset: i32,
+    end_offset: i32,
+    selected_text: String,
+}
+
+impl FocusedSelectionPosition {
+    pub(crate) fn matches_expected(&self, expected: &str) -> bool {
+        selection_observation(expected, Some(&self.selected_text)).status
+            == FocusedSelectionStatus::Matched
+    }
+
+    pub(crate) fn matches_anchor(&self, anchor: &FocusedSelectionAnchor) -> bool {
+        self.runtime_id == anchor.runtime_id
+            && self.process_id == anchor.process_id
+            && self.start_offset == anchor.start_offset
+            && self.end_offset == anchor.end_offset
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct FocusedSelectionAnchor {
     runtime_id: Vec<i32>,
     process_id: i32,
@@ -173,6 +196,20 @@ pub(crate) struct FocusedSelectionAnchor {
     end_offset: i32,
     before: String,
     after: String,
+}
+
+#[cfg(test)]
+impl FocusedSelectionAnchor {
+    pub(crate) fn for_test() -> Self {
+        Self {
+            runtime_id: vec![1],
+            process_id: 1,
+            start_offset: 0,
+            end_offset: 1,
+            before: String::new(),
+            after: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,18 +284,21 @@ fn selection_endpoint_offset(
     unsafe {
         let range = pattern.DocumentRange()?;
         range.MoveEndpointByRange(TextPatternRangeEndpoint_End, selected, endpoint)?;
-        range.MoveEndpointByUnit(
+        let moved = range.MoveEndpointByUnit(
             TextPatternRangeEndpoint_Start,
             TextUnit_Character,
             (ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32,
-        )
+        )?;
+        if moved < 0 || moved >= (ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32 {
+            return Err(windows::core::Error::from_win32());
+        }
+        Ok(moved)
     }
 }
 
-/// Capture the focused UIA element and bounded text around its current selection. The anchor is
-/// kept in memory only; its contents are never logged. It lets preview confirmation distinguish a
-/// browser selection collapsed at the original endpoint from an identical string elsewhere.
-pub(crate) fn capture_focused_selection_anchor() -> Option<FocusedSelectionAnchor> {
+/// Capture a lightweight selection position before clipboard capture. This snapshot contains only
+/// the range identity needed to prove that a later, context-rich anchor refers to the same range.
+pub(crate) fn capture_focused_selection_position() -> Option<FocusedSelectionPosition> {
     with_voice_edit_uia(|uia| unsafe {
         let element = uia
             .GetFocusedElement()
@@ -284,6 +324,69 @@ pub(crate) fn capture_focused_selection_anchor() -> Option<FocusedSelectionAncho
             .map_err(|_| "selectionTargetUnavailable".to_string())?
             .to_string();
         if selected_text.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(FocusedSelectionPosition {
+            runtime_id: runtime_id(&element)
+                .map_err(|_| "selectionTargetUnavailable".to_string())?,
+            process_id: element
+                .CurrentProcessId()
+                .map_err(|_| "selectionTargetUnavailable".to_string())?,
+            start_offset: selection_endpoint_offset(
+                &pattern,
+                &selected,
+                TextPatternRangeEndpoint_Start,
+            )
+            .map_err(|_| "selectionTargetUnavailable".to_string())?,
+            end_offset: selection_endpoint_offset(
+                &pattern,
+                &selected,
+                TextPatternRangeEndpoint_End,
+            )
+            .map_err(|_| "selectionTargetUnavailable".to_string())?,
+            selected_text,
+        }))
+    })
+    .ok()
+    .flatten()
+}
+
+/// Capture the focused UIA element and bounded text around the expected selection. The anchor is
+/// kept in memory only; its contents are never logged. Matching the already-captured selection
+/// prevents a delayed UIA read from attaching an unrelated same-text range.
+pub(crate) fn capture_focused_selection_anchor(expected: &str) -> Option<FocusedSelectionAnchor> {
+    let expected = expected.trim();
+    if expected.is_empty() {
+        return None;
+    }
+
+    with_voice_edit_uia(|uia| unsafe {
+        let element = uia
+            .GetFocusedElement()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let pattern = element
+            .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let ranges = pattern
+            .GetSelection()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        if ranges
+            .Length()
+            .map_err(|_| "selectionTargetUnavailable".to_string())?
+            != 1
+        {
+            return Ok(None);
+        }
+        let selected = ranges
+            .GetElement(0)
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let selected_text = selected
+            .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)
+            .map_err(|_| "selectionTargetUnavailable".to_string())?
+            .to_string();
+        if selection_observation(expected, Some(&selected_text)).status
+            != FocusedSelectionStatus::Matched
+        {
             return Ok(None);
         }
         Ok(Some(FocusedSelectionAnchor {
@@ -411,7 +514,10 @@ pub(crate) fn restore_focused_selection(
         }
 
         let normalized_expected = normalize_line_endings(expected);
-        let line_break_units = normalized_expected.chars().filter(|character| *character == '\n').count();
+        let line_break_units = normalized_expected
+            .chars()
+            .filter(|character| *character == '\n')
+            .count();
         let line_break_units = line_break_units.min(i32::MAX as usize) as i32;
         let common_unit_counts = [
             requested_units,
@@ -773,6 +879,29 @@ mod voice_edit_tests {
         assert_eq!(observation.expected_line_breaks, 1);
         assert_eq!(observation.selected_line_breaks, Some(2));
         assert_eq!(observation.newline_normalized_match, Some(true));
+    }
+
+    #[test]
+    fn position_fence_rejects_another_same_text_occurrence() {
+        let anchor = FocusedSelectionAnchor::for_test();
+        let original = FocusedSelectionPosition {
+            runtime_id: vec![1],
+            process_id: 1,
+            start_offset: 0,
+            end_offset: 1,
+            selected_text: "same".into(),
+        };
+        assert!(original.matches_expected("same"));
+        assert!(original.matches_anchor(&anchor));
+
+        let moved = FocusedSelectionPosition {
+            start_offset: 2,
+            end_offset: 3,
+            ..original.clone()
+        };
+        assert!(moved.matches_expected("same"));
+        assert!(!moved.matches_anchor(&anchor));
+        assert!(!original.matches_expected("different"));
     }
 
     #[test]

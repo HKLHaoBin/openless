@@ -67,6 +67,72 @@ const windowsHost = await readFile(
   new URL('../src-tauri/src/host_document/windows.rs', import.meta.url),
   'utf8',
 );
+const selectionAnchorRefresh = selection.match(
+  /fn refresh_selection_insertion_target_anchor[\s\S]*?(?=\n    \/\/\/|\nfn capture_selection_source_app_hint)/,
+)?.[0];
+assert.ok(
+  selectionAnchorRefresh,
+  'selection capture must refresh the UIA anchor after text capture',
+);
+assert.match(
+  selectionAnchorRefresh,
+  /selection_insertion_target_is_current\(target\)[\s\S]*?capture_focused_selection_anchor\(&selection\.text\)[\s\S]*?selection_insertion_target_is_current\(target\)[\s\S]*?windows_selection_anchor = Some/,
+  'anchor refresh must fence the target before and after the bounded UIA read',
+);
+assert.match(
+  selectionAnchorRefresh,
+  /windows_selection_position[\s\S]*?matches_expected\(&selection\.text\)[\s\S]*?capture_focused_selection_anchor\(&selection\.text\)[\s\S]*?matches_anchor\(&anchor\)[\s\S]*?windows_selection_anchor = Some/,
+  'anchor refresh must require the pre-capture position and exact offsets before retaining a post-capture anchor',
+);
+assert.match(
+  selection,
+  /if let Some\(\(selection, mut insertion_target\)\) = take_prefetched_selection_workspace\(\)[\s\S]*?refresh_selection_insertion_target_anchor\(&mut insertion_target, &selection\)/,
+  'a prefetched target must get one final bounded anchor refresh before PreviewConfirm admission',
+);
+assert.doesNotMatch(
+  selectionAnchorRefresh,
+  /post_copy_shortcut|simulate_copy_and_read|Ctrl\\+C/,
+  'anchor refresh must not simulate another copy or read the clipboard',
+);
+const captureTarget = selection.match(
+  /pub\(crate\) fn capture_selection_insertion_target\([\s\S]*?(?=\n    \/\/\/|\n    pub\(crate\) fn selection_insertion_target_is_captured)/,
+)?.[0];
+assert.ok(captureTarget, 'the insertion target capture helper must exist');
+assert.match(
+  captureTarget,
+  /capture_selection_insertion_target_impl\(true\)[\s\S]*?capture_focused_selection_position/,
+  'the PreviewConfirm capture path must retain a lightweight UIA position before clipboard capture',
+);
+assert.doesNotMatch(
+  captureTarget,
+  /capture_focused_selection_anchor/,
+  'the initial target snapshot must not depend on an early context-rich UIA anchor read',
+);
+assert.match(
+  selection,
+  /pub\(crate\) fn selection_insertion_target_is_captured[\s\S]*?target\.windows\.is_some\(\)/,
+  'DirectReplace target capture must remain based on the HWND fingerprint',
+);
+assert.match(
+  selection,
+  /pub\(crate\) fn selection_insertion_target_anchor_is_captured[\s\S]*?target\.windows_selection_anchor\.is_some\(\)/,
+  'PreviewConfirm must have a separate UIA-anchor readiness predicate',
+);
+assert.match(
+  adapters,
+  /fn prepare_preview\([\s\S]*?selection_insertion_target_anchor_is_captured[\s\S]*?target\.preview = true/,
+  'PreviewConfirm must reject an anchor-less target before entering preview mode',
+);
+assert.match(
+  adapters,
+  /event=capture_bridge_result[\s\S]*?anchor_captured=/,
+  'capture diagnostics must expose whether the UIA anchor was retained',
+);
+assert.match(
+  selection,
+  /anchor_captured: bool[\s\S]*?target_current=.*anchor_captured=.*capture_id/,
+  'capture diagnostics must include anchor_captured metadata without text',
+);
 const restoreTarget = selection.match(
   /pub\(crate\) fn reactivate_selection_insertion_target[\s\S]*?(?=\n    #\[cfg\(target_os = "macos"\)\])/,
 )?.[0];
@@ -99,6 +165,11 @@ assert.match(
   windowsHost,
   /pub\(crate\) struct FocusedSelectionAnchor[\s\S]*?start_offset: i32[\s\S]*?end_offset: i32/,
   'the captured UIA anchor must retain exact document-relative selection offsets',
+);
+assert.match(
+  windowsHost,
+  /let moved = range\.MoveEndpointByUnit[\s\S]*?moved < 0 \|\| moved >= \(ObservedInsertion::MAX_DOCUMENT_UTF16 \+ 1\) as i32[\s\S]*?Error::from_win32/,
+  'a saturated UIA document offset must fail closed instead of identifying a capped range position',
 );
 assert.match(
   windowsHost,

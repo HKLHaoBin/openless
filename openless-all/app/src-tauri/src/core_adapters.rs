@@ -1040,12 +1040,13 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         let (selection, target, capture_diag) =
             crate::selection::resolve_selection_workspace_capture_with_diag();
         log::info!(
-            "[selection-polish] event=capture_bridge_result capture_id={} reason={} used_prefetch={} target_captured={} target_current={} source_chars={}",
+            "[selection-polish] event=capture_bridge_result capture_id={} reason={} used_prefetch={} target_captured={} target_current={} anchor_captured={} source_chars={}",
             capture_diag.capture_id,
             capture_diag.reason.as_str(),
             capture_diag.used_prefetch,
             capture_diag.target_captured,
             capture_diag.target_current,
+            capture_diag.anchor_captured,
             capture_diag
                 .char_count
                 .map_or_else(|| "-".to_string(), |count| count.to_string()),
@@ -1379,6 +1380,17 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
                     "selection target is no longer active",
                 )
             })?;
+            if !crate::selection::selection_insertion_target_anchor_is_captured(&target.target) {
+                log::info!(
+                    "[selection-polish] event=preview_admission_rejected session_id={} capture_id={} reason=anchor_unavailable",
+                    session_id.as_uuid(),
+                    target.target.capture_id(),
+                );
+                return Err(BackendError::new(
+                    BackendErrorCode::Platform,
+                    "selectionPolishTargetUnavailable",
+                ));
+            }
             target.preview = true;
             Ok(())
         })
@@ -4641,12 +4653,16 @@ mod tests {
         > {
             self.capture_calls
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            #[cfg(target_os = "windows")]
+            let target = crate::selection::test_preview_target_with_anchor();
+            #[cfg(not(target_os = "windows"))]
+            let target = crate::selection::SelectionInsertionTarget::default();
             Ok((
                 openless_core::SelectionCapture {
                     text: "source".to_string(),
                     source_app: Some("Editor".to_string()),
                 },
-                crate::selection::SelectionInsertionTarget::default(),
+                target,
             ))
         }
 

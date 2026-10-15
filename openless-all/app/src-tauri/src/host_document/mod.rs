@@ -39,9 +39,10 @@ mod uia_text;
 mod windows;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::{
-    capture_focused_selection_anchor, focused_selection_observation, focused_selection_status,
-    insert_with_delivery_check, restore_focused_selection, FocusedSelectionAnchor,
-    FocusedSelectionObservation, FocusedSelectionRestoreStatus, FocusedSelectionStatus,
+    capture_focused_selection_anchor, capture_focused_selection_position,
+    focused_selection_observation, focused_selection_status, insert_with_delivery_check,
+    restore_focused_selection, FocusedSelectionAnchor, FocusedSelectionObservation,
+    FocusedSelectionPosition, FocusedSelectionRestoreStatus, FocusedSelectionStatus,
 };
 
 #[cfg(target_os = "macos")]
