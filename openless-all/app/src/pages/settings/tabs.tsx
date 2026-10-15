@@ -18,6 +18,7 @@ import { MarketplaceSection } from './MarketplaceSection';
 import { PermissionsSection } from './PermissionsSection';
 import { DataStorageSection } from './DataStorageSection';
 import { CloudSyncSection } from './CloudSyncSection';
+import { LocalMigrationSection } from './LocalMigrationSection';
 import { LocalModelsSection } from './models/LocalModelsSection';
 import { LocalModelsNavContext } from './models/modelsNav';
 import { DebugToolsSection } from './DebugToolsSection';
@@ -341,6 +342,7 @@ export function PrivacyTab() {
       </div>
       <PermissionsSection />
       <DataStorageSection />
+      <LocalMigrationSection />
       <CloudSyncSection />
     </>
   );

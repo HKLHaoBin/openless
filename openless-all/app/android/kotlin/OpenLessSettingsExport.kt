@@ -4,13 +4,12 @@ import android.content.Context
 import org.json.JSONObject
 
 /**
- * Coordinates the keyboard settings page's "导出/导入配置" feature — collects
+ * Coordinates the native local migration page's legacy JSON compatibility flow — collects
  * whichever of the seven categories the user selected into one JSON object
  * for export, and applies whichever categories are both present in an
  * imported file and still checked. Deliberately its own file rather than
- * folded into OpenLessKeyboardSettingsActivity, which is already large and
- * mostly UI-building code — this is a self-contained
- * read-everything/write-everything concern with no View dependencies.
+ * folded into an Activity, keeping this self-contained
+ * read-everything/write-everything concern free of View dependencies.
  *
  * Plain, unencrypted JSON, by explicit product decision — a Cloud notes
  * token or (if CREDENTIALS is selected) an ASR/LLM API key ends up in the

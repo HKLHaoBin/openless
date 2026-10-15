@@ -80,6 +80,7 @@ const KOTLIN_FILES = [
   'OpenLessBackendWarmupActivity.kt',
   'OpenLessClipboardHistory.kt',
   'OpenLessKeyboardSettingsActivity.kt',
+  'OpenLessLocalMigrationActivity.kt',
   'OpenLessProcessRestartStats.kt',
   'OpenLessBuildInfo.kt',
 ];
