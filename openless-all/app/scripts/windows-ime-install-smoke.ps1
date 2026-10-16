@@ -44,10 +44,10 @@ function Join-ProcessArguments {
       '""'
     } elseif ($argument -notmatch '[\s"]') {
       $argument
+    } elseif ($argument -notmatch '"') {
+      '"' + $argument + '"'
     } else {
-      $escaped = $argument -replace '(\\*)"', '$1$1\"'
-      $escaped = $escaped -replace '(\\+)$', '$1$1'
-      '"' + $escaped + '"'
+      $argument
     }
   }
   return ($quoted -join " ")
