@@ -63,6 +63,32 @@ assert.match(
 );
 
 const selection = await readFile(new URL('../src-tauri/src/selection.rs', import.meta.url), 'utf8');
+const diagnosticSources = `${selection}\n${adapters}`;
+assert.match(
+  diagnosticSources,
+  /DEBUG-PREVIEW-1014[\s\S]*?diagnosing-bugs\.v1[\s\S]*?P1[\s\S]*?capture_result/,
+  'the instrumented artifact must expose the P1 capture probe',
+);
+assert.match(
+  diagnosticSources,
+  /DEBUG-PREVIEW-1014[\s\S]*?P2[\s\S]*?preview_admission/,
+  'the instrumented artifact must expose the P2 admission probe',
+);
+assert.match(
+  diagnosticSources,
+  /DEBUG-PREVIEW-1014[\s\S]*?P3[\s\S]*?confirmation_validation/,
+  'the instrumented artifact must expose the P3 validation probe',
+);
+assert.match(
+  diagnosticSources,
+  /DEBUG-PREVIEW-1014[\s\S]*?P4[\s\S]*?insertion_result/,
+  'the instrumented artifact must expose the P4 insertion probe',
+);
+assert.doesNotMatch(
+  diagnosticSources,
+  /DEBUG-PREVIEW-1014[^\n]*(?:source_text|replacement_text|clipboard|document|window_title|front_app)/,
+  'diagnostic probes must not log source, replacement, clipboard, document, or window metadata',
+);
 const windowsHost = await readFile(
   new URL('../src-tauri/src/host_document/windows.rs', import.meta.url),
   'utf8',

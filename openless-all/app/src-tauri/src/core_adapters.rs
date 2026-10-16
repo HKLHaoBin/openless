@@ -1175,6 +1175,25 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             source_text,
             reactivate,
         );
+        crate::selection::emit_preview_diagnostic(
+            target.capture_id(),
+            "P3",
+            "[\"H4\"]",
+            "confirmation_validation",
+            match validation {
+                crate::selection::SelectionInsertionTargetValidation::Valid => "accepted",
+                crate::selection::SelectionInsertionTargetValidation::TargetUnavailable => {
+                    "target_unavailable"
+                }
+                crate::selection::SelectionInsertionTargetValidation::TargetChanged => {
+                    "target_changed"
+                }
+                crate::selection::SelectionInsertionTargetValidation::SelectionChanged => {
+                    "selection_changed"
+                }
+            },
+            &format!("\"preview\":{}", reactivate),
+        );
         if let Some(code) = validation.error_code() {
             log::info!(
                 "[selection-polish] event=apply_validation capture_id={} validation={} path={} failure_stage=target_or_uia_validation",
@@ -1210,6 +1229,29 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             replacement_text,
             preferences.restore_clipboard_after_paste,
             preferences.paste_shortcut,
+        );
+        let status_label = match status {
+            crate::types::InsertStatus::Inserted => "inserted",
+            crate::types::InsertStatus::PasteSent => "paste_sent",
+            crate::types::InsertStatus::CopiedFallback => "copied_fallback",
+            crate::types::InsertStatus::Failed => "failed",
+            crate::types::InsertStatus::NotRequested => "not_requested",
+        };
+        crate::selection::emit_preview_diagnostic(
+            target.capture_id(),
+            "P4",
+            "[\"H4\"]",
+            "insertion_result",
+            status_label,
+            &format!(
+                "\"path\":\"{}\",\"delivery\":\"{}\"",
+                if reactivate { "preview" } else { "direct" },
+                if matches!(status, crate::types::InsertStatus::PasteSent) {
+                    "unverified"
+                } else {
+                    "confirmed_or_failed"
+                },
+            ),
         );
         log::info!(
             "[selection-polish] event=inserter_status capture_id={} status={} path={} delivery={}",
@@ -1381,7 +1423,21 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
                     "selection target is no longer active",
                 )
             })?;
-            if !crate::selection::selection_insertion_target_anchor_is_captured(&target.target) {
+            let anchor_captured =
+                crate::selection::selection_insertion_target_anchor_is_captured(&target.target);
+            crate::selection::emit_preview_diagnostic(
+                target.target.capture_id(),
+                "P2",
+                "[\"H3\"]",
+                "preview_admission",
+                if anchor_captured {
+                    "accepted"
+                } else {
+                    "rejected"
+                },
+                &format!("\"anchor_captured\":{}", anchor_captured),
+            );
+            if !anchor_captured {
                 log::info!(
                     "[selection-polish] event=preview_admission_rejected session_id={} capture_id={} reason=anchor_unavailable",
                     session_id.as_uuid(),

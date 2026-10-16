@@ -20,11 +20,36 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const SELECTION_MAX_CHARS: usize = 4000;
 const SELECTION_TRUNCATE_HEAD: usize = 2000;
 const SELECTION_TRUNCATE_TAIL: usize = 2000;
 const SELECTION_TRUNCATED_MARKER: &str = "\n[…truncated…]\n";
+
+pub(crate) fn emit_preview_diagnostic(
+    capture_id: u64,
+    probe_id: &'static str,
+    hypothesis_ids: &'static str,
+    event: &'static str,
+    outcome: &'static str,
+    safe_fields: &str,
+) {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    log::info!(
+        "[DEBUG-PREVIEW-1014] {{\"schema\":\"diagnosing-bugs.v1\",\"session_id\":\"preview-confirm-diagnosis\",\"run_id\":\"capture-{}\",\"probe_id\":\"{}\",\"hypothesis_ids\":{},\"event\":\"{}\",\"outcome\":\"{}\",\"safe\":{{{}}},\"ts\":\"{}\"}}",
+        capture_id,
+        probe_id,
+        hypothesis_ids,
+        event,
+        outcome,
+        safe_fields,
+        timestamp,
+    );
+}
 
 /// Selection context read from the foreground app.
 /// `text` may be a head/tail stand-in when `omits_middle` is set. Replacement
@@ -324,6 +349,17 @@ pub(crate) fn prefetch_selection_workspace_capture() {
     let target_captured = selection_insertion_target_is_captured(&insertion_target);
     let target_current = selection_insertion_target_is_current(&insertion_target);
     let anchor_captured = selection_insertion_target_anchor_is_captured(&insertion_target);
+    emit_preview_diagnostic(
+        capture_id,
+        "P1",
+        "[\"H1\",\"H2\"]",
+        "capture_result",
+        if anchor_captured { "matched" } else { "unavailable" },
+        &format!(
+            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"anchor_stage\":\"{}\"",
+            target_captured, target_current, anchor_captured, anchor_stage,
+        ),
+    );
     let mut guard = PREFETCHED_SELECTION_WORKSPACE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -415,6 +451,17 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
         let target_current = selection_insertion_target_is_current(&insertion_target);
         let anchor_captured = selection_insertion_target_anchor_is_captured(&insertion_target);
         let capture_id = insertion_target.capture_id();
+        emit_preview_diagnostic(
+            capture_id,
+            "P1",
+            "[\"H1\",\"H2\"]",
+            "capture_result",
+            if anchor_captured { "matched" } else { "unavailable" },
+            &format!(
+                "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"anchor_stage\":\"{}\"",
+                target_captured, target_current, anchor_captured, anchor_stage,
+            ),
+        );
         let diag = SelectionCaptureDiag {
             reason: SelectionCaptureMissReason::PrefetchHit,
             front_app,
@@ -443,6 +490,17 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
     let target_captured = selection_insertion_target_is_captured(&insertion_target);
     let target_current = selection_insertion_target_is_current(&insertion_target);
     let anchor_captured = selection_insertion_target_anchor_is_captured(&insertion_target);
+    emit_preview_diagnostic(
+        capture_id,
+        "P1",
+        "[\"H1\",\"H2\"]",
+        "capture_result",
+        if anchor_captured { "matched" } else { "unavailable" },
+        &format!(
+            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"anchor_stage\":\"{}\"",
+            target_captured, target_current, anchor_captured, anchor_stage,
+        ),
+    );
     let (front_app, char_count) = match &capture.selection {
         Some(selection) => (
             selection.source_app.clone(),
