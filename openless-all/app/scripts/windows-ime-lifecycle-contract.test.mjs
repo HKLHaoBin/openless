@@ -10,6 +10,7 @@ const editSession = readFileSync(join(imeRoot, 'edit_session.cpp'), 'utf8');
 const displayAttribute = readFileSync(join(imeRoot, 'display_attribute.cpp'), 'utf8');
 const registry = readFileSync(join(imeRoot, 'registry.cpp'), 'utf8');
 const protocol = readFileSync(join(appRoot, 'src-tauri', 'src', 'windows_ime_protocol.rs'), 'utf8');
+const ipc = readFileSync(join(appRoot, 'src-tauri', 'src', 'windows_ime_ipc.rs'), 'utf8');
 
 // The IME runs inside every host process. It must not own threads or block the
 // host UI thread: joining a worker from Deactivate deadlocked hosts whenever
@@ -105,6 +106,21 @@ assert.match(
   textService,
   /kCopyDataVersion[\s\S]*kStatusProtocolVersion/,
   'IME should answer the protocol probe so stale in-process DLLs are diagnosable',
+);
+assert.match(
+  ipc,
+  /fn ordered_ime_windows[\s\S]*window\.process_id == target\.process_id[\s\S]*window\.thread_id == target\.thread_id[\s\S]*allow_same_process_fallback/,
+  'Rust discovery should order exact-thread candidates before recovery candidates',
+);
+assert.match(
+  ipc,
+  /select_ime_window_with_probe[\s\S]*verify_protocol_version\(/,
+  'Rust discovery should probe each eligible message window before selecting it',
+);
+assert.match(
+  ipc,
+  /let window = find_ime_window_with_retry[\s\S]*send_copy_data\([\s\S]*request\.op\.copydata_tag/,
+  'Rust should complete protocol discovery before sending a real submit payload',
 );
 
 assert.match(
