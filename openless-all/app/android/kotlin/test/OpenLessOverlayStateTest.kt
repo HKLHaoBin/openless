@@ -16,9 +16,9 @@ class OpenLessOverlayStateTest {
 
     @Test
     fun neverTriggerBlocksOverlayDisplayButOtherModesRemainAvailable() {
-        assertFalse(shouldDisplayOverlay("never"))
-        assertTrue(shouldDisplayOverlay("background"))
-        assertTrue(shouldDisplayOverlay("always"))
-        assertTrue(shouldDisplayOverlay(null))
+        assertFalse(OpenLessAndroidPreferences.shouldDisplayOverlay("never"))
+        assertTrue(OpenLessAndroidPreferences.shouldDisplayOverlay("background"))
+        assertTrue(OpenLessAndroidPreferences.shouldDisplayOverlay("always"))
+        assertTrue(OpenLessAndroidPreferences.shouldDisplayOverlay(null))
     }
 }
