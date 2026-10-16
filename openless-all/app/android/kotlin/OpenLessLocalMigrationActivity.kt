@@ -11,6 +11,8 @@ import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -147,7 +149,7 @@ class OpenLessLocalMigrationActivity : Activity() {
             textSize = 13f
             setTextColor(tone(Color.rgb(170, 170, 170), Color.rgb(90, 90, 95)))
             isClickable = true
-            setOnClickListener { launchLegacyImportPicker() }
+            setOnClickListener { showLegacyImportWarning() }
             setPadding(0, dp(18), 0, dp(12))
         })
         content.addView(TextView(this).apply {
@@ -251,6 +253,20 @@ class OpenLessLocalMigrationActivity : Activity() {
             .onFailure { Toast.makeText(this, ui("找不到文件选择器", "No file picker available"), Toast.LENGTH_SHORT).show() }
     }
 
+    private fun showLegacyImportWarning() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(ui("导入旧版 JSON", "Import legacy JSON"))
+            .setMessage(
+                ui(
+                    "旧版 JSON 是明文兼容格式，可能包含 API key 或 token，不具备 .omb 的密码加密和完整性校验。请只导入可信来源；新版 .omb 解压后的 documents.json 必须通过“导入迁移文件”导入。",
+                    "Legacy JSON is a plaintext compatibility format and may contain API keys or tokens; it does not have the password encryption or integrity checks of .omb. Import only from a trusted source. The documents.json extracted from a new .omb bundle must be imported through “Import migration bundle”.",
+                ),
+            )
+            .setPositiveButton(ui("选择文件", "Choose file")) { _, _ -> launchLegacyImportPicker() }
+            .setNegativeButton(ui("取消", "Cancel"), null)
+            .show()
+    }
+
     private fun launchLegacyImportPicker() {
         val intent = android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(android.content.Intent.CATEGORY_OPENABLE)
@@ -321,7 +337,14 @@ class OpenLessLocalMigrationActivity : Activity() {
     private fun showImportCategoryDialog(json: String) {
         val present = OpenLessSettingsExport.categoriesPresent(json)
         if (present.isEmpty()) {
-            Toast.makeText(this, ui("这不是一个有效的配置文件", "Not a valid settings file"), Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                ui(
+                    "这不是旧版设置 JSON；如果文件是 .omb 解压目录中的 documents.json，请使用“导入迁移文件”导入整个 .omb 文件。",
+                    "This is not a legacy settings JSON. If it is documents.json from an extracted .omb bundle, use “Import migration bundle” with the complete .omb file.",
+                ),
+                Toast.LENGTH_LONG,
+            ).show()
             return
         }
         val categories = present.toList()
@@ -428,7 +451,11 @@ class OpenLessLocalMigrationActivity : Activity() {
             .show()
     }
 
-    private fun showMigrationRestoreMode(bundleBase64: String, password: String) {
+    private fun showMigrationRestoreMode(
+        bundleBase64: String,
+        password: String,
+        allowStaleRetry: Boolean = true,
+    ) {
         Thread {
             val previewResult = runCatching {
                 val response = org.json.JSONObject(
@@ -439,7 +466,9 @@ class OpenLessLocalMigrationActivity : Activity() {
                     ),
                 )
                 check(response.optBoolean("ok")) { response.optString("error", "preview failed") }
-                response.getJSONObject("payload")
+                response.getJSONObject("payload").also { preview ->
+                    check(preview.optString("observedGeneration").isNotBlank()) { "preview missing observed generation" }
+                }
             }
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
@@ -447,7 +476,14 @@ class OpenLessLocalMigrationActivity : Activity() {
                     val conflicts = preview.getJSONArray("conflicts")
                     val expectedGeneration = preview.optString("observedGeneration")
                     chooseMigrationConflicts(bundleBase64, password, conflicts, 0, org.json.JSONArray()) {
-                        showMigrationRestoreModeAfterConflicts(bundleBase64, password, expectedGeneration, conflicts, it)
+                        showMigrationRestoreModeAfterConflicts(
+                            bundleBase64,
+                            password,
+                            expectedGeneration,
+                            conflicts,
+                            it,
+                            allowStaleRetry,
+                        )
                     }
                 }.onFailure { error ->
                     Toast.makeText(this, ui("预览失败：${error.message}", "Preview failed: ${error.message}"), Toast.LENGTH_LONG).show()
@@ -472,19 +508,49 @@ class OpenLessLocalMigrationActivity : Activity() {
         val kind = conflict.optString("kind")
         val reason = conflict.optString("reason")
         val credential = if (conflict.optBoolean("isCredentialUnit")) ui("（凭据关联渠道）", " (credential-linked channel)") else ""
-        var selected: String? = null
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(8), dp(24), 0)
+        }
+        content.addView(TextView(this).apply {
+            text = "$kind / $reason$credential"
+            textSize = 14f
+            setTextColor(tone(Color.rgb(220, 220, 220), Color.rgb(50, 50, 55)))
+            setPadding(0, 0, 0, dp(8))
+        })
+        val options = RadioGroup(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        fun option(text: String): RadioButton = RadioButton(this).apply {
+            this.text = text
+            textSize = 15f
+            minHeight = dp(48)
+            gravity = Gravity.CENTER_VERTICAL
+            setTextColor(tone(Color.WHITE, Color.rgb(35, 35, 40)))
+            buttonTintList = android.content.res.ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                intArrayOf(tone(Color.rgb(94, 234, 212), Color.rgb(15, 118, 110)), tone(Color.rgb(190, 190, 190), Color.rgb(90, 90, 95))),
+            )
+        }
+        val keepLocal = option(ui("保留当前设备", "Keep this device")).apply { id = View.generateViewId() }
+        val useBundle = option(ui("使用迁移文件", "Use migration file")).apply { id = View.generateViewId() }
+        options.addView(keepLocal)
+        options.addView(useBundle)
+        content.addView(options, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
         val dialog = android.app.AlertDialog.Builder(this)
             .setTitle(ui("选择冲突 ${index + 1}/${conflicts.length()}", "Choose conflict ${index + 1}/${conflicts.length()}"))
-            .setMessage("$kind / $reason$credential")
-            .setSingleChoiceItems(arrayOf(ui("保留当前设备", "Keep this device"), ui("使用迁移文件", "Use migration file")), -1) { _, which ->
-                selected = if (which == 0) "local" else "remote"
-            }
+            .setView(content)
             .setPositiveButton(ui("继续", "Continue"), null)
             .setNegativeButton(ui("取消", "Cancel"), null)
             .create()
         dialog.setOnShowListener {
             dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val side = selected
+                val side = when (options.checkedRadioButtonId) {
+                    keepLocal.id -> "local"
+                    useBundle.id -> "remote"
+                    else -> null
+                }
                 if (side == null) {
                     Toast.makeText(this, ui("必须选择一侧", "Choose one side"), Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
@@ -521,6 +587,7 @@ class OpenLessLocalMigrationActivity : Activity() {
         expectedGeneration: String,
         conflicts: org.json.JSONArray,
         choices: org.json.JSONArray,
+        allowStaleRetry: Boolean,
     ) {
         val modes = arrayOf(ui("合并", "Merge"), ui("替换", "Replace"))
         android.app.AlertDialog.Builder(this)
@@ -573,7 +640,19 @@ class OpenLessLocalMigrationActivity : Activity() {
                                 Toast.makeText(this, ui("核心数据已导入，但 Android 偏好未应用：${error.message}", "Core data imported, but Android preferences were not applied: ${error.message}"), Toast.LENGTH_LONG).show()
                             }
                         }.onFailure { error ->
-                            Toast.makeText(this, ui("导入未完成：${error.message}", "Import not completed: ${error.message}"), Toast.LENGTH_LONG).show()
+                            if (allowStaleRetry && error.message?.contains("migration_bundle_stale_preview") == true) {
+                                Toast.makeText(
+                                    this,
+                                    ui(
+                                        "本地配置在确认后发生变化，正在重新预览；请再次确认导入方式。",
+                                        "Local configuration changed after review. Rechecking the preview; please confirm the restore mode again.",
+                                    ),
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                showMigrationRestoreMode(bundleBase64, password, allowStaleRetry = false)
+                            } else {
+                                Toast.makeText(this, ui("导入未完成：${error.message}", "Import not completed: ${error.message}"), Toast.LENGTH_LONG).show()
+                            }
                         }
                     }
                 }.start()

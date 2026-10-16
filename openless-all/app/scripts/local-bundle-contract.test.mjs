@@ -26,8 +26,17 @@ assert.match(migrationActivity, /nativeInspectLocalMigrationBundle/);
 assert.match(migrationActivity, /nativePreviewLocalMigrationBundle/);
 assert.match(migrationActivity, /nativeImportLocalMigrationBundle/);
 assert.match(migrationActivity, /launchLegacyImportPicker/);
+assert.match(migrationActivity, /showLegacyImportWarning/);
 assert.match(migrationActivity, /OpenLessSettingsExport\.import\(/);
 assert.match(migrationActivity, /OpenLessContentWriter\.writeBytes/);
+assert.match(migrationActivity, /RadioGroup/);
+assert.match(migrationActivity, /RadioButton/);
+assert.match(migrationActivity, /checkedRadioButtonId/);
+assert.doesNotMatch(migrationActivity, /setSingleChoiceItems/);
+assert.match(migrationActivity, /migration_bundle_stale_preview/);
+assert.match(migrationActivity, /showMigrationRestoreMode\(bundleBase64, password, allowStaleRetry = false\)/);
+assert.match(migrationActivity, /observedGeneration.*isNotBlank/);
+assert.match(migrationActivity, /documents\.json/);
 assert.doesNotMatch(migrationActivity, /pendingExportJson/);
 assert.doesNotMatch(
   keyboardActivity,
@@ -42,6 +51,7 @@ assert.match(container, /CredentialPolicy::PasswordEncrypted/);
 assert.match(container, /file\.encrypted\(\)/);
 assert.match(container, /safe_entry_name/);
 assert.match(bridge, /publish_local_migration_state_changed/);
+assert.match(bridge, /missing expected generation/);
 assert.match(scaffolding, /OpenLessMigrationBundlePolicy\.kt/);
 assert.match(scaffolding, /OpenLessMigrationBundleContractTest\.kt/);
 assert.match(scaffolding, /OpenLessMigrationBundleInstrumentedTest\.kt/);

@@ -374,7 +374,7 @@ fn import_local_migration_bundle_json(
         let choices: Vec<openless_core::cloud_sync_e2ee_documents::ConflictChoice> =
             serde_json::from_str(choices_json).map_err(|_| "invalid conflict choices")?;
         let expected_generation = if expected_generation.is_empty() {
-            None
+            return Err("missing expected generation".into());
         } else {
             let value = expected_generation
                 .parse::<u64>()
