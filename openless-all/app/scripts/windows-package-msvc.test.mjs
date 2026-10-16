@@ -375,8 +375,13 @@ assert.match(
 );
 assert.match(
   nsisHook,
-  /File \/oname=OpenLessIme-\$\{VERSION\}\.dll "\$%\$\{ENV_VAR\}%"/,
-  "NSIS should embed the versioned OpenLess IME DLL using Tauri's VERSION define",
+  /!define OPENLESS_IME_BUILD_TAG[\s\S]*\$\{__DATE__\}[\s\S]*\$\{__TIME__\}/,
+  'NSIS should give each installer build a unique IME DLL tag',
+);
+assert.match(
+  nsisHook,
+  /File \/oname=OpenLessIme-\$\{VERSION\}-\$\{OPENLESS_IME_BUILD_TAG\}\.dll "\$%\$\{ENV_VAR\}%"/,
+  "NSIS should embed the OpenLess IME DLL under a build-specific versioned path",
 );
 assert.doesNotMatch(
   nsisHook,
@@ -395,13 +400,13 @@ assert.match(
 );
 assert.match(
   nsisHook,
-  /System32\\regsvr32\.exe[\s\S]*windows-ime\\x86\\OpenLessIme-\$\{VERSION\}\.dll/,
+  /System32\\regsvr32\.exe[\s\S]*windows-ime\\x86\\OpenLessIme-\$\{VERSION\}-\$\{OPENLESS_IME_BUILD_TAG\}\.dll/,
   'NSIS should use System32 regsvr32 for the x86 IME on 32-bit Windows',
 );
 assert.match(
   nsisHook,
-  /OpenLessIme-\$\{VERSION\}\.dll/,
-  'NSIS should register each release under a versioned IME DLL path',
+  /OpenLessIme-\$\{VERSION\}-\$\{OPENLESS_IME_BUILD_TAG\}\.dll/,
+  'NSIS should register each release under a unique versioned IME DLL path',
 );
 assert.doesNotMatch(
   nsisHook,
@@ -448,6 +453,28 @@ assert.doesNotMatch(
   nsisHook,
   /OPENLESS_IME_ABORT_IF_FAILED \$0 "x86 unregistration"/,
   'NSIS uninstall should not fail if x86 TSF unregistration fails',
+);
+assert.match(
+  nsisHook,
+  /!macro OPENLESS_IME_UNREGISTER_X64[\s\S]*SetRegView 64[\s\S]*ReadRegStr \$R0 HKLM[\s\S]*InprocServer32[\s\S]*\/u "\$R0"/,
+  'NSIS x64 upgrade should unregister the DLL currently registered in the 64-bit CLSID view',
+);
+assert.ok(
+  nsisHook.includes(
+    'ReadRegStr $R0 HKLM "Software\\Classes\\CLSID\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\\InprocServer32" ""',
+  ),
+  'NSIS x64 unregister should read the OpenLess CLSID registration path',
+);
+assert.match(
+  nsisHook,
+  /!macro OPENLESS_IME_UNREGISTER_X86[\s\S]*SetRegView 32[\s\S]*ReadRegStr \$R1 HKLM[\s\S]*InprocServer32[\s\S]*\/u "\$R1"/,
+  'NSIS x86 upgrade should unregister the DLL currently registered in the 32-bit CLSID view',
+);
+assert.ok(
+  nsisHook.includes(
+    'ReadRegStr $R1 HKLM "Software\\Classes\\CLSID\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\\InprocServer32" ""',
+  ),
+  'NSIS x86 unregister should read the OpenLess CLSID registration path',
 );
 assert.match(
   nsisHook,

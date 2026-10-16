@@ -1,3 +1,7 @@
+!define OPENLESS_IME_BUILD_TAG "${__DATE__}_${__TIME__}"
+!searchreplace OPENLESS_IME_BUILD_TAG "${OPENLESS_IME_BUILD_TAG}" ":" "-"
+!searchreplace OPENLESS_IME_BUILD_TAG "${OPENLESS_IME_BUILD_TAG}" " " "_"
+
 !macro OPENLESS_IME_ABORT_IF_FAILED EXIT_CODE LABEL
   ${If} ${EXIT_CODE} != 0
     DetailPrint "OpenLess TSF IME ${LABEL} failed with exit code ${EXIT_CODE}"
@@ -8,10 +12,10 @@
 !macro OPENLESS_IME_REGISTER_X64
   ${If} ${RunningX64}
     DetailPrint "Registering OpenLess x64 TSF IME"
-    ExecWait '"$WINDIR\Sysnative\regsvr32.exe" /s "$INSTDIR\windows-ime\x64\OpenLessIme-${VERSION}.dll"' $0
+    ExecWait '"$WINDIR\Sysnative\regsvr32.exe" /s "$INSTDIR\windows-ime\x64\OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"' $0
     ${If} $0 != 0
       ${DisableX64FSRedirection}
-      ExecWait '"$WINDIR\System32\regsvr32.exe" /s "$INSTDIR\windows-ime\x64\OpenLessIme-${VERSION}.dll"' $0
+      ExecWait '"$WINDIR\System32\regsvr32.exe" /s "$INSTDIR\windows-ime\x64\OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"' $0
       ${EnableX64FSRedirection}
     ${EndIf}
     !insertmacro OPENLESS_IME_ABORT_IF_FAILED $0 "x64 registration"
@@ -21,10 +25,16 @@
 !macro OPENLESS_IME_UNREGISTER_X64
   ${If} ${RunningX64}
     DetailPrint "Unregistering OpenLess x64 TSF IME"
-    ExecWait '"$WINDIR\Sysnative\regsvr32.exe" /s /u "$INSTDIR\windows-ime\x64\OpenLessIme-${VERSION}.dll"' $0
+    SetRegView 64
+    StrCpy $R0 ""
+    ReadRegStr $R0 HKLM "Software\Classes\CLSID\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\InprocServer32" ""
+    ${If} $R0 == ""
+      StrCpy $R0 "$INSTDIR\windows-ime\x64\OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"
+    ${EndIf}
+    ExecWait '"$WINDIR\Sysnative\regsvr32.exe" /s /u "$R0"' $0
     ${If} $0 != 0
       ${DisableX64FSRedirection}
-      ExecWait '"$WINDIR\System32\regsvr32.exe" /s /u "$INSTDIR\windows-ime\x64\OpenLessIme-${VERSION}.dll"' $0
+      ExecWait '"$WINDIR\System32\regsvr32.exe" /s /u "$R0"' $0
       ${EnableX64FSRedirection}
     ${EndIf}
     DetailPrint "OpenLess x64 TSF IME unregister exit code $0"
@@ -33,10 +43,16 @@
 
 !macro OPENLESS_IME_UNREGISTER_X86
   DetailPrint "Unregistering OpenLess x86 TSF IME"
+  SetRegView 32
+  StrCpy $R1 ""
+  ReadRegStr $R1 HKLM "Software\Classes\CLSID\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\InprocServer32" ""
+  ${If} $R1 == ""
+    StrCpy $R1 "$INSTDIR\windows-ime\x86\OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"
+  ${EndIf}
   ${If} ${RunningX64}
-    ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s /u "$INSTDIR\windows-ime\x86\OpenLessIme-${VERSION}.dll"' $0
+    ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s /u "$R1"' $0
   ${Else}
-    ExecWait '"$WINDIR\System32\regsvr32.exe" /s /u "$INSTDIR\windows-ime\x86\OpenLessIme-${VERSION}.dll"' $0
+    ExecWait '"$WINDIR\System32\regsvr32.exe" /s /u "$R1"' $0
   ${EndIf}
   DetailPrint "OpenLess x86 TSF IME unregister exit code $0"
 !macroend
@@ -44,9 +60,9 @@
 !macro OPENLESS_IME_REGISTER_X86
   DetailPrint "Registering OpenLess x86 TSF IME"
   ${If} ${RunningX64}
-    ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s "$INSTDIR\windows-ime\x86\OpenLessIme-${VERSION}.dll"' $0
+    ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s "$INSTDIR\windows-ime\x86\OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"' $0
   ${Else}
-    ExecWait '"$WINDIR\System32\regsvr32.exe" /s "$INSTDIR\windows-ime\x86\OpenLessIme-${VERSION}.dll"' $0
+    ExecWait '"$WINDIR\System32\regsvr32.exe" /s "$INSTDIR\windows-ime\x86\OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"' $0
   ${EndIf}
   ${If} $0 != 0
     StrCpy $1 $0
@@ -57,11 +73,11 @@
 !macroend
 
 !macro OPENLESS_IME_STAGE_AND_REPLACE PLATFORM_DIR ENV_VAR
-  ; Install each release under a new name. TSF client processes can keep an old
-  ; DLL mapped for their whole lifetime, so replacing a fixed path can leave the
-  ; registry pointing at the old protocol until the next reboot.
+  ; Install each build under a new name. TSF client processes can keep an old
+  ; DLL mapped for their whole lifetime, so reusing a release path can leave the
+  ; installer unable to replace the file or the registry pointing at old code.
   SetOutPath "$INSTDIR\windows-ime\${PLATFORM_DIR}"
-  File /oname=OpenLessIme-${VERSION}.dll "$%${ENV_VAR}%"
+  File /oname=OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll "$%${ENV_VAR}%"
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL
