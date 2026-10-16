@@ -5,7 +5,7 @@
       <Directory Id="OpenLessImeDirectory" Name="windows-ime">
         <Directory Id="OpenLessImeX64Directory" Name="x64">
           <Component Id="OpenLessImeDllX64Component" Guid="{B787DE6F-DF71-4D68-9DE8-04D3665A26F3}" Win64="yes">
-            <File Id="OpenLessImeDllX64" Name="OpenLessIme-$(var.ProductVersion).dll" Source="src-tauri\target\windows-ime-msvc\x64\Release\OpenLessIme.dll" KeyPath="yes" />
+            <File Id="OpenLessImeDllX64" Name="OpenLessIme-{{version}}.dll" Source="src-tauri\target\windows-ime-msvc\x64\Release\OpenLessIme.dll" KeyPath="yes" />
           </Component>
         </Directory>
         <Directory Id="OpenLessImeX86Directory" Name="x86">
@@ -15,7 +15,7 @@
                WiX accepts it under the x64 INSTALLDIR; this does not change
                the architecture of the DLL payload. -->
           <Component Id="OpenLessImeDllX86Component" Guid="{A2E61B9A-4034-4ABF-A42F-964A9B1F08BB}" Win64="yes">
-            <File Id="OpenLessImeDllX86" Name="OpenLessIme-$(var.ProductVersion).dll" Source="src-tauri\target\windows-ime-msvc\x86\Release\OpenLessIme.dll" KeyPath="yes" />
+            <File Id="OpenLessImeDllX86" Name="OpenLessIme-{{version}}.dll" Source="src-tauri\target\windows-ime-msvc\x86\Release\OpenLessIme.dll" KeyPath="yes" />
           </Component>
         </Directory>
       </Directory>

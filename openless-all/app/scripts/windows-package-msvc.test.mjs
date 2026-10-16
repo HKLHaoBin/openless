@@ -415,8 +415,13 @@ assert.doesNotMatch(
 );
 assert.match(
   wixFragment,
-  /Name="OpenLessIme-\$\(var\.ProductVersion\)\.dll"/,
-  'WiX should register each release under a versioned IME DLL path',
+  /Name="OpenLessIme-\{\{version\}\}\.dll"/,
+  'WiX custom fragments should use Tauri Handlebars version rendering',
+);
+assert.doesNotMatch(
+  wixFragment,
+  /\$\(var\.ProductVersion\)/,
+  'WiX custom fragments must not require an undefined candle preprocessor variable',
 );
 assert.match(
   nsisHook,
