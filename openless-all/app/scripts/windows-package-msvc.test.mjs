@@ -436,6 +436,21 @@ assert.match(
 assert.match(nsisHook, /Abort/, 'NSIS install should fail if TSF registration fails');
 assert.match(
   nsisHook,
+  /FileWrite \$0[\s\S]*probe_id[\s\S]*P4/,
+  'NSIS should emit a bounded diagnostic marker for installer-stage failures',
+);
+assert.match(
+  nsisHook,
+  /!define OPENLESS_IME_DIAGNOSTIC_FILE "\$TEMP\\openless-ime-install-diagnostic\.ndjson"/,
+  'NSIS diagnostic markers should be written under the installer temp directory',
+);
+assert.match(
+  nsisHook,
+  /stage_x64_begin[\s\S]*stage_x64_complete[\s\S]*stage_x86_begin[\s\S]*stage_x86_complete/,
+  'NSIS should mark both IME staging boundaries in order',
+);
+assert.match(
+  nsisHook,
   /OPENLESS_IME_ABORT_IF_FAILED \$0 "x64 registration"/,
   'NSIS install should fail if x64 TSF registration fails',
 );

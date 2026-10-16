@@ -235,6 +235,15 @@ if ($InstallerKind -eq "nsis") {
           foreach ($candidate in $candidates) {
             Write-Host "[diagnostic] candidate=$($candidate.Name) bytes=$($candidate.Length)"
           }
+          $markers = @(
+            Get-ChildItem -LiteralPath $directory -Filter 'openless-ime-install-diagnostic.ndjson' -File -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+          )
+          foreach ($marker in $markers) {
+            Write-Host "[diagnostic] NSIS stage markers (last 200 lines):"
+            Get-Content -LiteralPath $marker.FullName -Tail 200 | ForEach-Object { Write-Host $_ }
+          }
         }
       }
     }
