@@ -25,6 +25,33 @@ const IME_WINDOW_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const HRESULT_TIMEOUT: u32 = 0x8007_05B4;
 const HRESULT_CANCELLED: u32 = 0x8007_04C7;
 
+#[cfg(target_os = "windows")]
+fn emit_tsf_diagnostic_probe(
+    probe_id: &str,
+    hypothesis_ids: &str,
+    session_id: &str,
+    event: &str,
+    outcome: &str,
+    safe_fields: String,
+) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    log::info!(
+        target: "diagnosing-bugs",
+        "{{\"schema\":\"diagnosing-bugs.v1\",\"session_id\":\"{}\",\"run_id\":\"tsf-runtime-{}\",\"probe_id\":\"{}\",\"hypothesis_ids\":{},\"event\":\"{}\",\"outcome\":\"{}\",\"safe\":{{{}}},\"ts\":{}}}",
+        session_id,
+        std::process::id(),
+        probe_id,
+        hypothesis_ids,
+        event,
+        outcome,
+        safe_fields,
+        ts,
+    );
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowsImeIpcError {
     Unavailable(String),
@@ -294,14 +321,14 @@ mod windows_message {
 
     use super::{
         classify_protocol_probe_reply, classify_query_reply, classify_submit_reply,
-        next_submit_token, select_ime_window_with_probe, ImeSubmitRequest, ImeSubmitTarget,
-        ImeWindow, WindowsImeIpcError, WindowsImeIpcResult, IME_CLIENT_WAIT_TIMEOUT,
-        IME_QUERY_INTERVAL, IME_QUERY_SEND_TIMEOUT_MS, IME_SEND_TIMEOUT_MS, IME_SUBMIT_TIMEOUT,
-        IME_WINDOW_RETRY_INTERVAL,
+        emit_tsf_diagnostic_probe, next_submit_token, select_ime_window_with_probe,
+        ImeSubmitRequest, ImeSubmitTarget, ImeWindow, WindowsImeIpcError, WindowsImeIpcResult,
+        IME_CLIENT_WAIT_TIMEOUT, IME_QUERY_INTERVAL, IME_QUERY_SEND_TIMEOUT_MS,
+        IME_SEND_TIMEOUT_MS, IME_SUBMIT_TIMEOUT, IME_WINDOW_RETRY_INTERVAL,
     };
     use crate::windows_ime_protocol::{
         encode_composition_submit_payload, encode_query_payload, ImeSubmitStatus,
-        IME_COPYDATA_QUERY, IME_COPYDATA_VERSION, IME_MAX_SUBMIT_BYTES,
+        IME_COPYDATA_QUERY, IME_COPYDATA_VERSION, IME_MAX_SUBMIT_BYTES, IME_STATUS_ACCEPTED,
         IME_STATUS_PROTOCOL_VERSION, OPENLESS_IME_MESSAGE_WINDOW_CLASS,
     };
 
@@ -349,6 +376,14 @@ mod windows_message {
     fn verify_protocol_version(hwnd: isize, timeout_ms: u32) -> WindowsImeIpcResult<()> {
         match send_copy_data(hwnd, IME_COPYDATA_VERSION, &[], timeout_ms) {
             Ok(reply) if reply == IME_STATUS_PROTOCOL_VERSION => {
+                emit_tsf_diagnostic_probe(
+                    "P1",
+                    "[\"H1\",\"H2\"]",
+                    "runtime",
+                    "protocol_probe",
+                    "current",
+                    format!("\"raw_status\":\"0x{reply:08X}\""),
+                );
                 log::debug!(
                     "[windows-ime] protocol probe status=current raw_status=0x{:08X}",
                     reply,
@@ -356,18 +391,47 @@ mod windows_message {
                 Ok(())
             }
             Ok(reply) => {
+                emit_tsf_diagnostic_probe(
+                    "P1",
+                    "[\"H1\",\"H2\"]",
+                    "runtime",
+                    "protocol_probe",
+                    "rejected",
+                    format!("\"raw_status\":\"0x{reply:08X}\""),
+                );
                 log::warn!(
                     "[windows-ime] protocol probe status=stale_or_unknown raw_status=0x{:08X}",
                     reply,
                 );
                 classify_protocol_probe_reply(reply)
             }
-            Err(SendFailure::TimedOut) => Err(WindowsImeIpcError::Protocol(
-                "the target process did not answer the OpenLessIme.dll protocol probe".to_string(),
-            )),
-            Err(SendFailure::NotDelivered(code)) => Err(WindowsImeIpcError::Io(format!(
-                "sending the OpenLessIme.dll protocol probe failed: OS error {code}"
-            ))),
+            Err(SendFailure::TimedOut) => {
+                emit_tsf_diagnostic_probe(
+                    "P1",
+                    "[\"H1\",\"H2\"]",
+                    "runtime",
+                    "protocol_probe",
+                    "timeout",
+                    "\"error_class\":\"timeout\"".to_string(),
+                );
+                Err(WindowsImeIpcError::Protocol(
+                    "the target process did not answer the OpenLessIme.dll protocol probe"
+                        .to_string(),
+                ))
+            }
+            Err(SendFailure::NotDelivered(code)) => {
+                emit_tsf_diagnostic_probe(
+                    "P1",
+                    "[\"H1\",\"H2\"]",
+                    "runtime",
+                    "protocol_probe",
+                    "not_delivered",
+                    format!("\"error_code\":{}", code),
+                );
+                Err(WindowsImeIpcError::Io(format!(
+                    "sending the OpenLessIme.dll protocol probe failed: OS error {code}"
+                )))
+            }
         }
     }
 
@@ -437,6 +501,21 @@ mod windows_message {
             request.op.label(),
             reply,
         );
+        emit_tsf_diagnostic_probe(
+            "P3",
+            "[\"H4\"]",
+            &request.session_id,
+            "submit_ack",
+            if reply == IME_STATUS_ACCEPTED {
+                "accepted"
+            } else {
+                "rejected"
+            },
+            format!(
+                "\"op\":\"{}\",\"raw_status\":\"0x{reply:08X}\"",
+                request.op.label()
+            ),
+        );
         classify_submit_reply(reply)?;
 
         let deadline = Instant::now() + IME_SUBMIT_TIMEOUT;
@@ -456,6 +535,26 @@ mod windows_message {
                         reply,
                     );
                     if let Some(status) = classify_query_reply(reply)? {
+                        emit_tsf_diagnostic_probe(
+                            "P3",
+                            "[\"H4\"]",
+                            &request.session_id,
+                            "submit_complete",
+                            match status {
+                                ImeSubmitStatus::Committed => "committed",
+                                ImeSubmitStatus::NotDispatched => "not_dispatched",
+                                ImeSubmitStatus::CompositionConflict => "composition_conflict",
+                                ImeSubmitStatus::CompositionRecoveryRequired => {
+                                    "composition_recovery_required"
+                                }
+                                ImeSubmitStatus::Rejected => "rejected",
+                                ImeSubmitStatus::Failed => "failed",
+                            },
+                            format!(
+                                "\"op\":\"{}\",\"raw_status\":\"0x{reply:08X}\"",
+                                request.op.label()
+                            ),
+                        );
                         log::info!(
                             "[windows-ime] submit complete op={} status={:?}",
                             request.op.label(),
@@ -518,6 +617,21 @@ mod windows_message {
                             error,
                         );
                     }
+                    emit_tsf_diagnostic_probe(
+                        "P2",
+                        "[\"H1\",\"H3\"]",
+                        "runtime",
+                        "ime_candidate_probe",
+                        if result.is_ok() { "accepted" } else { "rejected" },
+                        format!(
+                            "\"candidate_pid\":{},\"candidate_tid\":{},\"target_pid\":{},\"target_tid\":{},\"same_process_fallback\":{}",
+                            window.process_id,
+                            window.thread_id,
+                            target.process_id,
+                            target.thread_id,
+                            allow_same_process_fallback,
+                        ),
+                    );
                     result
                 },
             ) {
