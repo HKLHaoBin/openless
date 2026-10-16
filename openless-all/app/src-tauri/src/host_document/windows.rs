@@ -219,11 +219,19 @@ pub(crate) fn focused_selection_observation(expected: &str) -> FocusedSelectionO
         {
             return Ok(selection_observation(expected, None));
         }
-        let selected = ranges
+        let selected_range = ranges
             .GetElement(0)
-            .and_then(|range| range.GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32))
+            .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let selected = selected_range
+            .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)
             .map_err(|_| "selectionTargetUnavailable".to_string())?
             .to_string();
+        let selected = if selected.trim().is_empty() {
+            selection_range_text(&pattern, &selected_range)
+                .map_err(|_| "selectionTargetUnavailable".to_string())?
+        } else {
+            selected
+        };
         Ok(selection_observation(expected, Some(&selected)))
     })
     .unwrap_or_else(|_| selection_observation(expected, None))
@@ -277,6 +285,17 @@ pub(crate) struct FocusedSelectionAnchor {
     end_offset: i32,
     before: String,
     after: String,
+}
+
+impl FocusedSelectionAnchor {
+    pub(crate) fn matches_anchor(&self, other: &FocusedSelectionAnchor) -> bool {
+        self.runtime_id == other.runtime_id
+            && self.process_id == other.process_id
+            && self.start_offset == other.start_offset
+            && self.end_offset == other.end_offset
+            && selection_context_matches(&self.before, &other.before)
+            && selection_context_matches(&self.after, &other.after)
+    }
 }
 
 #[cfg(test)]
@@ -515,6 +534,12 @@ pub(crate) fn capture_focused_selection_anchor_with_stage(
                 .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)
                 .map_err(|_| "selected_text".to_string())?
                 .to_string();
+            let selected_text = if selected_text.trim().is_empty() {
+                selection_range_text(&pattern, &selected)
+                    .map_err(|_| "selected_text".to_string())?
+            } else {
+                selected_text
+            };
             if selected_text.trim().is_empty() {
                 return Err("empty_selection".to_string());
             }
@@ -566,8 +591,37 @@ pub(crate) fn capture_focused_selection_anchor(expected: &str) -> Option<Focused
     capture_focused_selection_anchor_with_stage(expected).0
 }
 
+pub(crate) fn focused_selection_matches_anchor(
+    anchor: &FocusedSelectionAnchor,
+    expected: &str,
+) -> bool {
+    capture_focused_selection_anchor_with_stage(expected)
+        .0
+        .is_some_and(|current| current.matches_anchor(anchor))
+}
+
 fn selection_context_matches(actual: &str, expected: &str) -> bool {
     normalize_line_endings(actual) == normalize_line_endings(expected)
+}
+
+unsafe fn selection_range_text(
+    pattern: &IUIAutomationTextPattern,
+    selected: &IUIAutomationTextRange,
+) -> Result<String> {
+    let reconstructed = pattern.DocumentRange()?;
+    reconstructed.MoveEndpointByRange(
+        TextPatternRangeEndpoint_Start,
+        selected,
+        TextPatternRangeEndpoint_Start,
+    )?;
+    reconstructed.MoveEndpointByRange(
+        TextPatternRangeEndpoint_End,
+        selected,
+        TextPatternRangeEndpoint_End,
+    )?;
+    Ok(reconstructed
+        .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)?
+        .to_string())
 }
 
 /// Browser editors often collapse a selection when their window loses focus. If the original
@@ -629,6 +683,13 @@ pub(crate) fn restore_focused_selection(
         let current_end_offset =
             selection_endpoint_offset(&pattern, &current, TextPatternRangeEndpoint_End)
                 .map_err(|_| "selectionTargetUnavailable".to_string())?;
+        let current_text =
+            if current_text.trim().is_empty() && current_start_offset < current_end_offset {
+                selection_range_text(&pattern, &current)
+                    .map_err(|_| "selectionTargetUnavailable".to_string())?
+            } else {
+                current_text
+            };
         let selection_matches_anchor = if current_text.trim().is_empty() {
             current_start_offset == current_end_offset
                 && (current_start_offset == anchor.start_offset

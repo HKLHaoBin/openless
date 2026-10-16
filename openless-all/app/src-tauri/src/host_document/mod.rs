@@ -41,10 +41,10 @@ mod windows;
 pub(crate) use windows::{
     capture_focused_selection_anchor, capture_focused_selection_anchor_with_stage,
     capture_focused_selection_position, capture_focused_selection_position_with_stage,
-    focused_selection_observation, focused_selection_status, insert_with_delivery_check,
-    restore_focused_selection, FocusedSelectionAnchor, FocusedSelectionCaptureStage,
-    FocusedSelectionObservation, FocusedSelectionPosition, FocusedSelectionRestoreStatus,
-    FocusedSelectionStatus,
+    focused_selection_matches_anchor, focused_selection_observation, focused_selection_status,
+    insert_with_delivery_check, restore_focused_selection, FocusedSelectionAnchor,
+    FocusedSelectionCaptureStage, FocusedSelectionObservation, FocusedSelectionPosition,
+    FocusedSelectionRestoreStatus, FocusedSelectionStatus,
 };
 
 #[cfg(target_os = "macos")]

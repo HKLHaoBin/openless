@@ -182,6 +182,16 @@ assert.match(
   /selected_text\.trim\(\)\.is_empty\(\)[\s\S]*?return Err\("empty_selection"\.to_string\(\)\)[\s\S]*?selection_observation\(expected, Some\(&selected_text\)\)/,
   'an empty post-copy UIA text result must enter the bounded empty-selection retry path before expected-text matching',
 );
+assert.match(
+  anchorCapture,
+  /selected_text\.trim\(\)\.is_empty\(\)[\s\S]*?selection_range_text\(&pattern, &selected\)/,
+  'an empty selected-range text result must be reconstructed from the exact UIA endpoints before failing closed',
+);
+assert.match(
+  windowsHost,
+  /unsafe fn selection_range_text[\s\S]*?DocumentRange\(\)[\s\S]*?MoveEndpointByRange[\s\S]*?TextPatternRangeEndpoint_Start[\s\S]*?TextPatternRangeEndpoint_End[\s\S]*?GetText/,
+  'UIA range reconstruction must preserve exact document-relative endpoints',
+);
 assert.doesNotMatch(
   anchorCapture,
   /simulate_copy_and_read|post_copy_shortcut|Ctrl\\+C/,
@@ -270,6 +280,18 @@ assert.match(
   /pub\(crate\) struct FocusedSelectionObservation[\s\S]*?newline_normalized_match/,
   'UIA diagnostics must expose only bounded text-shape metadata',
 );
+const focusedSelectionObservation = windowsHost.match(
+  /pub\(crate\) fn focused_selection_observation[\s\S]*?(?=\npub\(crate\) fn focused_selection_status)/,
+)?.[0];
+assert.ok(
+  focusedSelectionObservation,
+  'the focused selection observation helper must exist',
+);
+assert.match(
+  focusedSelectionObservation,
+  /GetText[\s\S]*?selected\.trim\(\)\.is_empty\(\)[\s\S]*?selection_range_text\(/,
+  'focused selection validation must reconstruct empty selected-range text from exact endpoints',
+);
 assert.match(
   selection,
   /preview_uia status=.*expected_chars=.*selected_chars=.*newline_normalized_match=/,
@@ -289,6 +311,11 @@ assert.match(
   restoreSelection,
   /!current_text\.trim\(\)\.is_empty\(\)[\s\S]*?MoveEndpointByUnit[\s\S]*?candidate[\s\S]*?\.Select\(\)/,
   'browser selection restoration must only expand a collapsed UIA caret and select an exact text match',
+);
+assert.match(
+  restoreSelection,
+  /current_text\.trim\(\)\.is_empty\(\)[\s\S]*?current_start_offset < current_end_offset[\s\S]*?selection_range_text\(&pattern, &current\)/,
+  'an empty non-collapsed UIA selection must reconstruct its text before restore validation',
 );
 assert.match(
   restoreSelection,
@@ -329,6 +356,23 @@ assert.match(
   adapters,
   /restore_selection_insertion_target_selection\(target, source_text\)[\s\S]*?validate_selection_insertion_target_for_apply\(/,
   'PreviewConfirm must attempt bounded UIA selection restoration before final validation',
+);
+const windowsPreviewValidation = selection.match(
+  /pub\(crate\) fn validate_selection_insertion_target_for_apply[\s\S]*?(?=\npub\(crate\) fn restore_selection_insertion_target_selection)/,
+)?.[0];
+assert.ok(
+  windowsPreviewValidation,
+  'the PreviewConfirm final validation helper must exist',
+);
+assert.match(
+  windowsPreviewValidation,
+  /focused_selection_observation[\s\S]*?focused_selection_matches_anchor[\s\S]*?SelectionChanged/,
+  'PreviewConfirm final validation must recheck the exact captured UIA anchor after text validation',
+);
+assert.match(
+  windowsHost,
+  /pub\(crate\) fn focused_selection_matches_anchor[\s\S]*?capture_focused_selection_anchor_with_stage[\s\S]*?matches_anchor/,
+  'final PreviewConfirm validation must compare a fresh UIA anchor with the captured identity',
 );
 assert.match(
   adapters,

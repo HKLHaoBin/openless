@@ -857,6 +857,12 @@ pub(crate) fn validate_selection_insertion_target_for_apply(
                 return SelectionInsertionTargetValidation::TargetUnavailable;
             }
         }
+        let Some(anchor) = target.windows_selection_anchor.as_ref() else {
+            return SelectionInsertionTargetValidation::TargetUnavailable;
+        };
+        if !crate::host_document::focused_selection_matches_anchor(anchor, expected_selection) {
+            return SelectionInsertionTargetValidation::SelectionChanged;
+        }
         if !selection_insertion_target_is_current(target) {
             return SelectionInsertionTargetValidation::TargetChanged;
         }
