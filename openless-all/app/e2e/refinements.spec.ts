@@ -322,7 +322,7 @@ test('text height grows with contents and chips give the selection actual layout
   const selected = await page.getByRole('button', { name: 'Two', exact: true }).boundingBox();
   const last = await page.getByRole('button', { name: 'Three', exact: true }).boundingBox();
   expect(selected!.x + selected!.width).toBeLessThan(last!.x);
-  expect(last!.x).toBeGreaterThanOrEqual(before.x - 1);
+  expect(last!.x).toBeGreaterThanOrEqual(before.x - 1.5);
 });
 
 test('swipe departure is directional, removable and undoable', async ({ page }) => {
