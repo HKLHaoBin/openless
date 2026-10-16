@@ -25,7 +25,7 @@ ArkTS / ArkWeb Stage 工程，将 React 前端离线打包进 HAP。
 
 本项目仅走输入法，不接入无障碍扩展。悬浮窗本身不提供跨应用写入能力；不启用输入法时可用复制后手动粘贴作为退路。
 
-## 输入法首版
+## 输入法面板
 
 `OpenLessInputMethod` 是系统输入法扩展，`pages/InputMethodPanel` 是原生 ArkUI 键盘面板，不经过主设置页的 WebView。已通过 Node-API 接入与 Android 共用的 librime 1.17.0，支持离线拼音、候选词、翻页、空格确认、中英文切换、数字与标点、编码退格及系统输入框删除。没有引入 Fcitx5，也不使用无障碍。
 
@@ -72,3 +72,5 @@ HAP 位于 `harmony/openless-project/entry/build/default/outputs/default/`。
 设备运行时数据位于应用 `filesDir/openless`，运行时缓存位于 `cacheDir/openless`；电脑上的统一目录用于开发构建缓存。
 WebView 通过同步 request/takeResult 传递请求票据，ArkTS 异步执行系统操作，Rust 命令通过 Node-API async work 在后台执行。避免直接将 Promise 从 JavaScript Proxy 返回导致不同 WebView 版本错误解析。
 麦克风音量通过本机 WebView 自定义事件返回，关闭列表后释放采集器。API 24 上输入设备切换遵循系统路由，无法强制切换不在当前路由上的麦克风。
+
+面板按常规小艺键盘的结构整理：浅灰键盘底、白色圆角键帽和蓝色回车键，候选栏支持展开及翻页，数字九宫格与符号页独立，支持长按数字/标点、长按删除、单次大写及大写锁定、中英文切换与长按系统输入法切换。表情和工具页均接到实际操作；语音保留录音、结束、预览确认和取消。颜色通过 ArkUI 深浅色资源跟随系统，不改主应用设置布局。新界面已通过 ArkTS 编译与 HAP 签名，仍需连接设备验收触摸与布局。

@@ -41,7 +41,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private enum class EnglishLayer { LETTERS, NUMBERS, SYMBOLS }
     // The English QWERTY panel's letter-input semantics — ENGLISH commits
     // each letter immediately (see commitEnglishChar()), PINYIN instead
-    // routes letters into LitePinyinController's own encoding buffer and
+    // routes letters into RimePinyinController's own encoding buffer and
     // only ever commits a chosen candidate. Long-press space toggles this
     // (see buildKeyboardView()'s spaceButton); the panel/View tree itself
     // is never rebuilt into a second layout for PINYIN — see
@@ -248,7 +248,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     // TO, not the current one — i.e. it reads "拼音" while latinInputMode
     // is ENGLISH, and "英文" while it's PINYIN.
     private var latinInputMode = LatinInputMode.ENGLISH
-    private val litePinyinController by lazy { RimePinyinController(this) }
+    private val rimePinyinController by lazy { RimePinyinController(this) }
     // The word currently being typed on the English keyboard — appended to
     // per letter, trimmed per backspace, cleared at every word boundary
     // (space/return/punctuation/candidate tap/mode or panel switch). Never
@@ -563,7 +563,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun toggleLatinInputMode() {
         englishComposingWord.clear()
         englishCandidateQueryEpoch++
-        litePinyinController.clear()
+        rimePinyinController.clear()
         latinInputMode = latinInputMode.toggled()
         saveLatinInputMode(latinInputMode)
         refreshLatinCandidateBar()
@@ -581,7 +581,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      */
     private fun refreshLatinCandidateBar() {
         if (latinInputMode == LatinInputMode.PINYIN) {
-            litePinyinController.refresh { renderPinyinCandidates(it) }
+            rimePinyinController.refresh { renderPinyinCandidates(it) }
             englishCandidateBarContainer?.visibility = View.VISIBLE
         } else {
             updateEnglishCandidates()
@@ -644,7 +644,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         stopRuntimeService()
         strokeController.shutdown()
         if (englishCandidateProviderLazy.isInitialized()) englishCandidateProviderLazy.value.shutdown()
-        litePinyinController.shutdown()
+        rimePinyinController.shutdown()
         // Marks this as a clean end-of-session for
         // OpenLessApplication.recordUncleanShutdownIfAny() — an abrupt
         // process kill (native crash, OOM) never reaches this line, which
@@ -1402,8 +1402,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         englishLayer = EnglishLayer.LETTERS
         englishComposingWord.clear()
         englishCandidateQueryEpoch++
-        litePinyinController.clear()
-        litePinyinController.resetAssociationContext()
+        rimePinyinController.clear()
+        rimePinyinController.resetAssociationContext()
         strokeController.resetForModeSwitch()
         clipboardSelectionMode = false
         clipboardSelectionAnchor = -1
@@ -1553,11 +1553,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // this row's actual (tighter than assumed) real height.
         val spaceButton = keyboardKey("Space", 5f, action = {
             if (latinInputMode == LatinInputMode.PINYIN) {
-                litePinyinController.space { renderPinyinCandidates(it) }
+                rimePinyinController.space { renderPinyinCandidates(it) }
                 return@keyboardKey
             }
             finalizeEnglishComposingWord()
-            litePinyinController.clear()
+            rimePinyinController.clear()
             currentInputConnection?.commitText(" ", 1)
         }, longPressAction = { toggleLatinInputMode() }).apply {
             // Same size as Return (17sp — keyboardKey()'s own special case
@@ -1697,7 +1697,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     /** Backspace on the English keyboard: same field edit as everywhere else, plus keeping englishComposingWord (and therefore the candidate bar) in sync. In Pinyin mode, deletes from the (never-committed) encoding instead — falls back to the normal field edit only once the encoding is already empty (plan 3.3: "编码为空时 Backspace 恢复现有普通删除"). */
     private fun englishDeleteBackward() {
         if (latinInputMode == LatinInputMode.PINYIN) {
-            litePinyinController.backspace({ renderPinyinCandidates(it) }, { deleteBackward() })
+            rimePinyinController.backspace({ renderPinyinCandidates(it) }, { deleteBackward() })
             return
         }
         deleteBackward()
@@ -3012,15 +3012,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             if (char.length == 1 && char[0].isLetter()) {
                 // Never calls commitText() — a letter only feeds the
                 // encoding buffer in Pinyin mode; see
-                // LitePinyinController's own doc comment.
-                litePinyinController.appendLetter(char[0]) { renderPinyinCandidates(it) }
+                // RimePinyinController's own doc comment.
+                rimePinyinController.appendLetter(char[0]) { renderPinyinCandidates(it) }
                 if (shiftState == ShiftState.SHIFT_ONCE) {
                     shiftState = ShiftState.OFF
                     refreshInputView()
                 }
                 return
             }
-            litePinyinController.insertLiteral(char) { renderPinyinCandidates(it) }
+            rimePinyinController.insertLiteral(char) { renderPinyinCandidates(it) }
             return
         }
         if (currentInputConnection?.commitText(char, 1) != true) return
@@ -3215,7 +3215,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     /**
-     * Renders LitePinyinController's own candidate callback into the same
+     * Renders RimePinyinController's own candidate callback into the same
      * candidateItemView()/englishCandidateRow the English candidates use
      * (plan 5.3's Option B — see docs/pinyin-lite/phase-0-audit.md section
      * 4) — a non-clickable encoding label ("guo") is prepended when there's
@@ -3225,7 +3225,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun renderPinyinCandidates(candidates: List<String>) {
         val row = englishCandidateRow ?: return
         row.removeAllViews()
-        val encoding = litePinyinController.currentEncoding()
+        val encoding = rimePinyinController.currentEncoding()
         if (encoding.isNotEmpty()) {
             val label = TextView(this).apply {
                 text = encoding
@@ -3259,7 +3259,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     /** Candidate tap is the ONLY way a pinyin candidate reaches the field — see toggleLatinInputMode()'s doc comment on why Space deliberately never does this. */
     private fun selectPinyinCandidate(char: String) {
         if (ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) return
-        litePinyinController.selectCandidate(char) { renderPinyinCandidates(it) }
+        rimePinyinController.selectCandidate(char) { renderPinyinCandidates(it) }
     }
 
     /**
@@ -3276,13 +3276,13 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             renderPinyinAssociations(emptyList())
             return
         }
-        litePinyinController.queryAssociations(strokeController.phraseRepository) { results ->
+        rimePinyinController.queryAssociations(strokeController.phraseRepository) { results ->
             // isEmpty(): guards against the case where the user already
             // started typing a fresh encoding by the time this async result
             // lands — associationEpoch alone only protects against a STALE
             // association query, not against a completely different
             // encoding query having taken over the candidate row since.
-            if (latinInputMode == LatinInputMode.PINYIN && litePinyinController.isEmpty()) renderPinyinAssociations(results)
+            if (latinInputMode == LatinInputMode.PINYIN && rimePinyinController.isEmpty()) renderPinyinAssociations(results)
         }
     }
 
@@ -3323,7 +3323,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(this)) {
             strokeController.phraseRepository.recordUsage(candidate.matchedPrefix, candidate.text)
         }
-        litePinyinController.recordCommittedText(suffix)
+        rimePinyinController.recordCommittedText(suffix)
         performKeyHaptic()
         refreshPinyinAssociations()
     }
@@ -3348,7 +3348,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     internal fun sendEnterKey() {
         if (inputMode == InputMode.ENGLISH && latinInputMode == LatinInputMode.PINYIN &&
             !ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) {
-            litePinyinController.confirmFirst({ renderPinyinCandidates(it) }, { sendEditorEnterKey() })
+            rimePinyinController.confirmFirst({ renderPinyinCandidates(it) }, { sendEditorEnterKey() })
             return
         }
         sendEditorEnterKey()
@@ -3376,13 +3376,13 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         englishLayer = EnglishLayer.LETTERS
         englishComposingWord.clear()
         englishCandidateQueryEpoch++
-        litePinyinController.clear()
-        litePinyinController.resetAssociationContext()
-        litePinyinController.setLearningAllowed(personalizedLearningAllowed())
-        litePinyinController.bindCommit { text ->
+        rimePinyinController.clear()
+        rimePinyinController.resetAssociationContext()
+        rimePinyinController.setLearningAllowed(personalizedLearningAllowed())
+        rimePinyinController.bindCommit { text ->
             if (ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) false
             else if (currentInputConnection?.commitText(text, 1) == true) {
-                litePinyinController.recordCommittedText(text)
+                rimePinyinController.recordCommittedText(text)
                 performKeyHaptic()
                 true
             } else false
@@ -3430,8 +3430,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         cancelImeSession()
         englishCandidateQueryEpoch++
         englishComposingWord.clear()
-        litePinyinController.clear()
-        litePinyinController.resetAssociationContext()
+        rimePinyinController.clear()
+        rimePinyinController.resetAssociationContext()
         strokeController.resetForNewInputSession()
         if (recording) {
             cancelImeSession()

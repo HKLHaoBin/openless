@@ -160,8 +160,9 @@ class InputSession {
       }
       if (operation === 'space' && !this.encoding) { await client.insertText(' '); return; }
       if (!this.rimeSession) throw new Error('中文引擎未就绪');
-      const key = operation === 'backspace' ? '65288' : operation === 'space' ? '32' : argument;
-      let state = await rimeRequest(operation === 'backspace' || operation === 'space' ? 'key' : operation === 'literal' ? 'confirm' : operation, this.rimeSession, key);
+      const delimiter = operation === 'literal' && argument === "'" && this.encoding.length > 0;
+      const key = delimiter ? '39' : operation === 'backspace' ? '65288' : operation === 'space' ? '32' : argument;
+      let state = await rimeRequest(operation === 'backspace' || operation === 'space' ? 'key' : delimiter ? 'key' : operation === 'literal' ? 'confirm' : operation, this.rimeSession, key);
       if (generation !== this.generation || client !== this.client) return;
       if (state.commit) {
         this.publish(state);
@@ -169,7 +170,7 @@ class InputSession {
         if (generation !== this.generation) return;
         state = await rimeRequest('ack', this.rimeSession);
       }
-      if (operation === 'literal' && argument) await client.insertText(argument);
+      if (operation === 'literal' && !delimiter && argument) await client.insertText(argument);
       this.publish(state);
     }).catch((error: Error) => { if (generation === this.generation) imeStorage.setOrCreate('status', error.message); });
   }

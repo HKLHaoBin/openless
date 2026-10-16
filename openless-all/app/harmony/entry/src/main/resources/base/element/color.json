@@ -3,6 +3,30 @@
     {
       "name": "start_window_background",
       "value": "#FFFFFF"
+    },
+    {
+      "name": "ime_panel_background",
+      "value": "#ECEEF1"
+    },
+    {
+      "name": "ime_key_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "ime_function_background",
+      "value": "#DDE1E6"
+    },
+    {
+      "name": "ime_foreground",
+      "value": "#20242B"
+    },
+    {
+      "name": "ime_secondary",
+      "value": "#727982"
+    },
+    {
+      "name": "ime_accent",
+      "value": "#0A59F7"
     }
   ]
 }

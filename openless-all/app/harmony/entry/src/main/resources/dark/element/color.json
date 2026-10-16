@@ -1,0 +1,28 @@
+{
+  "color": [
+    {
+      "name": "ime_panel_background",
+      "value": "#17191D"
+    },
+    {
+      "name": "ime_key_background",
+      "value": "#34373D"
+    },
+    {
+      "name": "ime_function_background",
+      "value": "#272A30"
+    },
+    {
+      "name": "ime_foreground",
+      "value": "#F1F3F6"
+    },
+    {
+      "name": "ime_secondary",
+      "value": "#A6ADB8"
+    },
+    {
+      "name": "ime_accent",
+      "value": "#0A59F7"
+    }
+  ]
+}

@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  rmSync,
   readFileSync,
   statSync,
   writeFileSync,
@@ -66,12 +67,9 @@ const KOTLIN_FILES = [
   'ImePrivacyPolicy.kt',
   'StrokeInputController.kt',
   'StrokeInput.kt',
-  'LitePinyinController.kt',
   'OpenLessRime.kt',
   'RimePinyinController.kt',
-  'LitePinyinRepository.kt',
-  'LitePinyinUserFrequency.kt',
-  'LitePinyinLearnedPhrases.kt',
+  'LegacyPinyinBackup.kt',
   'OpenLessSettingsExport.kt',
   'StrokePhraseRepository.kt',
   'StrokeUserFrequency.kt',
@@ -401,6 +399,29 @@ function main() {
   copyDirectoryContents(androidIconRoot, resDest, dryRun);
   if (existsSync(androidAssetsRoot)) {
     copyDirectoryContents(androidAssetsRoot, assetsDest, dryRun);
+  }
+  // Generated projects survive upgrades. Retire only known obsolete files so
+  // an incremental build cannot keep packaging the removed pinyin engine.
+  for (const name of [
+    'LitePinyinController.kt',
+    'LitePinyinRepository.kt',
+    'LitePinyinUserFrequency.kt',
+    'LitePinyinLearnedPhrases.kt',
+  ]) {
+    const path = join(kotlinDest, name);
+    if (dryRun) console.log(`[dry-run] Would remove retired source ${path}`);
+    else rmSync(path, { force: true });
+  }
+  for (const name of [
+    'pinyin_chars.tsv',
+    'pinyin_phrases.tsv',
+    'pinyin_chars.LICENSE.txt',
+    'pinyin_phrases.LICENSE.txt',
+    'pinyin_dictionary_meta.json',
+  ]) {
+    const path = join(assetsDest, name);
+    if (dryRun) console.log(`[dry-run] Would remove retired asset ${path}`);
+    else rmSync(path, { force: true });
   }
   copyNamedFiles(KOTLIN_FILES, kotlinRoot, kotlinDest, dryRun);
   ensureMainActivityOpen(dryRun);

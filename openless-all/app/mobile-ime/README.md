@@ -19,7 +19,7 @@ Android 支持 `--abi arm64-v8a|armeabi-v7a|x86|x86_64`。`--stage` 将对应 AB
 
 鸿蒙签名包和真机自检已通过；Android arm64 Release APK 已构建，x86_64 的真实 JNI、词库及 Android 控制器通过 CI 模拟器测试。Android 实机手感、其余 ABI 和旧学习词库迁移尚待验证。
 
-当前使用官方 `pinyin_simp` 方案，保留上游版权和资源许可。它不是 Linux 所有 Rime 方案与自定义词库的完整替代；更多方案、用户词库迁移和键盘体验需要逐步完善。
+当前基于官方 `pinyin_simp` 方案和词库，保留上游版权和资源许可。它不是 Linux 所有 Rime 方案与自定义词库的完整替代；更多方案、用户词库迁移和键盘体验需要逐步完善。
 
 Android 保留现有键盘布局和候选展开列表。后端通过 `candidates` 返回原生顺序的前 64 个候选，通过 `select_absolute` 按绝对索引及版本选择；鸿蒙现有的分页 `select` 接口继续按当前页索引工作。只读 `state` / `candidates` 不增加候选版本，避免后台刷新使可见候选失效。候选展开有数量上限；不代表穷举词库或增加词条。
 
@@ -28,3 +28,7 @@ Android 的空格、删除、回车与字母在同一个串行队列中执行，
 普通输入框使用共同的 `openless_pinyin_learning` 方案：启用 Rime 原生用户词典、组句和补全，沿用 `rime-user/pinyin_simp.userdb`，保留此前 Android 已学到的数据。鸿蒙普通输入框也使用该方案。选词调频和从分段选词学习新词均由 Rime 完成，宿主不另存完整输入历史或上传按键。会话销毁时由 Rime 提交用户词典事务，下一会话继续使用。当前未打包语法模型，因此不启用依赖该模型的上下文重新排序，也不声称已达到商业输入法的语境预测能力。
 
 Android 继续遵守 `IME_FLAG_NO_PERSONALIZED_LEARNING` 和密码字段策略；不学习的会话使用独立 `openless_pinyin_private` 方案，既不训练也不读取个人词典。鸿蒙密码框不创建中文会话；普通字段的本地学习在获取系统输入框属性后才启用，自检始终使用私密会话。共享资源目录升级为 `learning-v2`，避免已安装应用因旧资源缓存而漏装学习方案；个人词典目录保持原位。
+
+旧 Android LitePinyin 算法及内置 TSV 已删除；旧备份格式只保留一个不参与输入的兼容适配器。
+
+可评估的上游扩展（当前未启用）：[librime-predict](https://github.com/rime/librime-predict) 提供下一个词预测，需额外预测数据；[librime-lua](https://github.com/hchunhui/librime-lua) 用于复用成熟方案脚本；[librime-octagram](https://github.com/lotem/librime-octagram) 及其模型可用于语法加权。扩展与数据需分别验证 OHOS / Android 构建、版本兼容及安装体积，不自行实现平行算法。当前个人学习直接使用 librime 原生用户词典。

@@ -46,7 +46,7 @@ Manifest 合并脚本：
 
 `npm run tauri:android:build` 会在 Tauri 构建之前按目标 ABI 编译 Rime、生成 JNI 库并复制离线词库到生成的 Android 工程。需要 `ANDROID_NDK_HOME`；缓存默认 `/data-win/openless-cache/mobile-rime`。单独验证 arm64 引擎：`python3 scripts/build-mobile-rime.py android --ndk /path/to/ndk`。直接 Gradle 构建前需带 `--stage` 执行该脚本。
 
-旧 `LitePinyin*` 源码和词库暂时保留，当前拼音入口不再调用它们；旧个人选词频率与简拼学习文件没有删除，也尚未导入 Rime 用户词典。迁移及 Android APK 真机验收仍需完成，不能将 JNI 编译成功视为完整 APK 已验证。
+旧 `LitePinyin*` 查询、排序、学习算法和旧内置拼音 TSV 已移除；构建脚本会清除生成工程中的同名遗留文件。`LegacyPinyinBackup` 仅保留旧导入/导出格式兼容，不参与候选或训练。当前学习与个人词典由 Rime 原生实现，沿用持久目录中的 `pinyin_simp.userdb`；普通输入框启用学习，私密字段使用不读取个人词典的独立方案。
 
 ## 前端（`android/frontend/`，别名 `@android`）
 
