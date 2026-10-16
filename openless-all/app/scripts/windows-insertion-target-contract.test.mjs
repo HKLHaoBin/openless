@@ -86,13 +86,23 @@ assert.match(
 );
 assert.match(
   selectionAnchorRefresh,
-  /windows_selection_position\.is_none\(\)[\s\S]*?selection_insertion_target_is_current\(target\)[\s\S]*?capture_focused_selection_position_with_stage\(\)[\s\S]*?windows_selection_position_stage = stage\.as_str\(\)[\s\S]*?windows_selection_position = Some\(position\)[\s\S]*?capture_focused_selection_anchor_with_stage\(&selection\.text\)/,
-  'after clipboard capture, a missing pre-copy position may be reacquired only through a fenced UIA read before exact anchor matching',
+  /let should_reacquire_position = target[\s\S]*?windows_selection_position[\s\S]*?map_or\(true, \|position\| position\.is_provisional_empty_text\(\)\);[\s\S]*?if should_reacquire_position[\s\S]*?selection_insertion_target_is_current\(target\)[\s\S]*?capture_focused_selection_position_with_stage\(\)[\s\S]*?windows_selection_position_stage = stage\.as_str\(\)[\s\S]*?windows_selection_position = Some\(position\)[\s\S]*?capture_focused_selection_anchor_with_stage\(&selection\.text\)/,
+  'after clipboard capture, a missing or provisional pre-copy position may be reacquired only through a fenced UIA read before exact anchor matching',
 );
 assert.match(
   selectionAnchorRefresh,
-  /windows_selection_position\.is_none\(\)[\s\S]*?target_changed_before_position[\s\S]*?capture_focused_selection_position_with_stage\(\)/,
+  /let should_reacquire_position = target[\s\S]*?windows_selection_position[\s\S]*?map_or\(true, \|position\| position\.is_provisional_empty_text\(\)\);[\s\S]*?if should_reacquire_position[\s\S]*?capture_focused_selection_position_with_stage\(\)[\s\S]*?windows_selection_position = Some\(position\)/,
+  'a provisional empty-text position must be reacquired after clipboard capture instead of being treated as a final anchor candidate',
+);
+assert.match(
+  selectionAnchorRefresh,
+  /if should_reacquire_position[\s\S]*?selection_insertion_target_is_current\(target\)[\s\S]*?return "target_changed_before_position"[\s\S]*?capture_focused_selection_position_with_stage\(\)/,
   'position reacquisition must fail closed when the original target changed before the UIA read',
+);
+assert.match(
+  selectionAnchorRefresh,
+  /let previous_position = target\.windows_selection_position\.clone\(\)[\s\S]*?previous_position\.matches_position\(&position\)[\s\S]*?return "position_changed_before_anchor"/,
+  'a provisional position may only be reacquired when its exact runtime, process, and offset identity is unchanged',
 );
 assert.match(
   selectionAnchorRefresh,
@@ -132,6 +142,30 @@ assert.match(
   /for attempt in 0\.\.FOCUSED_SELECTION_POSITION_ATTEMPTS[\s\S]*?EmptySelection[\s\S]*?Duration::from_millis/,
   'empty UIA selections must use only a bounded pre-copy retry budget',
 );
+const anchorCapture = windowsHost.match(
+  /pub\(crate\) fn capture_focused_selection_anchor_with_stage[\s\S]*?(?=\npub\(crate\) fn capture_focused_selection_anchor\()/,
+)?.[0];
+assert.ok(anchorCapture, 'the post-copy UIA anchor capture helper must exist');
+assert.match(
+  anchorCapture,
+  /for attempt in 0\.\.FOCUSED_SELECTION_ANCHOR_ATTEMPTS[\s\S]*?EmptySelection[\s\S]*?Duration::from_millis/,
+  'transient empty UIA anchors must use only a bounded post-copy retry budget',
+);
+assert.match(
+  anchorCapture,
+  /selected_text\.trim\(\)\.is_empty\(\)[\s\S]*?return Err\("empty_selection"\.to_string\(\)\)[\s\S]*?selection_observation\(expected, Some\(&selected_text\)\)/,
+  'an empty post-copy UIA text result must enter the bounded empty-selection retry path before expected-text matching',
+);
+assert.doesNotMatch(
+  anchorCapture,
+  /simulate_copy_and_read|post_copy_shortcut|Ctrl\\+C/,
+  'post-copy UIA retries must not touch the clipboard or synthesize input',
+);
+assert.match(
+  positionCapture,
+  /let mut provisional_position[\s\S]*?PositionChanged[\s\S]*?matches_position\(current\)[\s\S]*?return \(None, FocusedSelectionCaptureStage::PositionChanged\)/,
+  'pre-copy retries must fail closed when a later UIA position changes the provisional identity',
+);
 assert.doesNotMatch(
   positionCapture,
   /simulate_copy_and_read|post_copy_shortcut|Ctrl\\+C/,
@@ -159,7 +193,7 @@ assert.match(
 );
 assert.match(
   windowsHost,
-  /FocusedSelectionCaptureStage[\s\S]*?focused_element_unavailable[\s\S]*?selection_not_single[\s\S]*?runtime_id_unavailable[\s\S]*?context_after_unavailable/,
+  /FocusedSelectionCaptureStage[\s\S]*?focused_element_unavailable[\s\S]*?selection_not_single[\s\S]*?runtime_id_unavailable[\s\S]*?context_after_unavailable[\s\S]*?position_changed/,
   'UIA anchor diagnostics must distinguish metadata-only failure stages',
 );
 assert.match(

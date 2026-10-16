@@ -253,16 +253,32 @@ fn refresh_selection_insertion_target_anchor(
         if selection.omits_middle || selection.text.trim().is_empty() {
             return "selection_empty_or_truncated";
         }
-        if target.windows_selection_position.is_none() {
+        let should_reacquire_position = target
+            .windows_selection_position
+            .as_ref()
+            .map_or(true, |position| position.is_provisional_empty_text());
+        if should_reacquire_position {
+            let previous_position = target.windows_selection_position.clone();
             if !selection_insertion_target_is_current(target) {
                 return "target_changed_before_position";
             }
             let (position, stage) =
                 crate::host_document::capture_focused_selection_position_with_stage();
             target.windows_selection_position_stage = stage.as_str();
+            log::info!(
+                "[selection-polish] event=preview_position_reacquire capture_id={} result_stage={} position_captured={}",
+                target.capture_id(),
+                stage.as_str(),
+                position.is_some(),
+            );
             let Some(position) = position else {
                 return stage.as_str();
             };
+            if let Some(previous_position) = previous_position.as_ref() {
+                if !previous_position.matches_position(&position) {
+                    return "position_changed_before_anchor";
+                }
+            }
             target.windows_selection_position = Some(position);
         }
         let Some(position) = target.windows_selection_position.as_ref() else {
