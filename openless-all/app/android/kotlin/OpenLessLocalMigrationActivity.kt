@@ -642,6 +642,7 @@ class OpenLessLocalMigrationActivity : Activity() {
                     mapOf(
                         "conflictCount" to (preview.optJSONArray("conflicts")?.length() ?: 0),
                         "observedGenerationPresent" to preview.optString("observedGeneration").isNotBlank(),
+                        "observedGeneration" to preview.optString("observedGeneration").toLongOrNull(),
                     ),
                 )
                 preview
@@ -784,6 +785,7 @@ class OpenLessLocalMigrationActivity : Activity() {
                                     "mode" to mode,
                                     "choicesCount" to choices.length(),
                                     "expectedGenerationPresent" to expectedGeneration.isNotBlank(),
+                                    "expectedGeneration" to expectedGeneration.toLongOrNull(),
                                 ),
                             )
                             org.json.JSONObject(
