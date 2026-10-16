@@ -1623,7 +1623,10 @@ async fn launch_at_login_is_excluded_and_preserves_the_receivers_local_setting()
     fixture
         .repo
         .preferences
-        .update(|prefs| prefs.launch_at_login = true)
+        .update(|prefs| {
+            prefs.launch_at_login = true;
+            prefs.testing_features_enabled = true;
+        })
         .unwrap();
     let before = fixture
         .store
@@ -1632,6 +1635,7 @@ async fn launch_at_login_is_excluded_and_preserves_the_receivers_local_setting()
         .unwrap();
     let encoded = serde_json::to_string(before.documents.documents()).unwrap();
     assert!(!encoded.contains("launchAtLogin"));
+    assert!(!encoded.contains("testingFeaturesEnabled"));
     let mut desired = before.documents.documents().clone();
     set_doc(
         &mut desired,
@@ -1645,6 +1649,7 @@ async fn launch_at_login_is_excluded_and_preserves_the_receivers_local_setting()
         .await
         .unwrap();
     assert!(fixture.repo.preferences.get().launch_at_login);
+    assert!(fixture.repo.preferences.get().testing_features_enabled);
     assert!(
         fixture
             .effects

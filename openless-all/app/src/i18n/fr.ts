@@ -1,6 +1,11 @@
 import type { zhCN } from './zh-CN';
 
+import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+
 export const fr: typeof zhCN = {
+  experimentalAsr,
+  uiRefinement,
   voiceEdit: {
     title: 'Session de modification vocale',
     description:
@@ -1279,6 +1284,13 @@ export const fr: typeof zhCN = {
     cancelledTitle: 'Enregistrement annulé',
   },
   settings: {
+    testingFeatures: {
+      title: 'Fonctionnalités en cours de test',
+      enable: 'Activer les fonctionnalités en cours de test',
+      description:
+        'Afficher Less Computer et la console Claude pour les configurer et les utiliser sur les plateformes compatibles. La désactivation arrête les tâches en cours et masque les entrées tout en conservant vos réglages. Ce choix ne concerne que cet appareil.',
+      unavailable: 'Aucune fonctionnalité de test n’est encore disponible sur cette plateforme.',
+    },
     selectionWorkspace: {
       title: 'Assistant de sélection',
       hint: 'Sélectionnez du texte, puis utilisez un seul raccourci : amélioration directe sans édition vocale ; sinon, maintenez et parlez, puis choisissez Question ou Modification.',
@@ -1784,6 +1796,9 @@ export const fr: typeof zhCN = {
         asrSherpaOnnxLocal: 'sherpa-onnx local (expérimental)',
         asrFoundryLocalWhisper: 'Whisper local (Foundry Local)',
         asrLocalWhisper: 'Whisper local (par lots)',
+        asrExperimentalSenseVoice: experimentalAsr.senseVoiceLabel,
+        asrExperimentalGemma: experimentalAsr.gemmaLabel,
+        asrExperimentalTextStream: experimentalAsr.textStreamLabel,
         asrLocalQwen3: 'Qwen3-ASR local',
         asrLocalQwen3Mlx: 'Qwen3-ASR local (MLX / Metal)',
         asrLocalQwen3C: 'Qwen3-ASR local (C / CPU)',
@@ -2459,7 +2474,12 @@ export const fr: typeof zhCN = {
     noResults: 'Aucune catégorie correspondante. Essayez « microphone », « modèles » ou « thème ».',
     autoSaveHint: 'Les modifications sont enregistrées automatiquement',
     backToAdvanced: 'Retour à Expériences et extensions',
+    backToTestingFeatures: 'Retour aux fonctionnalités en cours de test',
     advancedPages: {
+      customSyncServer:
+        'Pour les services auto-hébergés uniquement ; la synchronisation officielle ne nécessite aucune configuration.',
+      localModels: experimentalAsr.description,
+      testingFeatures: 'Activer à la demande les fonctionnalités encore en test.',
       vocabularyLearning:
         'Apprendre des corrections manuelles ; régler l’observation, la confirmation et la longueur.',
       lessComputer:
@@ -2480,7 +2500,8 @@ export const fr: typeof zhCN = {
         'Réglez le thème, la disposition et la langue de l’interface pour une lecture confortable.',
       privacy:
         'Vérifiez les autorisations et les connexions. Gérez l’historique, les enregistrements et les données locales.',
-      advanced: 'Configurez Less Computer et le débogage selon vos besoins.',
+      advanced:
+        'Configurer les fonctions de test, l’apprentissage du vocabulaire et les outils de débogage.',
       about: 'Consultez votre version, le canal et les réglages de mise à jour automatique.',
     },
     searchKeywords: {
@@ -2631,7 +2652,10 @@ export const fr: typeof zhCN = {
     foundryError: 'État de Foundry',
     foundrySetDefault: 'Définir par défaut / Activer l’ASR local Windows',
     foundryEnabling: 'Activation…',
-    foundryPrepare: 'Préparer / Télécharger / Charger',
+    foundryPrepare: 'Télécharger / vérifier le modèle',
+    runtimeDownloadRestart:
+      'Le téléchargement a utilisé des composants natifs. Redémarrez OpenLess avant d’activer le modèle ; il ne sera pas activé automatiquement. Redémarrer maintenant ?',
+    restartNow: 'Redémarrer maintenant',
     foundryPreparing: 'Préparation…',
     foundryReleasing: 'Libération…',
     foundryRetryPrepare: 'Continuer / Réessayer la préparation',
