@@ -71,6 +71,11 @@ assert.equal(smokeTooling.with['sparse-checkout'], 'openless-all/app/scripts/win
 assert.equal(smokeTooling.with['persist-credentials'], false);
 const smoke = steps.find((s) => s.name === 'Verify Windows installers register TSF IME');
 assert.match(smoke.run, /-File \$smokeScript/);
+assert.match(
+  smoke.run,
+  /-InstallerLogPath \$nsisLog/,
+  'Windows smoke should collect the NSIS installer log when silent install fails',
+);
 assert.ok(steps.indexOf(smokeTooling) < steps.indexOf(smoke));
 assert.equal(smoke.if, "matrix.platform == 'windows-latest'");
 assert.match(smoke.run, /DisableAutomaticApplicationShutdown/);
@@ -83,6 +88,9 @@ for (const kind of ['nsis', 'msi']) {
 }
 assert.doesNotMatch(smoke.run, /continue-on-error|SkipUninstall|exit 0/);
 const smokeSource = readFileSync(new URL('windows-ime-install-smoke.ps1', import.meta.url), 'utf8');
+assert.match(smokeSource, /\[string\]\$InstallerLogPath/);
+assert.match(smokeSource, /\/LOG=\$InstallerLogPath/);
+assert.match(smokeSource, /Get-Content -LiteralPath \$InstallerLogPath -Tail 200/);
 assert.match(smokeSource, /\[int\[\]\]\$SuccessExitCodes = @\(0\)/);
 assert.match(smokeSource, /\$process.ExitCode -notin \$SuccessExitCodes/);
 assert.match(smokeSource, /-Label "MSI install" -SuccessExitCodes @\(0, 3010\)/);

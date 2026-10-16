@@ -456,7 +456,8 @@ jobs:
             New-ItemProperty -LiteralPath $policy -Name $policyName -PropertyType DWord -Value 1 -Force | Out-Null
             $nsis = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" -ErrorAction Stop | Select-Object -First 1
             if (-not $nsis) { throw "NSIS installer not found." }
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smokeScript -InstallerPath $nsis.FullName -InstallerKind nsis
+            $nsisLog = Join-Path $env:RUNNER_TEMP 'openless-nsis-install.log'
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File $smokeScript -InstallerPath $nsis.FullName -InstallerKind nsis -InstallerLogPath $nsisLog
             if ($LASTEXITCODE -ne 0) {
               throw "NSIS installer smoke failed with exit $LASTEXITCODE"
             }

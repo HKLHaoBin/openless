@@ -4,7 +4,8 @@ param(
   [Parameter(Mandatory = $true)]
   [ValidateSet("nsis", "msi")]
   [string]$InstallerKind,
-  [switch]$SkipUninstall
+  [switch]$SkipUninstall,
+  [string]$InstallerLogPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -195,7 +196,20 @@ if (-not (Test-IsAdministrator)) {
 
 $InstallerPath = (Resolve-Path -LiteralPath $InstallerPath).Path
 if ($InstallerKind -eq "nsis") {
-  Invoke-CheckedProcess -FilePath $InstallerPath -ArgumentList @("/S", "/AllUsers") -Label "NSIS install"
+  $nsisArguments = @("/S", "/AllUsers")
+  if (-not [string]::IsNullOrWhiteSpace($InstallerLogPath)) {
+    $nsisArguments += "/LOG=$InstallerLogPath"
+  }
+  try {
+    Invoke-CheckedProcess -FilePath $InstallerPath -ArgumentList $nsisArguments -Label "NSIS install"
+  } catch {
+    if (-not [string]::IsNullOrWhiteSpace($InstallerLogPath) -and
+        (Test-Path -LiteralPath $InstallerLogPath -PathType Leaf)) {
+      Write-Host "[diagnostic] NSIS installer log (last 200 lines):"
+      Get-Content -LiteralPath $InstallerLogPath -Tail 200 | ForEach-Object { Write-Host $_ }
+    }
+    throw
+  }
 } else {
   Invoke-CheckedProcess -FilePath "msiexec.exe" -ArgumentList @("/i", $InstallerPath, "/qn", "/norestart") -Label "MSI install" -SuccessExitCodes @(0, 3010)
 }
