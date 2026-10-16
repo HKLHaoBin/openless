@@ -375,8 +375,13 @@ assert.match(
 );
 assert.match(
   nsisHook,
-  /File \/oname=OpenLessIme-\$\{PRODUCT_VERSION\}\.dll "\$%\$\{ENV_VAR\}%"/,
-  'NSIS should embed the versioned OpenLess IME DLL in the installer',
+  /File \/oname=OpenLessIme-\$\{VERSION\}\.dll "\$%\$\{ENV_VAR\}%"/,
+  "NSIS should embed the versioned OpenLess IME DLL using Tauri's VERSION define",
+);
+assert.doesNotMatch(
+  nsisHook,
+  /\$\{PRODUCT_VERSION\}/,
+  'NSIS must not use the undefined PRODUCT_VERSION define',
 );
 assert.match(
   nsisHook,
@@ -390,12 +395,12 @@ assert.match(
 );
 assert.match(
   nsisHook,
-  /System32\\regsvr32\.exe[\s\S]*windows-ime\\x86\\OpenLessIme-\$\{PRODUCT_VERSION\}\.dll/,
+  /System32\\regsvr32\.exe[\s\S]*windows-ime\\x86\\OpenLessIme-\$\{VERSION\}\.dll/,
   'NSIS should use System32 regsvr32 for the x86 IME on 32-bit Windows',
 );
 assert.match(
   nsisHook,
-  /OpenLessIme-\$\{PRODUCT_VERSION\}\.dll/,
+  /OpenLessIme-\$\{VERSION\}\.dll/,
   'NSIS should register each release under a versioned IME DLL path',
 );
 assert.doesNotMatch(
