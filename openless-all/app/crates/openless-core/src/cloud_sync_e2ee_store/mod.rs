@@ -732,6 +732,28 @@ impl CoreSyncStore {
         expected_generation: Option<Revision>,
         portable_android_preferences: Option<serde_json::Value>,
     ) -> Result<BundleInspection, BundleError> {
+        self.import_local_bundle_with_diagnostics(
+            bytes,
+            password,
+            mode,
+            choices,
+            expected_generation,
+            portable_android_preferences,
+            None,
+        )
+        .await
+    }
+
+    pub async fn import_local_bundle_with_diagnostics(
+        &self,
+        bytes: &[u8],
+        password: Option<BundlePassword>,
+        mode: RestoreMode,
+        choices: &[ConflictChoice],
+        expected_generation: Option<Revision>,
+        portable_android_preferences: Option<serde_json::Value>,
+        diagnostic_run_id: Option<&str>,
+    ) -> Result<BundleInspection, BundleError> {
         let scope = self.local_bundle_scope();
         let captured = self
             .export_scope(scope.clone())
@@ -742,7 +764,24 @@ impl CoreSyncStore {
             portable_android_preferences.clone(),
         )?;
         let generation = captured.generation;
-        if expected_generation.is_some_and(|expected| expected != generation) {
+        let expected_matches = expected_generation.is_none_or(|expected| expected == generation);
+        emit_local_migration_p6(
+            diagnostic_run_id,
+            "early_generation_check",
+            if expected_matches {
+                "matched"
+            } else if expected_generation.is_some_and(|expected| generation > expected) {
+                "advanced"
+            } else {
+                "mismatch"
+            },
+            expected_generation,
+            Some(generation),
+            None,
+            None,
+            false,
+        );
+        if !expected_matches {
             return Err(BundleError::StalePreview);
         }
         let decoded = decode_bundle(bytes, password.as_ref(), generation)?;
@@ -784,9 +823,40 @@ impl CoreSyncStore {
             local_generation: generation,
             target_device: self.inner.device.clone(),
         };
-        self.restore_scope(desired, context)
+        let plan_revision_matches = desired.observed_revision() == context.observed_revision;
+        emit_local_migration_p6(
+            diagnostic_run_id,
+            "restore_plan_check",
+            if plan_revision_matches {
+                "matched"
+            } else {
+                "mismatch"
+            },
+            expected_generation,
+            Some(generation),
+            Some(desired.observed_revision()),
+            Some(context.observed_revision),
+            false,
+        );
+        let result = self
+            .restore_scope(desired, context)
             .await
-            .map_err(BundleError::from)?;
+            .map_err(BundleError::from);
+        emit_local_migration_p6(
+            diagnostic_run_id,
+            "restore_result",
+            match &result {
+                Ok(_) => "success",
+                Err(BundleError::StalePreview) => "stale",
+                Err(_) => "failure",
+            },
+            expected_generation,
+            Some(generation),
+            None,
+            None,
+            true,
+        );
+        result?;
         Ok(inspection)
     }
 
@@ -1047,6 +1117,51 @@ impl CoreSyncStore {
         }
         result
     }
+}
+
+fn emit_local_migration_p6(
+    diagnostic_run_id: Option<&str>,
+    event: &'static str,
+    outcome: &'static str,
+    expected_generation: Option<Revision>,
+    captured_generation: Option<Revision>,
+    desired_observed_revision: Option<Revision>,
+    context_observed_revision: Option<Revision>,
+    restore_reached: bool,
+) {
+    let Some(run_id) = diagnostic_run_id else {
+        return;
+    };
+    let run_id = if run_id.len() <= 64
+        && run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+    {
+        run_id
+    } else {
+        "invalid"
+    };
+    let record = serde_json::json!({
+        "schema": "diagnosing-bugs.v1",
+        "session_id": "issue-1192-android-migration",
+        "run_id": run_id,
+        "probe_id": "P6",
+        "hypothesis_ids": ["H3", "H4"],
+        "event": event,
+        "outcome": outcome,
+        "safe": {
+            "expectedGeneration": expected_generation.map(|value| value.get()),
+            "capturedGeneration": captured_generation.map(|value| value.get()),
+            "desiredObservedRevision": desired_observed_revision.map(|value| value.get()),
+            "contextObservedRevision": context_observed_revision.map(|value| value.get()),
+            "restoreReached": restore_reached,
+        },
+        "ts": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default(),
+    });
+    log::info!("[DEBUG-MIGRATION-1192] {record}");
 }
 
 #[cfg(test)]

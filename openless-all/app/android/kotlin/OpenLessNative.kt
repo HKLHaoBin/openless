@@ -154,5 +154,6 @@ object OpenLessNative {
         choicesJson: String,
         expectedGeneration: String,
         androidPreferencesJson: String,
+        diagnosticRunId: String,
     ): String
 }

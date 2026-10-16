@@ -796,6 +796,7 @@ class OpenLessLocalMigrationActivity : Activity() {
                                     choices.toString(),
                                     expectedGeneration,
                                     OpenLessSettingsExport.exportPortable(this@OpenLessLocalMigrationActivity),
+                                    migrationDebugRunId,
                                 ),
                             )
                         } catch (error: Throwable) {
