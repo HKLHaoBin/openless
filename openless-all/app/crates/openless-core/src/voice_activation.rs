@@ -48,12 +48,13 @@ impl std::error::Error for PhraseValidationError {}
 
 /// Normalize ASR output and user phrases before suffix matching.
 ///
-/// NFKC handles full-width punctuation and compatibility forms.  Whitespace is
-/// intentionally removed because streaming ASR commonly inserts spaces between
-/// Chinese characters while English recognition may emit multiple spaces.
+/// NFKC handles full-width punctuation and compatibility forms.  Whitespace
+/// and punctuation are intentionally removed because streaming ASR may insert
+/// them between Chinese command characters while English recognition may emit
+/// multiple spaces or hyphens.
 pub fn normalize_phrase(text: &str) -> String {
     text.nfkc()
-        .filter(|character| !character.is_whitespace())
+        .filter(|character| !character.is_whitespace() && !is_terminal_punctuation(*character))
         .flat_map(char::to_lowercase)
         .collect()
 }
@@ -62,30 +63,17 @@ pub fn normalize_phrase(text: &str) -> String {
 /// the spacing and punctuation in the spoken body.
 pub fn strip_phrase_suffix(text: &str, phrase: &str) -> Option<String> {
     let normalized_phrase = validate_phrase(phrase).ok()?;
-    let phrase_ends_punctuation = normalized_phrase
-        .chars()
-        .last()
-        .is_some_and(is_terminal_punctuation);
     let phrase_chars = normalized_phrase.chars().rev();
     let mut cursor = text.len();
-    while cursor > 0 {
-        let previous = text[..cursor].char_indices().next_back()?;
-        if previous.1.is_whitespace()
-            || (!phrase_ends_punctuation && is_terminal_punctuation(previous.1))
-        {
-            cursor = previous.0;
-        } else {
-            break;
-        }
-    }
     let mut cut_at = cursor;
     for expected in phrase_chars {
         while cursor > 0 {
             let previous = text[..cursor].char_indices().next_back()?;
-            if !previous.1.is_whitespace() {
-                break;
+            if previous.1.is_whitespace() || is_terminal_punctuation(previous.1) {
+                cursor = previous.0;
+                continue;
             }
-            cursor = previous.0;
+            break;
         }
         let (start, character) = text[..cursor].char_indices().next_back()?;
         if normalize_phrase(&character.to_string()) != expected.to_string() {
@@ -98,30 +86,32 @@ pub fn strip_phrase_suffix(text: &str, phrase: &str) -> Option<String> {
 }
 
 fn is_terminal_punctuation(character: char) -> bool {
-    character.is_ascii_punctuation()
-        || matches!(
-            character,
-            '。' | '！'
-                | '？'
-                | '，'
-                | '、'
-                | '；'
-                | '：'
-                | '“'
-                | '”'
-                | '‘'
-                | '’'
-                | '（'
-                | '）'
-                | '【'
-                | '】'
-                | '《'
-                | '》'
-                | '…'
-                | '～'
-                | '—'
-                | '–'
-        )
+    character.to_string().nfkc().any(|normalized| {
+        normalized.is_ascii_punctuation()
+            || matches!(
+                normalized,
+                '。' | '！'
+                    | '？'
+                    | '，'
+                    | '、'
+                    | '；'
+                    | '：'
+                    | '“'
+                    | '”'
+                    | '‘'
+                    | '’'
+                    | '（'
+                    | '）'
+                    | '【'
+                    | '】'
+                    | '《'
+                    | '》'
+                    | '…'
+                    | '～'
+                    | '—'
+                    | '–'
+            )
+    })
 }
 
 pub fn validate_phrase(text: &str) -> Result<String, PhraseValidationError> {
@@ -402,9 +392,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalization_handles_spaces_width_and_case() {
+    fn normalization_handles_spaces_width_case_and_punctuation() {
         assert_eq!(normalize_phrase(" Ａ 开始 语音录入 "), "a开始语音录入");
         assert_eq!(normalize_phrase("完成\n语音\t录入"), DEFAULT_FINISH_PHRASE);
+        assert_eq!(normalize_phrase("完成，语音录入。"), DEFAULT_FINISH_PHRASE);
     }
 
     #[test]
@@ -414,7 +405,11 @@ mod tests {
             Some("你好，世界".into())
         );
         assert_eq!(
-            strip_phrase_suffix("你好，世界 完成语音录入。", DEFAULT_FINISH_PHRASE),
+            strip_phrase_suffix("你好，世界 完成，语音录入。", DEFAULT_FINISH_PHRASE),
+            Some("你好，世界".into())
+        );
+        assert_eq!(
+            strip_phrase_suffix("你好，世界 完成语音录入．", DEFAULT_FINISH_PHRASE),
             Some("你好，世界".into())
         );
         assert!(strip_phrase_suffix("完成语音录入之前", DEFAULT_FINISH_PHRASE).is_none());
@@ -438,6 +433,7 @@ mod tests {
         let matcher =
             VoicePhraseMatcher::new(DEFAULT_FINISH_PHRASE, VoiceActivationCommand::Finish).unwrap();
         assert!(!matcher.matches_suffix("完成语音录入之前的内容"));
+        assert!(matcher.matches_suffix("正文 完成，语音录入。"));
         assert_eq!(
             matcher.strip_suffix("正文 完成语音录入").as_deref(),
             Some(
