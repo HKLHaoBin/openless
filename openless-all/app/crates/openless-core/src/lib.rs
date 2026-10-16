@@ -33,6 +33,7 @@ pub mod edit_plan;
 pub mod endpoint_security;
 pub mod errors;
 pub mod events;
+pub mod experimental_asr;
 pub mod external_audio;
 pub mod history;
 pub mod host_document;
@@ -219,7 +220,10 @@ pub use api::{
     LessComputerVoiceOptions, LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult,
     QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
 };
-pub use audio::{encode_dictation_wav, NormalizedPcmChunk, PcmNormalizer, DICTATION_SAMPLE_RATE};
+pub use audio::{
+    encode_dictation_wav, AudioEnhancer, AudioProcessingConfig, AudioProcessor, NormalizedPcmChunk,
+    PcmNormalizer, DICTATION_SAMPLE_RATE,
+};
 pub use auxiliary::{
     AsrCallLabel, AuxiliaryApi, RepolishRequest, RetranscriptionFailure, RetranscriptionResult,
 };
