@@ -142,9 +142,14 @@ def main():
     shutil.copy2(APP / 'third_party/rime-stroke/stroke.dict.yaml', data / 'stroke.dict.yaml')
     (data / 'stroke.schema.yaml').write_text('schema:\n  schema_id: stroke\n  name: 笔画\nengine:\n  translators: [table_translator]\ntranslator:\n  dictionary: stroke\n', encoding='utf-8')
     (data / 'default.custom.yaml').write_text('patch:\n  schema_list:\n    - schema: pinyin_simp\n  menu/page_size: 8\n', encoding='utf-8')
-    private = (data / 'pinyin_simp.schema.yaml').read_text()
-    private = private.replace('schema_id: pinyin_simp', 'schema_id: openless_pinyin_private')
-    private = private.replace('\ntranslator:\n', '\ntranslator:\n  enable_user_dict: false\n')
+    base_schema = (data / 'pinyin_simp.schema.yaml').read_text()
+    # Both platforms share the same user dictionary and stock Rime learning.
+    # No platform-specific frequency overlay competes with native ranking.
+    learning = base_schema.replace('schema_id: pinyin_simp', 'schema_id: openless_pinyin_learning')
+    learning = learning.replace('\ntranslator:\n', '\ntranslator:\n  enable_user_dict: true\n  user_dict: pinyin_simp\n  enable_sentence: true\n  enable_completion: true\n')
+    (data / 'openless_pinyin_learning.schema.yaml').write_text(learning)
+    private = base_schema.replace('schema_id: pinyin_simp', 'schema_id: openless_pinyin_private')
+    private = private.replace('\ntranslator:\n', '\ntranslator:\n  enable_user_dict: false\n  contextual_suggestions: false\n')
     (data / 'openless_pinyin_private.schema.yaml').write_text(private)
     (data / 'manifest.json').write_text(json.dumps([p.name for p in data.iterdir() if p.is_file() and p.name != 'manifest.json']))
     shutil.copy2(APP / 'third_party/rime-stroke/LICENSE', data / 'stroke-LICENSE')

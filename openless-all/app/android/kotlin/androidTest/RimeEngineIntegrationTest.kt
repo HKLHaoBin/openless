@@ -65,6 +65,85 @@ class RimeEngineIntegrationTest {
         } finally { OpenLessRime.request("destroy", session) }
     }
 
+    private fun typePinyin(session: String, input: String): org.json.JSONObject {
+        for (letter in input) OpenLessRime.request("key", session, letter.code.toString())
+        return OpenLessRime.request("candidates", session)
+    }
+
+    private fun choose(session: String, state: org.json.JSONObject, word: String): org.json.JSONObject {
+        val rows = state.getJSONArray("candidates")
+        val index = (0 until rows.length()).firstOrNull { rows.getString(it) == word }
+        assertNotNull("Expected candidate $word", index)
+        return OpenLessRime.request("select_absolute", session, "$index@${state.getLong("revision")}")
+    }
+
+    @Test fun nativeLearningSurvivesSessionRecreationAndPrivateSelectionsDoNotTrainIt() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        OpenLessRime.initialize(context)
+        var session = OpenLessRime.request("create", "", "private").getString("session")
+        val baseline: String
+        try {
+            val state = typePinyin(session, "ni")
+            assertFalse(state.getBoolean("learning"))
+            baseline = state.getJSONArray("candidates").getString(0)
+        } finally { OpenLessRime.request("destroy", session) }
+        assertNotEquals("Test needs a non-default candidate", "泥", baseline)
+        repeat(6) {
+            val created = OpenLessRime.request("create", "", "learning")
+            assertTrue(created.getBoolean("learning"))
+            session = created.getString("session")
+            try {
+                val state = choose(session, typePinyin(session, "ni"), "泥")
+                assertEquals("泥", state.getString("commit"))
+                OpenLessRime.request("ack", session)
+            } finally { OpenLessRime.request("destroy", session) }
+        }
+        // Each preceding session was destroyed, closing its user dictionary.
+        // Private sessions neither consult nor update the personal ranking.
+        repeat(6) {
+            session = OpenLessRime.request("create", "", "private").getString("session")
+            try {
+                val state = typePinyin(session, "ni")
+                assertEquals(baseline, state.getJSONArray("candidates").getString(0))
+                assertEquals("逆", choose(session, state, "逆").getString("commit"))
+                OpenLessRime.request("ack", session)
+            } finally { OpenLessRime.request("destroy", session) }
+        }
+        session = OpenLessRime.request("create", "", "learning").getString("session")
+        try {
+            assertEquals("泥", typePinyin(session, "ni").getJSONArray("candidates").getString(0))
+        } finally { OpenLessRime.request("destroy", session) }
+        val database = java.io.File(context.filesDir, "rime-user/pinyin_simp.userdb")
+        assertTrue("Learning must be stored in the app's persistent profile", database.isDirectory)
+        assertTrue(database.listFiles()?.any { it.length() > 0 } == true)
+    }
+
+    @Test fun selectingSeparateSyllablesLearnsANewPhrase() {
+        OpenLessRime.initialize(InstrumentationRegistry.getInstrumentation().targetContext)
+        repeat(3) {
+            val session = OpenLessRime.request("create", "", "learning").getString("session")
+            try {
+                var state = typePinyin(session, "nihao")
+                state = choose(session, state, "拟")
+                assertEquals("", state.getString("commit"))
+                state = OpenLessRime.request("candidates", session)
+                state = choose(session, state, "蚝")
+                assertEquals("拟蚝", state.getString("commit"))
+                OpenLessRime.request("ack", session)
+            } finally { OpenLessRime.request("destroy", session) }
+        }
+        val session = OpenLessRime.request("create", "", "learning").getString("session")
+        try {
+            val state = typePinyin(session, "nihao")
+            assertEquals("拟蚝", state.getJSONArray("candidates").getString(0))
+        } finally { OpenLessRime.request("destroy", session) }
+        val privateSession = OpenLessRime.request("create", "", "private").getString("session")
+        try {
+            val rows = typePinyin(privateSession, "nihao").getJSONArray("candidates")
+            assertFalse((0 until rows.length()).any { rows.getString(it) == "拟蚝" })
+        } finally { OpenLessRime.request("destroy", privateSession) }
+    }
+
     private fun withController(test: (RimePinyinController, StringBuilder) -> Unit) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val controller = RimePinyinController(instrumentation.targetContext)

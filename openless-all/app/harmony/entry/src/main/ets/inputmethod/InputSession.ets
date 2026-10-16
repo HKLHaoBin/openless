@@ -62,7 +62,8 @@ class InputSession {
         this.queue = this.queue.then(async (): Promise<void> => {
           await initializeRime(context.filesDir, context.resourceManager);
           await testRime(context.filesDir, context.resourceManager);
-          const state = await rimeRequest('create', '', 'private');
+          // Normal fields learn locally; passwords never create a Rime session.
+          const state = await rimeRequest('create', '', 'learning');
           if (generation !== this.generation) { await rimeRequest('destroy', state.session); return; }
           this.rimeSession = state.session;
           imeStorage.setOrCreate('rimeReady', true);

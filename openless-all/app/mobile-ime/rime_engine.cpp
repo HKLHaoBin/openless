@@ -12,7 +12,7 @@ namespace {
 std::mutex mutex;
 RimeApi* api = nullptr;
 std::string shared_dir, user_dir;
-struct Session { std::string pending; unsigned long revision = 0; };
+struct Session { std::string pending; unsigned long revision = 0; bool learning = false; };
 std::map<RimeSessionId, Session> sessions;
 std::string quote(const std::string& value) {
     std::string out = "\"";
@@ -34,6 +34,7 @@ std::string snapshot(RimeSessionId id, bool expanded = false) {
     RIME_STRUCT(RimeContext, context);
     if (!api->get_context(id, &context)) throw std::runtime_error("Rime context unavailable");
     std::string out = "{\"ok\":true,\"session\":" + quote(std::to_string(id)) +
+        ",\"learning\":" + (session.learning ? "true" : "false") +
         ",\"revision\":" + std::to_string(session.revision) +
         ",\"commit\":" + quote(session.pending) +
         ",\"input\":" + quote(api->get_input(id) ? api->get_input(id) : "") +
@@ -79,10 +80,12 @@ std::string request(const std::string& op, const std::string& handle, const std:
         candidate->setup(&traits);
         candidate->initialize(&traits);
         if (candidate->start_maintenance(True)) candidate->join_maintenance_thread();
-        const auto private_schema = shared_dir + "/openless_pinyin_private.schema.yaml";
-        if (!candidate->deploy_schema(private_schema.c_str())) {
-            candidate->finalize();
-            throw std::runtime_error("Rime private schema deployment failed");
+        for (const auto* name : {"openless_pinyin_private", "openless_pinyin_learning"}) {
+            const auto schema = shared_dir + "/" + name + ".schema.yaml";
+            if (!candidate->deploy_schema(schema.c_str())) {
+                candidate->finalize();
+                throw std::runtime_error("Rime schema deployment failed");
+            }
         }
         api = candidate;
         return "{\"ok\":true}";
@@ -91,13 +94,15 @@ std::string request(const std::string& op, const std::string& handle, const std:
     if (op == "create") {
         auto id = api->create_session();
         if (!id) throw std::runtime_error("Rime session creation failed");
-        if (!api->select_schema(id, arg == "learning" ? "pinyin_simp" : "openless_pinyin_private")) {
+        if (!api->select_schema(id, arg == "learning" ? "openless_pinyin_learning" : "openless_pinyin_private")) {
             api->destroy_session(id);
             throw std::runtime_error("Rime pinyin_simp schema unavailable");
         }
         api->set_option(id, "ascii_mode", False);
         // Sessions with learning disabled must not update the user dictionary.
-        sessions.emplace(id, Session{});
+        Session session;
+        session.learning = arg == "learning";
+        sessions.emplace(id, session);
         return snapshot(id);
     }
     size_t consumed = 0;

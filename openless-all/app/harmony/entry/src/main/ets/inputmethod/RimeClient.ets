@@ -27,7 +27,7 @@ export async function rimeRequest(operation: string, session: string = '', argum
 export function initializeRime(filesDir: string, resources: resourceManager.ResourceManager, profile: string = 'rime-user'): Promise<void> {
   if (initialization) return initialization;
   initialization = (async (): Promise<void> => {
-    const shared = filesDir + '/rime-shared-1.17.0-pinyin-0c6861-private-v1';
+    const shared = filesDir + '/rime-shared-1.17.0-pinyin-0c6861-learning-v2';
     if (!fs.accessSync(shared)) fs.mkdirSync(shared);
     const decoder = util.TextDecoder.create('utf-8');
     const files: string[] = JSON.parse(decoder.decodeToString(await resources.getRawFileContent('rime/manifest.json')));
