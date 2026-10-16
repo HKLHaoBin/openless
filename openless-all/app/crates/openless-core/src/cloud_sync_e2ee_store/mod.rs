@@ -819,7 +819,7 @@ impl CoreSyncStore {
         let context = RestoreContext {
             scope,
             operation_id: uuid::Uuid::new_v4().to_string(),
-            observed_revision: generation,
+            observed_revision: current.observed_revision(),
             local_generation: generation,
             target_device: self.inner.device.clone(),
         };

@@ -453,6 +453,39 @@ async fn personal_bundle_keeps_receiver_device_profile() {
 }
 
 #[tokio::test]
+async fn local_bundle_restore_uses_document_revision_not_gate_generation() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .set_ui_preferences(SecretJson::new(json!({
+            "locale": "zh-CN",
+            "fontScale": "medium",
+        })))
+        .await
+        .unwrap();
+    let artifact = fixture
+        .store
+        .export_local_bundle(BundleExportOptions::default())
+        .await
+        .unwrap();
+    let generation = fixture.store.generation().unwrap();
+    assert!(generation > Revision::new(0));
+
+    fixture
+        .store
+        .import_local_bundle(
+            &artifact.bytes,
+            None,
+            RestoreMode::Replace,
+            &[],
+            Some(generation),
+            None,
+        )
+        .await
+        .expect("a local bundle captured at the current generation should restore");
+}
+
+#[tokio::test]
 async fn disabled_fresh_start_never_requests_local_key() {
     let fixture = Fixture::new();
     assert!(!fixture.extensions.key_requested.load(Ordering::Acquire));
