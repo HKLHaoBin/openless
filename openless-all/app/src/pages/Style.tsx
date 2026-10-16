@@ -25,6 +25,10 @@ import type {
 } from '../lib/types';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { Icon } from '../components/Icon';
+import { DismissibleCard } from '../components/ui/DismissibleCard';
+import { ExpandableText } from '../components/ui/Disclosure';
+import { ChoiceChips } from '../components/ui/ChoiceChips';
+import { cardDeparture } from '../lib/cardDeparture';
 import { StylePackIconPicker } from '../components/StylePackIconPicker';
 import { getStylePackPresentation } from '../lib/stylePackPresentation';
 import { SavedToast, type SaveToastState } from '../components/SavedToast';
@@ -153,6 +157,9 @@ export function Style() {
   const canPublish = marketplaceSignedIn;
 
   const [packs, setPacks] = useState<StylePack[]>([]);
+  const cardRefs = useRef(new Map<string, HTMLDivElement>());
+  const departing = useRef(new Set<string>());
+  const mounted = useRef(true);
   const [workflowView, setWorkflowView] = useState<'dictation' | 'selection'>('dictation');
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -194,8 +201,10 @@ export function Style() {
     };
   }, [marketplaceDisplayLogin, updateMarketplacePrefs]);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       if (statusTimer.current !== null) window.clearTimeout(statusTimer.current);
       if (editorCloseTimer.current !== null) window.clearTimeout(editorCloseTimer.current);
       for (const [id, pending] of pendingDeletes.current) {
@@ -203,9 +212,8 @@ export function Style() {
         if (!pending.committing) void deleteStylePack(id).catch(() => {});
       }
       pendingDeletes.current.clear();
-    },
-    [],
-  );
+    };
+  }, []);
 
   const showSaveStatus = (state: SaveToastState, message: string, temporary = false) => {
     if (statusTimer.current !== null) {
@@ -522,14 +530,24 @@ export function Style() {
       });
   };
 
-  const handleDeleteImportedPack = (pack: StylePack) => {
-    if (pack.kind !== 'imported' || pendingDeletes.current.has(pack.id)) return;
+  const handleDeleteImportedPack = async (pack: StylePack) => {
+    if (
+      pack.kind !== 'imported' ||
+      pendingDeletes.current.has(pack.id) ||
+      departing.current.has(pack.id)
+    )
+      return;
+    departing.current.add(pack.id);
     const index = packs.findIndex((item) => item.id === pack.id);
     const name = getStylePackPresentation(pack, t).name;
-    setPacks((current) => current.filter((item) => item.id !== pack.id));
-    if (editorOpen && selectedId === pack.id) startEditorClose();
+    // Register before awaiting motion: navigation/unmount must still finish the user's deletion.
     const timer = window.setTimeout(() => commitDeletedPack(pack.id), 6000);
     pendingDeletes.current.set(pack.id, { pack, timer, index, committing: false });
+    await cardDeparture(cardRefs.current.get(pack.id));
+    departing.current.delete(pack.id);
+    if (!mounted.current) return;
+    setPacks((current) => current.filter((item) => item.id !== pack.id));
+    if (editorOpen && selectedId === pack.id) startEditorClose();
     setUndoDelete({ id: pack.id, name });
   };
 
@@ -665,7 +683,13 @@ export function Style() {
           flexWrap: 'wrap',
         }}
       >
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>
+        <span
+          style={{
+            fontSize: 12,
+            fontWeight: 'var(--ol-font-weight-semibold)',
+            color: 'var(--ol-ink)',
+          }}
+        >
           {t('style.pack.selectionPromptTitle')}
         </span>
         <Pill tone="default" size="sm">
@@ -694,7 +718,13 @@ export function Style() {
           flexWrap: 'wrap',
         }}
       >
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>
+        <span
+          style={{
+            fontSize: 12,
+            fontWeight: 'var(--ol-font-weight-semibold)',
+            color: 'var(--ol-ink)',
+          }}
+        >
           {t('style.pack.voiceEditPromptTitle')}
         </span>
         <Pill tone="default" size="sm">
@@ -731,7 +761,13 @@ export function Style() {
           flexWrap: 'wrap',
         }}
       >
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>
+        <span
+          style={{
+            fontSize: 12,
+            fontWeight: 'var(--ol-font-weight-semibold)',
+            color: 'var(--ol-ink)',
+          }}
+        >
           {t('style.pack.dictationPromptTitle')}
         </span>
         <Pill tone="default" size="sm">
@@ -841,7 +877,13 @@ export function Style() {
               }}
             >
               <div>
-                <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--ol-ink)' }}>
+                <div
+                  style={{
+                    fontSize: 15,
+                    fontWeight: 'var(--ol-font-weight-semibold)',
+                    color: 'var(--ol-ink)',
+                  }}
+                >
                   {workflowView === 'dictation'
                     ? t('style.pack.listTitle')
                     : t('style.pack.selectionListTitle')}
@@ -871,7 +913,9 @@ export function Style() {
                     background: rawPack.active ? 'var(--ol-style-card-bg-active)' : 'transparent',
                     color: 'var(--ol-ink-2)',
                     fontSize: 12.5,
-                    fontWeight: rawPack.active ? 600 : 500,
+                    fontWeight: rawPack.active
+                      ? 'var(--ol-font-weight-semibold)'
+                      : 'var(--ol-font-weight-medium)',
                     whiteSpace: 'nowrap',
                     cursor: rawPack.active ? 'default' : 'pointer',
                     transition:
@@ -896,44 +940,15 @@ export function Style() {
                 width: stackLayout ? '100%' : undefined,
               }}
             >
-              <div
-                style={{
-                  display: 'inline-flex',
-                  padding: 3,
-                  borderRadius: 8,
-                  background: 'var(--ol-surface-2)',
-                  border: '0.5px solid var(--ol-line)',
-                }}
-              >
-                {(
-                  [
-                    ['dictation', t('style.pack.dictationTab')],
-                    ['selection', t('style.pack.selectionTab')],
-                  ] as const
-                ).map(([value, label]) => {
-                  const active = workflowView === value;
-                  return (
-                    <button
-                      key={value}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => setWorkflowView(value)}
-                      style={{
-                        padding: '6px 10px',
-                        borderRadius: 6,
-                        border: 0,
-                        background: active ? 'var(--ol-surface)' : 'transparent',
-                        color: active ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
-                        boxShadow: active ? 'var(--ol-shadow-sm)' : 'none',
-                        fontSize: 12,
-                        fontWeight: active ? 600 : 500,
-                      }}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
+              <ChoiceChips
+                label={t('style.pack.listTitle')}
+                value={workflowView}
+                onChange={setWorkflowView}
+                options={[
+                  { value: 'dictation', label: t('style.pack.dictationTab') },
+                  { value: 'selection', label: t('style.pack.selectionTab') },
+                ]}
+              />
               <Pill tone="outline">{t('style.pack.listCount', { count: packs.length })}</Pill>
             </div>
           </div>
@@ -959,8 +974,14 @@ export function Style() {
                 const isCurrentForView =
                   workflowView === 'selection' ? pack.id === selectionPolishPackId : pack.active;
                 return (
-                  <motion.div
+                  <DismissibleCard
                     key={pack.id}
+                    dismissible={!isBuiltin}
+                    onDismiss={() => void handleDeleteImportedPack(pack)}
+                    elementRef={(element) => {
+                      if (element) cardRefs.current.set(pack.id, element);
+                      else cardRefs.current.delete(pack.id);
+                    }}
                     data-ol-style-pack={pack.id}
                     data-active={isCurrentForView ? 'true' : undefined}
                     layout={reducedMotion ? false : 'position'}
@@ -1011,7 +1032,7 @@ export function Style() {
                           <div
                             style={{
                               fontSize: 15,
-                              fontWeight: 600,
+                              fontWeight: 'var(--ol-font-weight-semibold)',
                               color: 'var(--ol-style-card-ink)',
                             }}
                           >
@@ -1051,21 +1072,7 @@ export function Style() {
                             </span>
                           )}
                         </div>
-                        <div
-                          style={{
-                            fontSize: 12.5,
-                            color: 'var(--ol-ink-3)',
-                            lineHeight: 1.6,
-                            display: '-webkit-box',
-                            WebkitBoxOrient: 'vertical',
-                            WebkitLineClamp: 3,
-                            overflow: 'hidden',
-                            marginTop: 8,
-                            minHeight: 60,
-                          }}
-                        >
-                          {presentation.description || presentation.name}
-                        </div>
+                        <ExpandableText text={presentation.description || presentation.name} />
                       </div>
                       <StylePackIconPicker
                         pack={pack}
@@ -1164,7 +1171,7 @@ export function Style() {
                         </button>
                       )}
                     </div>
-                  </motion.div>
+                  </DismissibleCard>
                 );
               })}
               <motion.button
@@ -1211,7 +1218,13 @@ export function Style() {
                 >
                   <Icon name="plus" size={22} />
                 </div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink-2)' }}>
+                <div
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 'var(--ol-font-weight-semibold)',
+                    color: 'var(--ol-ink-2)',
+                  }}
+                >
                   {t('style.pack.addPackTileTitle')}
                 </div>
                 <div
@@ -1301,7 +1314,13 @@ export function Style() {
                     }}
                   >
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--ol-ink)' }}>
+                      <div
+                        style={{
+                          fontSize: 15,
+                          fontWeight: 'var(--ol-font-weight-semibold)',
+                          color: 'var(--ol-ink)',
+                        }}
+                      >
                         {t('style.pack.editorTitle')}
                       </div>
                       <div
@@ -1431,7 +1450,13 @@ export function Style() {
                       }}
                     >
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
+                            color: 'var(--ol-ink)',
+                          }}
+                        >
                           {t('style.pack.fieldName')}
                         </span>
                         <input
@@ -1441,7 +1466,13 @@ export function Style() {
                         />
                       </label>
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
+                            color: 'var(--ol-ink)',
+                          }}
+                        >
                           {t('style.pack.fieldAuthor')}
                         </span>
                         <input
@@ -1452,7 +1483,13 @@ export function Style() {
                         />
                       </label>
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
+                            color: 'var(--ol-ink)',
+                          }}
+                        >
                           {t('style.pack.fieldVersion')}
                         </span>
                         <input
@@ -1462,7 +1499,13 @@ export function Style() {
                         />
                       </label>
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
+                            color: 'var(--ol-ink)',
+                          }}
+                        >
                           {t('style.pack.fieldTags')}
                         </span>
                         <input
@@ -1482,7 +1525,13 @@ export function Style() {
                     </div>
 
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>
+                      <span
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 'var(--ol-font-weight-semibold)',
+                          color: 'var(--ol-ink)',
+                        }}
+                      >
                         {t('style.pack.fieldDescription')}
                       </span>
                       <textarea
@@ -1502,7 +1551,13 @@ export function Style() {
                       }}
                     >
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
+                            color: 'var(--ol-ink)',
+                          }}
+                        >
                           {t('style.pack.fieldModel')}
                         </span>
                         <input
@@ -1520,7 +1575,13 @@ export function Style() {
                         </span>
                       </label>
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
+                            color: 'var(--ol-ink)',
+                          }}
+                        >
                           {t('style.pack.fieldCompatibility')}
                         </span>
                         <input
@@ -1557,7 +1618,13 @@ export function Style() {
                           }}
                         >
                           <div>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink)' }}>
+                            <div
+                              style={{
+                                fontSize: 13,
+                                fontWeight: 'var(--ol-font-weight-semibold)',
+                                color: 'var(--ol-ink)',
+                              }}
+                            >
                               {t('style.pack.runtimeTitle')}
                             </div>
                             <div
@@ -1677,7 +1744,13 @@ export function Style() {
                       <div
                         style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}
                       >
-                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink)' }}>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
+                            color: 'var(--ol-ink)',
+                          }}
+                        >
                           {t('style.pack.metaTitle')}
                         </div>
                         <Pill tone="default" size="sm">
@@ -1722,7 +1795,13 @@ export function Style() {
                       }}
                     >
                       <div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink)' }}>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 'var(--ol-font-weight-semibold)',
+                            color: 'var(--ol-ink)',
+                          }}
+                        >
                           {t('style.pack.examplesTitle')}
                         </div>
                         <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 4 }}>
@@ -1767,7 +1846,10 @@ export function Style() {
                               onChange={(event) =>
                                 patchExample(index, { title: event.target.value })
                               }
-                              style={{ ...inputStyle, fontWeight: 600 }}
+                              style={{
+                                ...inputStyle,
+                                fontWeight: 'var(--ol-font-weight-semibold)',
+                              }}
                               placeholder={t('style.pack.exampleTitlePlaceholder', {
                                 index: index + 1,
                               })}
@@ -1949,7 +2031,15 @@ function DirectiveRow({
       }}
     >
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ol-ink)' }}>{title}</div>
+        <div
+          style={{
+            fontSize: 12.5,
+            fontWeight: 'var(--ol-font-weight-semibold)',
+            color: 'var(--ol-ink)',
+          }}
+        >
+          {title}
+        </div>
         <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.5, marginTop: 2 }}>
           {active ? detail : inactiveHint}
         </div>
