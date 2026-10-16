@@ -116,7 +116,7 @@ struct InputMethodPanel {
               .fontWeight(index === 0 ? FontWeight.Medium : FontWeight.Regular)
               .fontColor(index === 0 ? ACCENT : INK).backgroundColor(Color.Transparent)
               .padding({ left: 12, right: 12 }).focusable(false)
-              .enabled(this.connected && !this.pendingCommit)
+              .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
               .onClick(() => { inputSession.selectCandidate(index); this.expanded = false; this.utility = 0; })
           }, (candidate: string, index: number) => index.toString() + ':' + candidate)
         }
@@ -153,7 +153,7 @@ struct InputMethodPanel {
             Text(key).fontSize(this.layer === 0 ? 22 : 20).fontColor(INK)
           }.width('100%').height('100%').justifyContent(FlexAlign.Center)
         }.height(52).layoutWeight(1).borderRadius(7).padding(0).backgroundColor(KEY)
-          .enabled(this.connected && !this.pendingCommit).focusable(false).accessibilityText(key)
+          .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).focusable(false).accessibilityText(key)
           .onClick(() => { this.insert(key); })
           .gesture(LongPressGesture().onAction(() => {
             const hint = this.hint(index, position);
@@ -164,7 +164,7 @@ struct InputMethodPanel {
       if (index === 2) {
         Button('⌫', { type: ButtonType.Normal }).height(52).layoutWeight(1.45).fontSize(25)
           .fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
-          .enabled(this.connected && !this.pendingCommit).accessibilityText('删除光标前的文字')
+          .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).accessibilityText('删除光标前的文字')
           .onClick(() => { inputSession.backspace(); })
           .gesture(LongPressGesture({ repeat: true }).onAction(() => { inputSession.backspace(); }))
       }
@@ -186,14 +186,14 @@ struct InputMethodPanel {
         .onClick(() => { this.layer = this.layer === 1 ? 0 : 1; })
       Button(this.chinese ? '空格' : 'space', { type: ButtonType.Normal }).height(52).layoutWeight(3.3)
         .fontSize(15).fontColor(MUTED).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
-        .enabled(this.connected && !this.pendingCommit).onClick(() => { inputSession.space(); })
+        .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { inputSession.space(); })
         .gesture(LongPressGesture().onAction(() => { if (!this.password && this.voicePhase === 'idle') this.voice(); }))
       Button(this.chinese ? '。' : '.', { type: ButtonType.Normal }).height(52).layoutWeight(0.9)
         .fontSize(21).fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
-        .enabled(this.connected && !this.pendingCommit).onClick(() => { this.insert(this.chinese ? '。' : '.'); })
+        .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { this.insert(this.chinese ? '。' : '.'); })
       Button(this.enterLabel, { type: ButtonType.Normal }).height(52).layoutWeight(1.65)
         .fontSize(16).fontColor('#FFFFFF').backgroundColor(ACCENT).borderRadius(7).padding(0).focusable(false)
-        .enabled(this.connected && !this.pendingCommit).onClick(() => { inputSession.enter(); })
+        .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { inputSession.enter(); })
     }.width('100%').height(52)
   }
 
@@ -204,7 +204,7 @@ struct InputMethodPanel {
         ForEach(['+', '-', '×', '÷'], (value: string) => {
           Button(value, { type: ButtonType.Normal }).height(52).width('100%').fontSize(22)
             .fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
-            .enabled(this.connected && !this.pendingCommit).onClick(() => { this.insert(value); })
+            .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { this.insert(value); })
         }, (value: string) => value)
       }.layoutWeight(1)
       Column({ space: 6 }) {
@@ -213,7 +213,7 @@ struct InputMethodPanel {
             ForEach(row, (value: string) => {
               Button(value, { type: ButtonType.Normal }).height(52).layoutWeight(1).fontSize(25)
                 .fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
-                .enabled(this.connected && !this.pendingCommit).onClick(() => { this.insert(value); })
+                .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { this.insert(value); })
             }, (value: string) => value)
           }.width('100%').height(52)
         }, (row: string[], index: number) => index.toString())
@@ -223,24 +223,24 @@ struct InputMethodPanel {
             .onClick(() => { this.layer = 0; })
           Button('0', { type: ButtonType.Normal }).height(52).layoutWeight(1).fontSize(25)
             .fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
-            .enabled(this.connected && !this.pendingCommit).onClick(() => { this.insert('0'); })
+            .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { this.insert('0'); })
           Button('00', { type: ButtonType.Normal }).height(52).layoutWeight(1).fontSize(22)
             .fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
-            .enabled(this.connected && !this.pendingCommit).onClick(() => { this.insert('00'); })
+            .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { this.insert('00'); })
         }.height(52).width('100%')
       }.layoutWeight(3.6)
       Column({ space: 6 }) {
         Button('⌫', { type: ButtonType.Normal }).height(52).width('100%').fontSize(25)
           .fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
-          .enabled(this.connected && !this.pendingCommit).accessibilityText('删除光标前的文字')
+          .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).accessibilityText('删除光标前的文字')
           .onClick(() => { inputSession.backspace(); })
           .gesture(LongPressGesture({ repeat: true }).onAction(() => { inputSession.backspace(); }))
         Button('.', { type: ButtonType.Normal }).height(52).width('100%').fontSize(25)
           .fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
-          .enabled(this.connected && !this.pendingCommit).onClick(() => { this.insert('.'); })
+          .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { this.insert('.'); })
         Button(this.enterLabel, { type: ButtonType.Normal }).height(110).width('100%').fontSize(17)
           .fontColor('#FFFFFF').backgroundColor(ACCENT).borderRadius(7).padding(0).focusable(false)
-          .enabled(this.connected && !this.pendingCommit).onClick(() => { inputSession.enter(); })
+          .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { inputSession.enter(); })
       }.layoutWeight(1.2)
     }.width('100%').layoutWeight(1).alignItems(VerticalAlign.Center)
   }
@@ -254,7 +254,7 @@ struct InputMethodPanel {
             Button(candidate, { type: ButtonType.Normal }).height(48).fontSize(22)
               .fontColor(index === 0 ? ACCENT : INK).backgroundColor(KEY).borderRadius(7)
               .padding({ left: 18, right: 18 }).margin({ right: 6, bottom: 6 }).focusable(false)
-              .enabled(this.connected && !this.pendingCommit)
+              .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
               .onClick(() => { inputSession.selectCandidate(index); this.expanded = false; this.utility = 0; })
           }, (candidate: string, index: number) => index.toString() + ':' + candidate)
         }.width('100%')
@@ -294,7 +294,7 @@ struct InputMethodPanel {
         Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
           ForEach(['😀', '😄', '😊', '🥰', '😍', '😎', '🤔', '😂', '🥹', '😭', '😅', '😴', '👍', '👏', '🙏', '💪', '❤️', '🎉', '🌹', '✨', '✅', '💡', '☀️', '🎂'], (value: string) => {
             Button(value, { type: ButtonType.Normal }).width(52).height(50).fontSize(27)
-              .backgroundColor(Color.Transparent).focusable(false).enabled(this.connected && !this.pendingCommit)
+              .backgroundColor(Color.Transparent).focusable(false).enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
               .onClick(() => { inputSession.insert(value); })
           }, (value: string) => value)
         }.width('100%')
@@ -335,7 +335,7 @@ struct InputMethodPanel {
   build() {
     Column({ space: 6 }) {
       Row() {
-        Text(this.preedit || (this.status === 'Rime 拼音' ? '' : this.status))
+        Text(this.preedit || (this.connected && this.chinese && !this.rimeReady && this.status === '可输入' ? '正在准备中文输入…' : this.status === 'Rime 拼音' ? '' : this.status))
           .fontSize(13).fontColor(MUTED).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
         if (this.pendingCommit) {
           Button('重新确认').height(24).fontSize(12).fontColor(ACCENT).backgroundColor(Color.Transparent)
