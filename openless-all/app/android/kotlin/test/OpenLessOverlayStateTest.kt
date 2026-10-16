@@ -13,4 +13,12 @@ class OpenLessOverlayStateTest {
         assertFalse(shouldIgnoreOverlayRecordingFrame(true, "voice edit capture failed"))
         assertFalse(shouldIgnoreOverlayRecordingFrame(false, null))
     }
+
+    @Test
+    fun neverTriggerBlocksOverlayDisplayButOtherModesRemainAvailable() {
+        assertFalse(shouldDisplayOverlay("never"))
+        assertTrue(shouldDisplayOverlay("background"))
+        assertTrue(shouldDisplayOverlay("always"))
+        assertTrue(shouldDisplayOverlay(null))
+    }
 }
