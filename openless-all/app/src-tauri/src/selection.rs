@@ -349,6 +349,7 @@ pub(crate) fn prefetch_selection_workspace_capture() {
     let target_captured = selection_insertion_target_is_captured(&insertion_target);
     let target_current = selection_insertion_target_is_current(&insertion_target);
     let anchor_captured = selection_insertion_target_anchor_is_captured(&insertion_target);
+    let position_captured = selection_insertion_target_position_is_captured(&insertion_target);
     emit_preview_diagnostic(
         capture_id,
         "P1",
@@ -356,8 +357,12 @@ pub(crate) fn prefetch_selection_workspace_capture() {
         "capture_result",
         if anchor_captured { "matched" } else { "unavailable" },
         &format!(
-            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"anchor_stage\":\"{}\"",
-            target_captured, target_current, anchor_captured, anchor_stage,
+            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"anchor_stage\":\"{}\"",
+            target_captured,
+            target_current,
+            anchor_captured,
+            position_captured,
+            anchor_stage,
         ),
     );
     let mut guard = PREFETCHED_SELECTION_WORKSPACE
@@ -450,6 +455,7 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
         let target_captured = selection_insertion_target_is_captured(&insertion_target);
         let target_current = selection_insertion_target_is_current(&insertion_target);
         let anchor_captured = selection_insertion_target_anchor_is_captured(&insertion_target);
+        let position_captured = selection_insertion_target_position_is_captured(&insertion_target);
         let capture_id = insertion_target.capture_id();
         emit_preview_diagnostic(
             capture_id,
@@ -458,8 +464,12 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
             "capture_result",
             if anchor_captured { "matched" } else { "unavailable" },
             &format!(
-                "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"anchor_stage\":\"{}\"",
-                target_captured, target_current, anchor_captured, anchor_stage,
+                "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"anchor_stage\":\"{}\"",
+                target_captured,
+                target_current,
+                anchor_captured,
+                position_captured,
+                anchor_stage,
             ),
         );
         let diag = SelectionCaptureDiag {
@@ -490,6 +500,7 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
     let target_captured = selection_insertion_target_is_captured(&insertion_target);
     let target_current = selection_insertion_target_is_current(&insertion_target);
     let anchor_captured = selection_insertion_target_anchor_is_captured(&insertion_target);
+    let position_captured = selection_insertion_target_position_is_captured(&insertion_target);
     emit_preview_diagnostic(
         capture_id,
         "P1",
@@ -497,8 +508,12 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
         "capture_result",
         if anchor_captured { "matched" } else { "unavailable" },
         &format!(
-            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"anchor_stage\":\"{}\"",
-            target_captured, target_current, anchor_captured, anchor_stage,
+            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"anchor_stage\":\"{}\"",
+            target_captured,
+            target_current,
+            anchor_captured,
+            position_captured,
+            anchor_stage,
         ),
     );
     let (front_app, char_count) = match &capture.selection {
@@ -666,6 +681,22 @@ pub(crate) fn selection_insertion_target_is_captured(target: &SelectionInsertion
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         // 移动端不提供选区润色；此处保留非桌面平台的类型兜底。
+        let _ = target;
+        true
+    }
+}
+
+/// Whether a lightweight Windows UIA position was captured for the target.
+pub(crate) fn selection_insertion_target_position_is_captured(
+    target: &SelectionInsertionTarget,
+) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        target.windows_selection_position.is_some()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
         let _ = target;
         true
     }

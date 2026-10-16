@@ -85,6 +85,7 @@ pub(crate) enum FocusedSelectionCaptureStage {
     SelectionRangeUnavailable,
     SelectedTextUnavailable,
     EmptySelection,
+    CollapsedSelection,
     RuntimeIdUnavailable,
     ProcessIdUnavailable,
     StartOffsetUnavailable,
@@ -108,6 +109,7 @@ impl FocusedSelectionCaptureStage {
             Self::SelectionRangeUnavailable => "selection_range_unavailable",
             Self::SelectedTextUnavailable => "selected_text_unavailable",
             Self::EmptySelection => "empty_selection",
+            Self::CollapsedSelection => "collapsed_selection",
             Self::RuntimeIdUnavailable => "runtime_id_unavailable",
             Self::ProcessIdUnavailable => "process_id_unavailable",
             Self::StartOffsetUnavailable => "start_offset_unavailable",
@@ -117,6 +119,10 @@ impl FocusedSelectionCaptureStage {
             Self::ExpectedMismatch => "expected_mismatch",
             Self::PositionChanged => "position_changed",
         }
+    }
+
+    pub(crate) fn is_position_retryable(self) -> bool {
+        matches!(self, Self::EmptySelection | Self::CollapsedSelection)
     }
 }
 
@@ -130,6 +136,7 @@ fn capture_stage(error: &str) -> FocusedSelectionCaptureStage {
         "selection_range" => FocusedSelectionCaptureStage::SelectionRangeUnavailable,
         "selected_text" => FocusedSelectionCaptureStage::SelectedTextUnavailable,
         "empty_selection" => FocusedSelectionCaptureStage::EmptySelection,
+        "collapsed_selection" => FocusedSelectionCaptureStage::CollapsedSelection,
         "runtime_id" => FocusedSelectionCaptureStage::RuntimeIdUnavailable,
         "process_id" => FocusedSelectionCaptureStage::ProcessIdUnavailable,
         "start_offset" => FocusedSelectionCaptureStage::StartOffsetUnavailable,
@@ -429,7 +436,10 @@ fn capture_focused_selection_position_once() -> (
         let end_offset =
             selection_endpoint_offset(&pattern, &selected, TextPatternRangeEndpoint_End)
                 .map_err(|_| "end_offset".to_string())?;
-        if start_offset >= end_offset {
+        if start_offset == end_offset {
+            return Err("collapsed_selection".to_string());
+        }
+        if start_offset > end_offset {
             return Err("empty_selection".to_string());
         }
         Ok(FocusedSelectionPosition {
@@ -466,7 +476,7 @@ pub(crate) fn capture_focused_selection_position_with_stage() -> (
     let mut provisional_position: Option<FocusedSelectionPosition> = None;
     for attempt in 0..FOCUSED_SELECTION_POSITION_ATTEMPTS {
         let result = capture_focused_selection_position_once();
-        if result.1 != FocusedSelectionCaptureStage::EmptySelection {
+        if !result.1.is_position_retryable() {
             if let (Some(previous), Some(current)) =
                 (provisional_position.as_ref(), result.0.as_ref())
             {

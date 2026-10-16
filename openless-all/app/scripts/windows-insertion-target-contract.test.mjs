@@ -160,13 +160,18 @@ const positionCapture = windowsHost.match(
 assert.ok(positionCapture, 'the pre-copy UIA position capture helper must exist');
 assert.match(
   positionCapture,
-  /selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_Start[\s\S]*?selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_End[\s\S]*?start_offset >= end_offset/,
-  'an empty UIA text result must still be accepted only after exact non-collapsed endpoints are obtained',
+  /selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_Start[\s\S]*?selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_End[\s\S]*?start_offset == end_offset[\s\S]*?start_offset > end_offset/,
+  'a collapsed or inverted UIA range must fail closed after exact endpoint capture',
+);
+assert.match(
+  windowsHost,
+  /is_position_retryable[\s\S]*?CollapsedSelection/,
+  'collapsed UIA ranges must retain the bounded pre-copy retry budget while exposing a distinct stage',
 );
 assert.match(
   positionCapture,
-  /for attempt in 0\.\.FOCUSED_SELECTION_POSITION_ATTEMPTS[\s\S]*?EmptySelection[\s\S]*?Duration::from_millis/,
-  'empty UIA selections must use only a bounded pre-copy retry budget',
+  /for attempt in 0\.\.FOCUSED_SELECTION_POSITION_ATTEMPTS[\s\S]*?is_position_retryable[\s\S]*?Duration::from_millis/,
+  'empty and collapsed UIA selections must use only a bounded pre-copy retry budget',
 );
 const anchorCapture = windowsHost.match(
   /pub\(crate\) fn capture_focused_selection_anchor_with_stage[\s\S]*?(?=\npub\(crate\) fn capture_focused_selection_anchor\()/,
@@ -226,6 +231,11 @@ assert.match(
   adapters,
   /event=capture_bridge_result[\s\S]*?anchor_captured=[\s\S]*?anchor_stage=/,
   'capture diagnostics must expose whether the UIA anchor was retained and why',
+);
+assert.match(
+  selection,
+  /position_captured[\s\S]*?anchor_stage/,
+  'P1 capture diagnostics must distinguish missing UIA position from missing anchor text',
 );
 assert.match(
   windowsHost,
