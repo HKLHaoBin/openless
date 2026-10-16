@@ -256,7 +256,7 @@ fn refresh_selection_insertion_target_anchor(
         if selection.omits_middle || selection.text.trim().is_empty() {
             return "selection_empty_or_truncated";
         }
-        if !position.matches_expected(&selection.text) {
+        if !position.is_provisional_empty_text() && !position.matches_expected(&selection.text) {
             return "position_expected_mismatch";
         }
         if !selection_insertion_target_is_current(target) {

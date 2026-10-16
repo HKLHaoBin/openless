@@ -81,8 +81,8 @@ assert.match(
 );
 assert.match(
   selectionAnchorRefresh,
-  /windows_selection_position[\s\S]*?matches_expected\(&selection\.text\)[\s\S]*?capture_focused_selection_anchor_with_stage\(&selection\.text\)[\s\S]*?matches_anchor\(&anchor\)/,
-  'anchor refresh must require the pre-capture position and exact offsets before retaining a post-capture anchor',
+  /windows_selection_position[\s\S]*?is_provisional_empty_text\(\)[\s\S]*?matches_expected\(&selection\.text\)[\s\S]*?capture_focused_selection_anchor_with_stage\(&selection\.text\)[\s\S]*?matches_anchor\(&anchor\)/,
+  'anchor refresh may bypass only an explicit non-collapsed provisional position and must still require exact post-capture offsets before retaining an anchor',
 );
 assert.match(
   selection,
@@ -102,6 +102,25 @@ assert.match(
   captureTarget,
   /capture_focused_selection_position_with_stage[\s\S]*?windows_selection_position_stage/,
   'the PreviewConfirm capture path must retain the lightweight UIA failure stage before clipboard capture',
+);
+const positionCapture = windowsHost.match(
+  /fn capture_focused_selection_position_once[\s\S]*?(?=\n(?:pub\(crate\) fn capture_focused_selection_position\(\)))/,
+)?.[0];
+assert.ok(positionCapture, 'the pre-copy UIA position capture helper must exist');
+assert.match(
+  positionCapture,
+  /selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_Start[\s\S]*?selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_End[\s\S]*?start_offset >= end_offset/,
+  'an empty UIA text result must still be accepted only after exact non-collapsed endpoints are obtained',
+);
+assert.match(
+  positionCapture,
+  /for attempt in 0\.\.FOCUSED_SELECTION_POSITION_ATTEMPTS[\s\S]*?EmptySelection[\s\S]*?Duration::from_millis/,
+  'empty UIA selections must use only a bounded pre-copy retry budget',
+);
+assert.doesNotMatch(
+  positionCapture,
+  /simulate_copy_and_read|post_copy_shortcut|Ctrl\\+C/,
+  'pre-copy UIA retries must not touch the clipboard or synthesize input',
 );
 assert.match(
   selection,

@@ -246,6 +246,12 @@ impl FocusedSelectionPosition {
             == FocusedSelectionStatus::Matched
     }
 
+    /// A pre-copy UIA provider may expose exact endpoints before it exposes range text. The
+    /// post-copy anchor must still prove the expected text and exact range identity.
+    pub(crate) fn is_provisional_empty_text(&self) -> bool {
+        self.selected_text.trim().is_empty() && self.start_offset < self.end_offset
+    }
+
     pub(crate) fn matches_anchor(&self, anchor: &FocusedSelectionAnchor) -> bool {
         self.runtime_id == anchor.runtime_id
             && self.process_id == anchor.process_id
@@ -362,9 +368,10 @@ fn selection_endpoint_offset(
     }
 }
 
-/// Capture a lightweight selection position before clipboard capture. This snapshot contains only
-/// the range identity needed to prove that a later, context-rich anchor refers to the same range.
-pub(crate) fn capture_focused_selection_position_with_stage() -> (
+const FOCUSED_SELECTION_POSITION_ATTEMPTS: usize = 3;
+const FOCUSED_SELECTION_POSITION_RETRY_DELAY_MS: u64 = 12;
+
+fn capture_focused_selection_position_once() -> (
     Option<FocusedSelectionPosition>,
     FocusedSelectionCaptureStage,
 ) {
@@ -388,7 +395,13 @@ pub(crate) fn capture_focused_selection_position_with_stage() -> (
             .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)
             .map_err(|_| "selected_text".to_string())?
             .to_string();
-        if selected_text.trim().is_empty() {
+        let start_offset =
+            selection_endpoint_offset(&pattern, &selected, TextPatternRangeEndpoint_Start)
+                .map_err(|_| "start_offset".to_string())?;
+        let end_offset =
+            selection_endpoint_offset(&pattern, &selected, TextPatternRangeEndpoint_End)
+                .map_err(|_| "end_offset".to_string())?;
+        if start_offset >= end_offset {
             return Err("empty_selection".to_string());
         }
         Ok(FocusedSelectionPosition {
@@ -396,25 +409,44 @@ pub(crate) fn capture_focused_selection_position_with_stage() -> (
             process_id: element
                 .CurrentProcessId()
                 .map_err(|_| "process_id".to_string())?,
-            start_offset: selection_endpoint_offset(
-                &pattern,
-                &selected,
-                TextPatternRangeEndpoint_Start,
-            )
-            .map_err(|_| "start_offset".to_string())?,
-            end_offset: selection_endpoint_offset(
-                &pattern,
-                &selected,
-                TextPatternRangeEndpoint_End,
-            )
-            .map_err(|_| "end_offset".to_string())?,
+            start_offset,
+            end_offset,
             selected_text,
         })
     });
     match result {
-        Ok(position) => (Some(position), FocusedSelectionCaptureStage::Matched),
+        Ok(position) => {
+            let stage = if position.selected_text.trim().is_empty() {
+                FocusedSelectionCaptureStage::EmptySelection
+            } else {
+                FocusedSelectionCaptureStage::Matched
+            };
+            (Some(position), stage)
+        }
         Err(error) => (None, capture_stage(&error)),
     }
+}
+
+/// Capture a lightweight selection position before clipboard capture. This snapshot contains only
+/// the range identity needed to prove that a later, context-rich anchor refers to the same range.
+/// Some UIA providers expose exact endpoints before they expose range text; that provisional result
+/// is retried briefly and may proceed only through the exact post-copy anchor fence.
+pub(crate) fn capture_focused_selection_position_with_stage() -> (
+    Option<FocusedSelectionPosition>,
+    FocusedSelectionCaptureStage,
+) {
+    for attempt in 0..FOCUSED_SELECTION_POSITION_ATTEMPTS {
+        let result = capture_focused_selection_position_once();
+        if result.1 != FocusedSelectionCaptureStage::EmptySelection
+            || attempt + 1 == FOCUSED_SELECTION_POSITION_ATTEMPTS
+        {
+            return result;
+        }
+        std::thread::sleep(Duration::from_millis(
+            FOCUSED_SELECTION_POSITION_RETRY_DELAY_MS,
+        ));
+    }
+    unreachable!("focused selection position attempts must be nonzero");
 }
 
 pub(crate) fn capture_focused_selection_position() -> Option<FocusedSelectionPosition> {
@@ -975,6 +1007,50 @@ mod voice_edit_tests {
         assert!(moved.matches_expected("same"));
         assert!(!moved.matches_anchor(&anchor));
         assert!(!original.matches_expected("different"));
+    }
+
+    #[test]
+    fn provisional_empty_position_requires_a_non_collapsed_exact_anchor() {
+        let anchor = FocusedSelectionAnchor::for_test();
+        let provisional = FocusedSelectionPosition {
+            runtime_id: vec![1],
+            process_id: 1,
+            start_offset: 0,
+            end_offset: 1,
+            selected_text: String::new(),
+        };
+        assert!(provisional.is_provisional_empty_text());
+        assert!(!provisional.matches_expected("any clipboard selection"));
+        assert!(provisional.matches_anchor(&anchor));
+
+        let collapsed = FocusedSelectionPosition {
+            end_offset: 0,
+            ..provisional.clone()
+        };
+        assert!(!collapsed.is_provisional_empty_text());
+        assert!(!collapsed.matches_anchor(&anchor));
+
+        let moved = FocusedSelectionPosition {
+            start_offset: 2,
+            end_offset: 3,
+            ..provisional
+        };
+        assert!(moved.is_provisional_empty_text());
+        assert!(!moved.matches_anchor(&anchor));
+    }
+
+    #[test]
+    fn verified_position_text_still_rejects_a_mismatched_selection() {
+        let position = FocusedSelectionPosition {
+            runtime_id: vec![1],
+            process_id: 1,
+            start_offset: 0,
+            end_offset: 1,
+            selected_text: "same".into(),
+        };
+        assert!(!position.is_provisional_empty_text());
+        assert!(position.matches_expected("same"));
+        assert!(!position.matches_expected("different"));
     }
 
     #[test]
