@@ -744,6 +744,7 @@ impl CoreSyncStore {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn import_local_bundle_with_diagnostics(
         &self,
         bytes: &[u8],
@@ -1119,6 +1120,7 @@ impl CoreSyncStore {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_local_migration_p6(
     diagnostic_run_id: Option<&str>,
     event: &'static str,

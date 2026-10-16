@@ -61,6 +61,7 @@ impl OpenLessBackend {
             })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn import_local_migration_bundle_with_diagnostics(
         &self,
         bytes: &[u8],
