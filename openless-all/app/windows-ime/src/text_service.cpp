@@ -26,6 +26,7 @@ constexpr ULONG_PTR kCopyDataQuery = 0x4F4C5131;  // "OLQ1": uint32 token
 constexpr ULONG_PTR kCopyDataUpdate = 0x4F4C5531; // "OLU1": token + owner + sender process + focus HWND + UTF-16LE text, replace the composition
 constexpr ULONG_PTR kCopyDataFinish = 0x4F4C4631; // "OLF1": token + owner + sender process + focus HWND + UTF-16LE text, end the composition
 constexpr ULONG_PTR kCopyDataCancel = 0x4F4C4331; // "OLC1": token + owner + sender process + focus HWND + UTF-16LE text, restore selection
+constexpr ULONG_PTR kCopyDataVersion = 0x4F4C5631; // "OLV1": zero-length protocol probe
 constexpr DWORD kMaxSubmitBytes = 1024 * 1024;
 
 // Replies are nonzero so they differ from an unhandled message (0). A failed
@@ -38,6 +39,7 @@ constexpr LRESULT kStatusBadRequest = 0x4F4C0005;
 constexpr LRESULT kStatusNotDispatched = 0x4F4C0006;
 constexpr LRESULT kStatusCompositionConflict = 0x4F4C0007;
 constexpr LRESULT kStatusCompositionRecoveryRequired = 0x4F4C0008;
+constexpr LRESULT kStatusProtocolVersion = 0x4F4C0009;
 
 LRESULT StatusFromHResult(HRESULT hr, bool dispatched) {
   if (hr == static_cast<HRESULT>(kStatusCompositionConflict)) {
@@ -264,6 +266,9 @@ void OpenLessTextService::DestroyMessageWindow() {
 LRESULT OpenLessTextService::HandleCopyData(const COPYDATASTRUCT *copy_data) {
   if (copy_data == nullptr) {
     return kStatusBadRequest;
+  }
+  if (copy_data->dwData == kCopyDataVersion) {
+    return copy_data->cbData == 0 ? kStatusProtocolVersion : kStatusBadRequest;
   }
   if (copy_data->dwData == kCopyDataSubmitLegacy) {
     return AcceptSubmit(copy_data, OpenLessEditOp::kCommit, true);

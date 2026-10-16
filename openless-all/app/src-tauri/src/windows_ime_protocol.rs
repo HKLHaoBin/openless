@@ -11,7 +11,8 @@ pub const OPENLESS_IME_MESSAGE_WINDOW_CLASS: &str = "OpenLessImeMessageWindow";
 
 /// `COPYDATASTRUCT::dwData` tags: "OLS1" (legacy token + UTF-16LE text), "OLS2" (token +
 /// sender process + focus HWND + UTF-16LE text), "OLU1"/"OLF1"/"OLC1" (token + composition
-/// owner + sender process + focus HWND + UTF-16LE text), and "OLQ1" (token).
+/// owner + sender process + focus HWND + UTF-16LE text), "OLQ1" (token), and "OLV1" (empty
+/// protocol-version probe).
 ///
 /// OLS2 is deliberately a new tag: an old in-host DLL must reject it rather than interpret the
 /// recovery metadata as text and report a false successful commit.
@@ -23,6 +24,9 @@ pub const IME_COPYDATA_UPDATE: usize = 0x4F4C_5531;
 pub const IME_COPYDATA_FINISH: usize = 0x4F4C_4631;
 /// "OLC1": restore the original selection and cancel the live composition.
 pub const IME_COPYDATA_CANCEL: usize = 0x4F4C_4331;
+/// "OLV1": a zero-length protocol probe used to distinguish the current DLL from a stale
+/// in-process registration before sending a composition payload.
+pub const IME_COPYDATA_VERSION: usize = 0x4F4C_5631;
 
 /// What one submit does in the host document. Mirrors `OpenLessEditOp` in the DLL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -76,6 +80,8 @@ pub const IME_STATUS_COMPOSITION_CONFLICT: u32 = 0x4F4C_0007;
 /// The native service has an orphaned composition from a previous OpenLess process; the caller
 /// must cancel it and retry the update against the current focus.
 pub const IME_STATUS_COMPOSITION_RECOVERY_REQUIRED: u32 = 0x4F4C_0008;
+/// The installed DLL answered the protocol probe and reports the current wire format.
+pub const IME_STATUS_PROTOCOL_VERSION: u32 = 0x4F4C_0009;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -200,6 +206,7 @@ mod tests {
             IME_STATUS_NOT_DISPATCHED,
             IME_STATUS_COMPOSITION_CONFLICT,
             IME_STATUS_COMPOSITION_RECOVERY_REQUIRED,
+            IME_STATUS_PROTOCOL_VERSION,
         ] {
             assert_ne!(status, 0);
             assert!(!is_failed_hresult(status));

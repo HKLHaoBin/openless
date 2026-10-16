@@ -72,6 +72,7 @@ const sharedConstants = [
   ['kCopyDataUpdate', 'IME_COPYDATA_UPDATE'],
   ['kCopyDataFinish', 'IME_COPYDATA_FINISH'],
   ['kCopyDataCancel', 'IME_COPYDATA_CANCEL'],
+  ['kCopyDataVersion', 'IME_COPYDATA_VERSION'],
   ['kStatusAccepted', 'IME_STATUS_ACCEPTED'],
   ['kStatusPending', 'IME_STATUS_PENDING'],
   ['kStatusCommitted', 'IME_STATUS_COMMITTED'],
@@ -80,6 +81,7 @@ const sharedConstants = [
   ['kStatusNotDispatched', 'IME_STATUS_NOT_DISPATCHED'],
   ['kStatusCompositionConflict', 'IME_STATUS_COMPOSITION_CONFLICT'],
   ['kStatusCompositionRecoveryRequired', 'IME_STATUS_COMPOSITION_RECOVERY_REQUIRED'],
+  ['kStatusProtocolVersion', 'IME_STATUS_PROTOCOL_VERSION'],
 ];
 for (const [nativeName, rustName] of sharedConstants) {
   const nativeValue = textService.match(new RegExp(`${nativeName} = (0x[0-9A-Fa-f]+)`));
@@ -97,6 +99,12 @@ assert.ok(windowClass, 'IME message window class should be defined');
 assert.ok(
   protocol.includes(`OPENLESS_IME_MESSAGE_WINDOW_CLASS: &str = "${windowClass[1]}"`),
   'IME message window class must match between C++ and Rust',
+);
+
+assert.match(
+  textService,
+  /kCopyDataVersion[\s\S]*kStatusProtocolVersion/,
+  'IME should answer the protocol probe so stale in-process DLLs are diagnosable',
 );
 
 assert.match(

@@ -140,13 +140,16 @@ function Assert-OpenLessImeInstalled {
   }
 
   $installRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $x64Dll))
-  $expectedX64 = Join-Path $installRoot "windows-ime\x64\OpenLessIme.dll"
-  $expectedX86 = Join-Path $installRoot "windows-ime\x86\OpenLessIme.dll"
-  if ($x64Dll -ne $expectedX64) {
-    throw "x64 COM DLL path points outside the installed IME directory. Expected '$expectedX64', got '$x64Dll'"
-  }
-  if ($x86Dll -ne $expectedX86) {
-    throw "x86 COM DLL path points outside the installed IME directory. Expected '$expectedX86', got '$x86Dll'"
+  $expectedX64Directory = Join-Path $installRoot "windows-ime\x64"
+  $expectedX86Directory = Join-Path $installRoot "windows-ime\x86"
+  foreach ($registered in @(
+      @{ Path = $x64Dll; Directory = $expectedX64Directory; Label = "x64" },
+      @{ Path = $x86Dll; Directory = $expectedX86Directory; Label = "x86" }
+    )) {
+    if ((Split-Path -Parent $registered.Path) -ne $registered.Directory -or
+        (Split-Path -Leaf $registered.Path) -notmatch '^OpenLessIme-.+\.dll$') {
+      throw "$($registered.Label) COM DLL path is not a versioned installed IME DLL: $($registered.Path)"
+    }
   }
   if (-not (Test-Path -LiteralPath (Join-Path $installRoot "openless.exe") -PathType Leaf)) {
     throw "Installed OpenLess executable not found under $installRoot"

@@ -142,6 +142,10 @@ assert.match(
 );
 assert.match(imeBuild, /\/p:OutDir=/, 'IME build should pass OutDir to MSBuild');
 assert.match(imeBuild, /\/p:IntDir=/, 'IME build should pass IntDir to MSBuild');
+assert.ok(
+  imeInstallSmoke.includes("OpenLessIme-.+\\.dll"),
+  'install smoke should verify a versioned registered IME DLL path',
+);
 assert.match(imeRegister, /windows-ime-build\.ps1/, 'IME register should build before registering');
 assert.doesNotMatch(
   imeRegister,
@@ -371,8 +375,8 @@ assert.match(
 );
 assert.match(
   nsisHook,
-  /File \/oname=OpenLessIme\.dll\.new "\$%\$\{ENV_VAR\}%"/,
-  'NSIS should embed OpenLessIme.dll in the installer',
+  /File \/oname=OpenLessIme-\$\{PRODUCT_VERSION\}\.dll "\$%\$\{ENV_VAR\}%"/,
+  'NSIS should embed the versioned OpenLess IME DLL in the installer',
 );
 assert.match(
   nsisHook,
@@ -386,8 +390,33 @@ assert.match(
 );
 assert.match(
   nsisHook,
-  /System32\\regsvr32\.exe[\s\S]*windows-ime\\x86\\OpenLessIme\.dll/,
+  /System32\\regsvr32\.exe[\s\S]*windows-ime\\x86\\OpenLessIme-\$\{PRODUCT_VERSION\}\.dll/,
   'NSIS should use System32 regsvr32 for the x86 IME on 32-bit Windows',
+);
+assert.match(
+  nsisHook,
+  /OpenLessIme-\$\{PRODUCT_VERSION\}\.dll/,
+  'NSIS should register each release under a versioned IME DLL path',
+);
+assert.doesNotMatch(
+  nsisHook,
+  /REBOOTOK/,
+  'NSIS must not silently defer a locked IME DLL replacement while registering the old protocol',
+);
+assert.match(
+  wixFragment,
+  /Name="OpenLessIme-\$\(var\.ProductVersion\)\.dll"/,
+  'WiX should register each release under a versioned IME DLL path',
+);
+assert.match(
+  nsisHook,
+  /Delete "\$INSTDIR\\windows-ime\\x64\\OpenLessIme\.dll"/,
+  'NSIS uninstall should remove the legacy x64 IME DLL',
+);
+assert.match(
+  nsisHook,
+  /Delete "\$INSTDIR\\windows-ime\\x86\\OpenLessIme\.dll"/,
+  'NSIS uninstall should remove the legacy x86 IME DLL',
 );
 assert.match(nsisHook, /Abort/, 'NSIS install should fail if TSF registration fails');
 assert.match(

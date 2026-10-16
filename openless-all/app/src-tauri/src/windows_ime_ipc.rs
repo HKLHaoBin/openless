@@ -254,8 +254,9 @@ mod windows_message {
         IME_SEND_TIMEOUT_MS, IME_SUBMIT_TIMEOUT, IME_WINDOW_RETRY_INTERVAL,
     };
     use crate::windows_ime_protocol::{
-        encode_composition_submit_payload, encode_query_payload, ImeSubmitStatus, IME_COPYDATA_QUERY,
-        IME_MAX_SUBMIT_BYTES, OPENLESS_IME_MESSAGE_WINDOW_CLASS,
+        encode_composition_submit_payload, encode_query_payload, ImeSubmitStatus,
+        IME_COPYDATA_QUERY, IME_COPYDATA_VERSION, IME_MAX_SUBMIT_BYTES,
+        IME_STATUS_PROTOCOL_VERSION, OPENLESS_IME_MESSAGE_WINDOW_CLASS,
     };
 
     const HWND_MESSAGE: isize = -3;
@@ -299,6 +300,34 @@ mod windows_message {
         NotDelivered(u32),
     }
 
+    fn verify_protocol_version(hwnd: isize) -> WindowsImeIpcResult<()> {
+        match send_copy_data(hwnd, IME_COPYDATA_VERSION, &[], IME_QUERY_SEND_TIMEOUT_MS) {
+            Ok(reply) if reply == IME_STATUS_PROTOCOL_VERSION => {
+                log::debug!(
+                    "[windows-ime] protocol probe status=current raw_status=0x{:08X}",
+                    reply,
+                );
+                Ok(())
+            }
+            Ok(reply) => {
+                log::warn!(
+                    "[windows-ime] protocol probe status=stale_or_unknown raw_status=0x{:08X}",
+                    reply,
+                );
+                Err(WindowsImeIpcError::Protocol(
+                    "the target process has no current OpenLessIme.dll protocol; restart the target app after updating OpenLess"
+                        .to_string(),
+                ))
+            }
+            Err(SendFailure::TimedOut) => Err(WindowsImeIpcError::Protocol(
+                "the target process did not answer the OpenLessIme.dll protocol probe".to_string(),
+            )),
+            Err(SendFailure::NotDelivered(code)) => Err(WindowsImeIpcError::Io(format!(
+                "sending the OpenLessIme.dll protocol probe failed: OS error {code}"
+            ))),
+        }
+    }
+
     pub fn submit_text_to_window(
         request: ImeSubmitRequest,
     ) -> WindowsImeIpcResult<ImeSubmitStatus> {
@@ -308,7 +337,7 @@ mod windows_message {
             crate::windows_ime_protocol::encode_commit_submit_payload(
                 token,
                 request.composition_process_id,
-                request.target.map_or(0, |target| target.window_handle as u64),
+                target.window_handle as u64,
                 &request.text,
             )
         } else {
@@ -316,7 +345,7 @@ mod windows_message {
                 token,
                 request.composition_owner,
                 request.composition_process_id,
-                request.target.map_or(0, |target| target.window_handle as u64),
+                target.window_handle as u64,
                 &request.text,
             )
         };
@@ -341,6 +370,7 @@ mod windows_message {
             payload.len(),
             request.allow_same_process_fallback,
         );
+        verify_protocol_version(window.hwnd)?;
 
         let reply = send_copy_data(
             window.hwnd,
