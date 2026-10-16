@@ -89,8 +89,10 @@ for (const kind of ['nsis', 'msi']) {
 assert.doesNotMatch(smoke.run, /continue-on-error|SkipUninstall|exit 0/);
 const smokeSource = readFileSync(new URL('windows-ime-install-smoke.ps1', import.meta.url), 'utf8');
 assert.match(smokeSource, /\[string\]\$InstallerLogPath/);
-assert.match(smokeSource, /\/LOG=\$InstallerLogPath/);
+assert.match(smokeSource, /\/LOG=`"\$InstallerLogPath`"/);
+assert.match(smokeSource, /\[diagnostic\] NSIS log path present:/);
 assert.match(smokeSource, /Get-Content -LiteralPath \$InstallerLogPath -Tail 200/);
+assert.match(smokeSource, /Get-ChildItem -LiteralPath \$directory -Filter '\*\.log'/);
 assert.match(smokeSource, /\[int\[\]\]\$SuccessExitCodes = @\(0\)/);
 assert.match(smokeSource, /\$process.ExitCode -notin \$SuccessExitCodes/);
 assert.match(smokeSource, /-Label "MSI install" -SuccessExitCodes @\(0, 3010\)/);

@@ -197,16 +197,46 @@ if (-not (Test-IsAdministrator)) {
 $InstallerPath = (Resolve-Path -LiteralPath $InstallerPath).Path
 if ($InstallerKind -eq "nsis") {
   $nsisArguments = @("/S", "/AllUsers")
+  $logDirectory = $null
   if (-not [string]::IsNullOrWhiteSpace($InstallerLogPath)) {
-    $nsisArguments += "/LOG=$InstallerLogPath"
+    $logDirectory = Split-Path -Parent $InstallerLogPath
+    if (-not [string]::IsNullOrWhiteSpace($logDirectory)) {
+      New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+    }
+    $nsisArguments += "/LOG=`"$InstallerLogPath`""
   }
   try {
     Invoke-CheckedProcess -FilePath $InstallerPath -ArgumentList $nsisArguments -Label "NSIS install"
   } catch {
-    if (-not [string]::IsNullOrWhiteSpace($InstallerLogPath) -and
-        (Test-Path -LiteralPath $InstallerLogPath -PathType Leaf)) {
-      Write-Host "[diagnostic] NSIS installer log (last 200 lines):"
-      Get-Content -LiteralPath $InstallerLogPath -Tail 200 | ForEach-Object { Write-Host $_ }
+    if (-not [string]::IsNullOrWhiteSpace($InstallerLogPath)) {
+      $logPresent = Test-Path -LiteralPath $InstallerLogPath -PathType Leaf
+      Write-Host "[diagnostic] NSIS log path present: $logPresent"
+      if ($logPresent) {
+        Write-Host "[diagnostic] NSIS installer log (last 200 lines):"
+        Get-Content -LiteralPath $InstallerLogPath -Tail 200 | ForEach-Object { Write-Host $_ }
+      } else {
+        $logDirectories = @(
+          $logDirectory,
+          $env:RUNNER_TEMP,
+          $env:TEMP,
+          $env:TMP,
+          (Split-Path -Parent $InstallerPath)
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+        foreach ($directory in $logDirectories) {
+          if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+            continue
+          }
+          $candidates = @(
+            Get-ChildItem -LiteralPath $directory -Filter '*.log' -File -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 20
+          )
+          Write-Host "[diagnostic] NSIS log candidates in ${directory}: $($candidates.Count)"
+          foreach ($candidate in $candidates) {
+            Write-Host "[diagnostic] candidate=$($candidate.Name) bytes=$($candidate.Length)"
+          }
+        }
+      }
     }
     throw
   }
