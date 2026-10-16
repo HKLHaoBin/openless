@@ -247,15 +247,27 @@ fn refresh_selection_insertion_target_anchor(
 ) -> &'static str {
     #[cfg(target_os = "windows")]
     {
-        let Some(position) = target.windows_selection_position.as_ref() else {
-            return target.windows_selection_position_stage;
-        };
         if target.windows_selection_anchor.is_some() {
             return "already_captured";
         }
         if selection.omits_middle || selection.text.trim().is_empty() {
             return "selection_empty_or_truncated";
         }
+        if target.windows_selection_position.is_none() {
+            if !selection_insertion_target_is_current(target) {
+                return "target_changed_before_position";
+            }
+            let (position, stage) =
+                crate::host_document::capture_focused_selection_position_with_stage();
+            target.windows_selection_position_stage = stage.as_str();
+            let Some(position) = position else {
+                return stage.as_str();
+            };
+            target.windows_selection_position = Some(position);
+        }
+        let Some(position) = target.windows_selection_position.as_ref() else {
+            return target.windows_selection_position_stage;
+        };
         if !position.is_provisional_empty_text() && !position.matches_expected(&selection.text) {
             return "position_expected_mismatch";
         }

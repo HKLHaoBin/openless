@@ -85,6 +85,21 @@ assert.match(
   'anchor refresh may bypass only an explicit non-collapsed provisional position and must still require exact post-capture offsets before retaining an anchor',
 );
 assert.match(
+  selectionAnchorRefresh,
+  /windows_selection_position\.is_none\(\)[\s\S]*?selection_insertion_target_is_current\(target\)[\s\S]*?capture_focused_selection_position_with_stage\(\)[\s\S]*?windows_selection_position_stage = stage\.as_str\(\)[\s\S]*?windows_selection_position = Some\(position\)[\s\S]*?capture_focused_selection_anchor_with_stage\(&selection\.text\)/,
+  'after clipboard capture, a missing pre-copy position may be reacquired only through a fenced UIA read before exact anchor matching',
+);
+assert.match(
+  selectionAnchorRefresh,
+  /windows_selection_position\.is_none\(\)[\s\S]*?target_changed_before_position[\s\S]*?capture_focused_selection_position_with_stage\(\)/,
+  'position reacquisition must fail closed when the original target changed before the UIA read',
+);
+assert.match(
+  selectionAnchorRefresh,
+  /capture_focused_selection_position_with_stage\(\)[\s\S]*?target_changed_before_anchor[\s\S]*?capture_focused_selection_anchor_with_stage\(&selection\.text\)[\s\S]*?target_changed_after_anchor/,
+  'reacquired position and anchor must retain the existing pre-read and post-read target fences',
+);
+assert.match(
   selection,
   /if let Some\(\(selection, mut insertion_target\)\) = take_prefetched_selection_workspace\(\)[\s\S]*?refresh_selection_insertion_target_anchor\(&mut insertion_target, &selection\)/,
   'a prefetched target must get one final bounded anchor refresh before PreviewConfirm admission',
