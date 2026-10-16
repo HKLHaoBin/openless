@@ -61,33 +61,6 @@ impl OpenLessBackend {
             })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn import_local_migration_bundle_with_diagnostics(
-        &self,
-        bytes: &[u8],
-        password: Option<crate::local_migration_bundle::BundlePassword>,
-        mode: crate::local_migration_bundle::RestoreMode,
-        choices: &[crate::cloud_sync_e2ee_documents::ConflictChoice],
-        expected_generation: Option<crate::cloud_sync_e2ee_documents::Revision>,
-        portable_android_preferences: Option<serde_json::Value>,
-        diagnostic_run_id: &str,
-    ) -> Result<crate::local_migration_bundle::BundleInspection, BackendError> {
-        self.local_migration_store
-            .import_local_bundle_with_diagnostics(
-                bytes,
-                password,
-                mode,
-                choices,
-                expected_generation,
-                portable_android_preferences,
-                Some(diagnostic_run_id),
-            )
-            .await
-            .map_err(|error| {
-                BackendError::new(crate::BackendErrorCode::InvalidState, error.to_string())
-            })
-    }
-
     pub async fn sign_out_account(&self) -> Result<(), BackendError> {
         if let Some(service) = &self.encrypted_sync {
             service.sign_out().await.map(|_| ())

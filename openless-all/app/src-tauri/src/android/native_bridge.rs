@@ -352,7 +352,6 @@ fn import_local_migration_bundle_json(
     choices_json: &str,
     expected_generation: &str,
     android_preferences_json: &str,
-    diagnostic_run_id: &str,
 ) -> String {
     let result = (|| -> Result<serde_json::Value, String> {
         let backend = CORE_BACKEND.get().ok_or("backend unavailable")?;
@@ -395,17 +394,14 @@ fn import_local_migration_bundle_json(
                     .map_err(|_| "invalid Android portable preferences")?,
             )
         };
-        let inspection = tauri::async_runtime::block_on(
-            backend.import_local_migration_bundle_with_diagnostics(
-                &bytes,
-                password,
-                restore_mode,
-                &choices,
-                expected_generation,
-                android_preferences,
-                diagnostic_run_id,
-            ),
-        )
+        let inspection = tauri::async_runtime::block_on(backend.import_local_migration_bundle(
+            &bytes,
+            password,
+            restore_mode,
+            &choices,
+            expected_generation,
+            android_preferences,
+        ))
         .map_err(|error| error.message)?;
         backend.publish_local_migration_state_changed();
         tauri::async_runtime::block_on(backend.refresh_and_publish_credentials())
@@ -1766,7 +1762,6 @@ mod jni_exports {
         choices_json: jstring,
         expected_generation: jstring,
         android_preferences: jstring,
-        diagnostic_run_id: jstring,
     ) -> jstring {
         let Ok(mut env) = JniEnv::from_raw(env) else {
             return std::ptr::null_mut();
@@ -1789,9 +1784,6 @@ mod jni_exports {
         let android_preferences = env
             .get_string(&JString::from_raw(android_preferences))
             .map(|value| value.to_string_lossy().into_owned());
-        let diagnostic_run_id = env
-            .get_string(&JString::from_raw(diagnostic_run_id))
-            .map(|value| value.to_string_lossy().into_owned());
         let response = match (
             bundle_base64,
             password,
@@ -1799,17 +1791,8 @@ mod jni_exports {
             choices_json,
             expected_generation,
             android_preferences,
-            diagnostic_run_id,
         ) {
-            (
-                Ok(bundle),
-                Ok(password),
-                Ok(mode),
-                Ok(choices),
-                Ok(expected_generation),
-                Ok(android_preferences),
-                Ok(diagnostic_run_id),
-            ) => {
+            (Ok(bundle), Ok(password), Ok(mode), Ok(choices), Ok(expected_generation), Ok(android_preferences)) => {
                 import_local_migration_bundle_json(
                     &bundle,
                     &password,
@@ -1817,7 +1800,6 @@ mod jni_exports {
                     &choices,
                     &expected_generation,
                     &android_preferences,
-                    &diagnostic_run_id,
                 )
             }
             _ => local_bundle_error("invalid JNI input"),
