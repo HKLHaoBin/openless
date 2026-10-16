@@ -6695,10 +6695,13 @@ impl OpenLessBackend {
 
         let insert_outcome = if context.insertion.enabled {
             log::info!(
-                "[insert-diagnostics] session_id={} phase=finalizing final_chars={} final_hash={}",
+                "[insert-diagnostics] session_id={} phase=finalizing raw_chars={} raw_hash={} final_chars={} final_hash={} polish_failed={}",
                 session_id,
+                engine_result.raw_text.chars().count(),
+                crate::output_cleaning::privacy_text_hash(&engine_result.raw_text),
                 engine_result.polished_text.chars().count(),
                 crate::output_cleaning::privacy_text_hash(&engine_result.polished_text),
+                engine_result.polish_failed,
             );
             match self
                 .finish_text_insertion(session_id, engine_result.polished_text.clone())
@@ -13827,6 +13830,51 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn final_insertion_uses_polished_text_not_raw_transcript() {
+        use crate::testing::{FixtureDictationEngine, FixtureInsertionAction, FixtureTextInserter};
+
+        let data_dir = TestDataDir::new("polished-final-insertion");
+        let inserter = FixtureTextInserter::with_outcome(InsertOutcome::Inserted);
+        let engine = FixtureDictationEngine::successful("raw transcript", "polished final");
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data_dir.path().to_path_buf(),
+                ..BackendConfig::default()
+            },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(inserter.clone()),
+                dictation_engine: Arc::new(engine),
+                task_spawner: Arc::new(TokioTaskSpawner),
+                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                services: crate::domains::BackendServices::unsupported(),
+                local_asr_runtime: None,
+                marketplace_config: None,
+                selection_runtime: None,
+                selection_polisher: None,
+                qa_runtime: None,
+            },
+        )
+        .unwrap();
+        backend.start().await.unwrap();
+        let session_id = backend.start_dictation().await.unwrap();
+
+        let result = backend.stop_dictation().await.unwrap();
+        assert_eq!(result.raw_text, "raw transcript");
+        assert_eq!(result.polished_text, "polished final");
+        assert_eq!(
+            inserter.actions(),
+            vec![
+                FixtureInsertionAction::Prepare(session_id),
+                FixtureInsertionAction::Insert {
+                    session_id,
+                    text: "polished final".into(),
+                },
+            ]
+        );
+    }
+
     async fn assert_streaming_polish_deltas_flush_before_final_insert(translation: bool) {
         use crate::testing::{FixtureDictationEngine, FixtureInsertionAction, FixtureTextInserter};
 
@@ -14414,6 +14462,26 @@ mod tests {
         assert!(entries[..entries.len() - 1]
             .iter()
             .all(|entry| entry == "update:你" || entry == "update:你好"));
+    }
+
+    #[tokio::test]
+    async fn composition_finalization_uses_polished_text_not_raw_transcript() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut context = DictationContext::default();
+        context.insertion.composition_input = true;
+        let insertion = composition_test_insertion(&context, log.clone());
+        insertion.push_partial("raw transcript".into());
+
+        assert_eq!(
+            insertion.finish("polished final".into()).await.unwrap(),
+            InsertOutcome::Inserted
+        );
+        let entries = log.lock().unwrap().clone();
+        assert_eq!(
+            entries.last().map(String::as_str),
+            Some("finish:polished final")
+        );
+        assert!(!entries.iter().any(|entry| entry == "finish:raw transcript"));
     }
 
     #[tokio::test]
