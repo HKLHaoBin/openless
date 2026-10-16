@@ -280,7 +280,12 @@ test('text height grows with contents and chips give the selection actual layout
     'aria-pressed',
     'true',
   );
-  await page.waitForTimeout(350);
+  await expect
+    .poll(
+      async () =>
+        (await page.getByRole('button', { name: 'Three', exact: true }).boundingBox())!.x,
+    )
+    .toBeGreaterThanOrEqual(before.x - 1);
   const selected = await page.getByRole('button', { name: 'Two', exact: true }).boundingBox();
   const last = await page.getByRole('button', { name: 'Three', exact: true }).boundingBox();
   expect(selected!.x + selected!.width).toBeLessThan(last!.x);
