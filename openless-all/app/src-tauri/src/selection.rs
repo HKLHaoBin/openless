@@ -93,6 +93,8 @@ pub(crate) struct SelectionInsertionTarget {
     windows_selection_position: Option<crate::host_document::FocusedSelectionPosition>,
     #[cfg(target_os = "windows")]
     windows_selection_position_stage: &'static str,
+    #[cfg(target_os = "windows")]
+    windows_selection_position_initial_stage: &'static str,
     #[cfg(target_os = "macos")]
     macos: Option<MacosSelectionTarget>,
 }
@@ -357,11 +359,12 @@ pub(crate) fn prefetch_selection_workspace_capture() {
         "capture_result",
         if anchor_captured { "matched" } else { "unavailable" },
         &format!(
-            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"anchor_stage\":\"{}\"",
+            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"position_initial_stage\":\"{}\",\"anchor_stage\":\"{}\"",
             target_captured,
             target_current,
             anchor_captured,
             position_captured,
+            selection_insertion_target_position_initial_stage(&insertion_target),
             anchor_stage,
         ),
     );
@@ -464,11 +467,12 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
             "capture_result",
             if anchor_captured { "matched" } else { "unavailable" },
             &format!(
-                "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"anchor_stage\":\"{}\"",
+                "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"position_initial_stage\":\"{}\",\"anchor_stage\":\"{}\"",
                 target_captured,
                 target_current,
                 anchor_captured,
                 position_captured,
+                selection_insertion_target_position_initial_stage(&insertion_target),
                 anchor_stage,
             ),
         );
@@ -508,11 +512,12 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
         "capture_result",
         if anchor_captured { "matched" } else { "unavailable" },
         &format!(
-            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"anchor_stage\":\"{}\"",
+            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"position_initial_stage\":\"{}\",\"anchor_stage\":\"{}\"",
             target_captured,
             target_current,
             anchor_captured,
             position_captured,
+            selection_insertion_target_position_initial_stage(&insertion_target),
             anchor_stage,
         ),
     );
@@ -632,6 +637,7 @@ fn capture_selection_insertion_target_impl(capture_position: bool) -> SelectionI
             windows_selection_anchor: None,
             windows_selection_position,
             windows_selection_position_stage,
+            windows_selection_position_initial_stage: windows_selection_position_stage,
         };
     }
 
@@ -702,6 +708,21 @@ pub(crate) fn selection_insertion_target_position_is_captured(
     }
 }
 
+fn selection_insertion_target_position_initial_stage(
+    target: &SelectionInsertionTarget,
+) -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        target.windows_selection_position_initial_stage
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = target;
+        "not_applicable"
+    }
+}
+
 /// PreviewConfirm needs the stronger UIA anchor; DirectReplace deliberately does not.
 pub(crate) fn selection_insertion_target_anchor_is_captured(
     target: &SelectionInsertionTarget,
@@ -733,6 +754,7 @@ pub(crate) fn test_preview_target_with_anchor() -> SelectionInsertionTarget {
         windows_selection_anchor: Some(crate::host_document::FocusedSelectionAnchor::for_test()),
         windows_selection_position: None,
         windows_selection_position_stage: "matched",
+        windows_selection_position_initial_stage: "matched",
     }
 }
 

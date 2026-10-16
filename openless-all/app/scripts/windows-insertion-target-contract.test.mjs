@@ -234,8 +234,8 @@ assert.match(
 );
 assert.match(
   selection,
-  /position_captured[\s\S]*?anchor_stage/,
-  'P1 capture diagnostics must distinguish missing UIA position from missing anchor text',
+  /position_captured[\s\S]*?position_initial_stage[\s\S]*?anchor_stage/,
+  'P1 capture diagnostics must distinguish initial UIA position failure from post-copy anchor failure',
 );
 assert.match(
   windowsHost,
