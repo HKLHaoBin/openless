@@ -16,9 +16,11 @@ import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import android.util.Log
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import java.util.UUID
 
 /**
  * Full-screen native flow for exporting and importing the versioned local
@@ -35,6 +37,7 @@ class OpenLessLocalMigrationActivity : Activity() {
     private val requestCodeImportOpen = 4202
     private val requestCodeLegacyImportOpen = 4203
     private val maxMigrationBundleBytes = OpenLessMigrationBundlePolicy.MAX_BUNDLE_BYTES
+    private val migrationDebugRunId = UUID.randomUUID().toString()
     private data class PendingExportState(
         val mode: String,
         val includeCredentials: Boolean,
@@ -56,6 +59,42 @@ class OpenLessLocalMigrationActivity : Activity() {
         }
 
     private fun tone(dark: Int, light: Int): Int = if (isDarkTheme) dark else light
+
+    private fun debugMigrationEvent(
+        probeId: String,
+        hypothesisIds: List<String>,
+        event: String,
+        outcome: String,
+        safe: Map<String, Any?> = emptyMap(),
+    ) {
+        val safeJson = org.json.JSONObject()
+        safe.forEach { (key, value) -> safeJson.put(key, value ?: org.json.JSONObject.NULL) }
+        val record = org.json.JSONObject()
+            .put("schema", "diagnosing-bugs.v1")
+            .put("session_id", "issue-1192-android-migration")
+            .put("run_id", migrationDebugRunId)
+            .put("probe_id", probeId)
+            .put("hypothesis_ids", org.json.JSONArray(hypothesisIds))
+            .put("event", event)
+            .put("outcome", outcome)
+            .put("safe", safeJson)
+            .put("ts", System.currentTimeMillis())
+        Log.i("DEBUG-MIGRATION-1192", record.toString())
+    }
+
+    private fun migrationErrorCode(error: Throwable): String {
+        val errorCode = Regex("migration_bundle_[a-z0-9_]+")
+            .find(error.message.orEmpty())
+            ?.value
+        return errorCode ?: error::class.java.simpleName.ifBlank { "unknown_error" }
+    }
+
+    private fun migrationResponseErrorCode(response: org.json.JSONObject): String {
+        val errorCode = Regex("migration_bundle_[a-z0-9_]+")
+            .find(response.optString("error"))
+            ?.value
+        return errorCode ?: "response_error"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -278,6 +317,18 @@ class OpenLessLocalMigrationActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == requestCodeImportOpen) {
+            debugMigrationEvent(
+                "P1",
+                listOf("H1", "H5"),
+                "activity_result",
+                if (resultCode == RESULT_OK && data?.data != null) "accepted" else "cancelled",
+                mapOf(
+                    "resultOk" to (resultCode == RESULT_OK),
+                    "uriPresent" to (data?.data != null),
+                ),
+            )
+        }
         if (resultCode != RESULT_OK || data == null) {
             if (requestCode == requestCodeExportSave) clearPendingExport()
             return
@@ -300,17 +351,91 @@ class OpenLessLocalMigrationActivity : Activity() {
                 val uri = data.data ?: return
                 Thread {
                     val result = runCatching {
-                        val bytes = OpenLessContentReader.readBytes(this, uri.toString(), maxMigrationBundleBytes)
-                            ?: error("read selected document failed")
-                        val bundleBase64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                        val envelope = org.json.JSONObject(OpenLessNative.nativeInspectLocalMigrationBundle(bundleBase64))
-                        check(envelope.optBoolean("ok")) { envelope.optString("error", "invalid migration bundle") }
-                        bundleBase64 to envelope.getJSONObject("payload")
+                        val readResult = OpenLessContentReader.readStrict(this, uri.toString(), maxMigrationBundleBytes)
+                        val bytes = when (readResult) {
+                            is OpenLessReadResult.Success -> {
+                                debugMigrationEvent(
+                                    "P1",
+                                    listOf("H1"),
+                                    "read_result",
+                                    "success",
+                                    mapOf("bytes" to readResult.bytes.size),
+                                )
+                                readResult.bytes
+                            }
+                            is OpenLessReadResult.Failure -> {
+                                debugMigrationEvent(
+                                    "P1",
+                                    listOf("H1"),
+                                    "read_result",
+                                    "failure",
+                                    mapOf("reason" to readResult.reason.name),
+                                )
+                                error("read selected document failed")
+                            }
+                        }
+                        val envelope = try {
+                            debugMigrationEvent("P2", listOf("H2"), "inspect_call", "started")
+                            org.json.JSONObject(OpenLessNative.nativeInspectLocalMigrationBundle(
+                                android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP),
+                            ))
+                        } catch (error: Throwable) {
+                            debugMigrationEvent(
+                                "P2",
+                                listOf("H2"),
+                                "inspect_result",
+                                "failure",
+                                mapOf("errorCode" to migrationErrorCode(error)),
+                            )
+                            throw error
+                        }
+                        val inspectOk = envelope.optBoolean("ok")
+                        if (!inspectOk) {
+                            debugMigrationEvent(
+                                "P2",
+                                listOf("H2"),
+                                "inspect_result",
+                                "failure",
+                                mapOf("errorCode" to migrationResponseErrorCode(envelope)),
+                            )
+                            check(false) { envelope.optString("error", "invalid migration bundle") }
+                        }
+                        val payload = try {
+                            envelope.getJSONObject("payload")
+                        } catch (error: Throwable) {
+                            debugMigrationEvent(
+                                "P2",
+                                listOf("H2"),
+                                "inspect_result",
+                                "failure",
+                                mapOf("errorCode" to migrationErrorCode(error)),
+                            )
+                            throw error
+                        }
+                        debugMigrationEvent(
+                            "P2",
+                            listOf("H2"),
+                            "inspect_result",
+                            "success",
+                            mapOf(
+                                "documentCount" to payload.optInt("documentCount"),
+                                "formatVersion" to payload.optInt("formatVersion"),
+                                "credentialsEncrypted" to payload.optBoolean("credentialsEncrypted"),
+                            ),
+                        )
+                        android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP) to payload
                     }
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         result.onSuccess { (bundleBase64, inspection) -> showMigrationImportSummary(bundleBase64, inspection) }
                             .onFailure { error ->
+                                debugMigrationEvent(
+                                    "P1",
+                                    listOf("H1", "H5"),
+                                    "import_entry_result",
+                                    "failure",
+                                    mapOf("errorCode" to migrationErrorCode(error)),
+                                )
                                 Toast.makeText(this, ui("读取或校验失败：${error.message}", "Read or validation failed: ${error.message}"), Toast.LENGTH_LONG).show()
                             }
                     }
@@ -458,17 +583,68 @@ class OpenLessLocalMigrationActivity : Activity() {
     ) {
         Thread {
             val previewResult = runCatching {
-                val response = org.json.JSONObject(
-                    OpenLessNative.nativePreviewLocalMigrationBundle(
-                        bundleBase64,
-                        password,
-                        OpenLessSettingsExport.exportPortable(this@OpenLessLocalMigrationActivity),
+                val response = try {
+                    debugMigrationEvent(
+                        "P3",
+                        listOf("H3"),
+                        "preview_call",
+                        "started",
+                        mapOf("allowStaleRetry" to allowStaleRetry),
+                    )
+                    org.json.JSONObject(
+                        OpenLessNative.nativePreviewLocalMigrationBundle(
+                            bundleBase64,
+                            password,
+                            OpenLessSettingsExport.exportPortable(this@OpenLessLocalMigrationActivity),
+                        ),
+                    )
+                } catch (error: Throwable) {
+                    debugMigrationEvent(
+                        "P3",
+                        listOf("H3"),
+                        "preview_result",
+                        "failure",
+                        mapOf("errorCode" to migrationErrorCode(error)),
+                    )
+                    throw error
+                }
+                if (!response.optBoolean("ok")) {
+                    debugMigrationEvent(
+                        "P3",
+                        listOf("H3"),
+                        "preview_result",
+                        "failure",
+                        mapOf("errorCode" to migrationResponseErrorCode(response)),
+                    )
+                    throw IllegalStateException(response.optString("error", "preview failed"))
+                }
+                val preview = try {
+                    response.getJSONObject("payload").also { preview ->
+                        check(preview.optString("observedGeneration").isNotBlank()) {
+                            "preview missing observed generation"
+                        }
+                    }
+                } catch (error: Throwable) {
+                    debugMigrationEvent(
+                        "P3",
+                        listOf("H3"),
+                        "preview_result",
+                        "failure",
+                        mapOf("errorCode" to migrationErrorCode(error)),
+                    )
+                    throw error
+                }
+                debugMigrationEvent(
+                    "P3",
+                    listOf("H3"),
+                    "preview_result",
+                    "success",
+                    mapOf(
+                        "conflictCount" to (preview.optJSONArray("conflicts")?.length() ?: 0),
+                        "observedGenerationPresent" to preview.optString("observedGeneration").isNotBlank(),
                     ),
                 )
-                check(response.optBoolean("ok")) { response.optString("error", "preview failed") }
-                response.getJSONObject("payload").also { preview ->
-                    check(preview.optString("observedGeneration").isNotBlank()) { "preview missing observed generation" }
-                }
+                preview
             }
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
@@ -598,26 +774,121 @@ class OpenLessLocalMigrationActivity : Activity() {
                     val applyPortable = mode == "replace" || portableConflictSide(conflicts, choices) != "local"
                     val mergePortableLearning = mode == "merge" && applyPortable
                     val result = runCatching {
-                        val response = org.json.JSONObject(
-                            OpenLessNative.nativeImportLocalMigrationBundle(
-                                bundleBase64,
-                                password,
-                                mode,
-                                choices.toString(),
-                                expectedGeneration,
-                                OpenLessSettingsExport.exportPortable(this@OpenLessLocalMigrationActivity),
-                            ),
+                        val response = try {
+                            debugMigrationEvent(
+                                "P4",
+                                listOf("H3", "H4"),
+                                "import_call",
+                                "started",
+                                mapOf(
+                                    "mode" to mode,
+                                    "choicesCount" to choices.length(),
+                                    "expectedGenerationPresent" to expectedGeneration.isNotBlank(),
+                                ),
+                            )
+                            org.json.JSONObject(
+                                OpenLessNative.nativeImportLocalMigrationBundle(
+                                    bundleBase64,
+                                    password,
+                                    mode,
+                                    choices.toString(),
+                                    expectedGeneration,
+                                    OpenLessSettingsExport.exportPortable(this@OpenLessLocalMigrationActivity),
+                                ),
+                            )
+                        } catch (error: Throwable) {
+                            debugMigrationEvent(
+                                "P4",
+                                listOf("H3", "H4"),
+                                "import_result",
+                                "failure",
+                                mapOf("errorCode" to migrationErrorCode(error), "mode" to mode),
+                            )
+                            throw error
+                        }
+                        if (!response.optBoolean("ok")) {
+                            debugMigrationEvent(
+                                "P4",
+                                listOf("H3", "H4"),
+                                "import_result",
+                                "failure",
+                                mapOf("errorCode" to migrationResponseErrorCode(response), "mode" to mode),
+                            )
+                            throw IllegalStateException(response.optString("error", "import failed"))
+                        }
+                        val payload = try {
+                            response.getJSONObject("payload")
+                        } catch (error: Throwable) {
+                            debugMigrationEvent(
+                                "P4",
+                                listOf("H4"),
+                                "import_result",
+                                "failure",
+                                mapOf("errorCode" to migrationErrorCode(error), "mode" to mode),
+                            )
+                            throw error
+                        }
+                        debugMigrationEvent(
+                            "P4",
+                            listOf("H4"),
+                            "import_result",
+                            "success",
+                            mapOf("mode" to mode),
                         )
-                        check(response.optBoolean("ok")) { response.optString("error", "import failed") }
-                        val payload = response.getJSONObject("payload")
-                        val portableResponse = org.json.JSONObject(
-                            OpenLessNative.nativeExtractLocalMigrationAndroidPreferences(bundleBase64, password),
-                        )
-                        check(portableResponse.optBoolean("ok")) { portableResponse.optString("error", "portable settings read failed") }
-                        val portable = portableResponse.getJSONObject("payload").opt("preferences")
+                        val portableResponse = try {
+                            debugMigrationEvent("P5", listOf("H5"), "portable_extract_call", "started")
+                            org.json.JSONObject(
+                                OpenLessNative.nativeExtractLocalMigrationAndroidPreferences(bundleBase64, password),
+                            )
+                        } catch (error: Throwable) {
+                            debugMigrationEvent(
+                                "P5",
+                                listOf("H5"),
+                                "portable_extract_result",
+                                "failure",
+                                mapOf("errorCode" to migrationErrorCode(error)),
+                            )
+                            throw error
+                        }
+                        if (!portableResponse.optBoolean("ok")) {
+                            debugMigrationEvent(
+                                "P5",
+                                listOf("H5"),
+                                "portable_extract_result",
+                                "failure",
+                                mapOf("errorCode" to migrationResponseErrorCode(portableResponse)),
+                            )
+                            throw IllegalStateException(portableResponse.optString("error", "portable settings read failed"))
+                        }
+                        val portable = try {
+                            portableResponse.getJSONObject("payload").opt("preferences")
+                        } catch (error: Throwable) {
+                            debugMigrationEvent(
+                                "P5",
+                                listOf("H5"),
+                                "portable_extract_result",
+                                "failure",
+                                mapOf("errorCode" to migrationErrorCode(error)),
+                            )
+                            throw error
+                        }
                         if (portable !is org.json.JSONObject && portable != org.json.JSONObject.NULL) {
+                            debugMigrationEvent(
+                                "P5",
+                                listOf("H5"),
+                                "portable_extract_result",
+                                "failure",
+                                mapOf("errorCode" to "invalid_portable_preferences"),
+                            )
                             error("invalid portable Android settings")
                         }
+                        debugMigrationEvent(
+                            "P5",
+                            listOf("H5"),
+                            "portable_extract_result",
+                            "success",
+                            mapOf("preferencesPresent" to (portable is org.json.JSONObject)),
+                        )
                         Triple(
                             payload,
                             (portable as? org.json.JSONObject)?.toString(),
@@ -634,13 +905,38 @@ class OpenLessLocalMigrationActivity : Activity() {
                                     }
                                 }
                             }.onSuccess {
+                                debugMigrationEvent(
+                                    "P5",
+                                    listOf("H5"),
+                                    "portable_apply_result",
+                                    "success",
+                                    mapOf(
+                                        "applied" to portableOptions.first,
+                                        "mergeLearning" to portableOptions.second,
+                                    ),
+                                )
                                 Toast.makeText(this, ui("导入完成，备份已保留", "Import complete; backup retained"), Toast.LENGTH_LONG).show()
                                 setContentView(buildContent())
                             }.onFailure { error ->
+                                debugMigrationEvent(
+                                    "P5",
+                                    listOf("H5"),
+                                    "portable_apply_result",
+                                    "failure",
+                                    mapOf("errorCode" to migrationErrorCode(error)),
+                                )
                                 Toast.makeText(this, ui("核心数据已导入，但 Android 偏好未应用：${error.message}", "Core data imported, but Android preferences were not applied: ${error.message}"), Toast.LENGTH_LONG).show()
                             }
                         }.onFailure { error ->
-                            if (allowStaleRetry && error.message?.contains("migration_bundle_stale_preview") == true) {
+                            val stale = error.message?.contains("migration_bundle_stale_preview") == true
+                            if (stale && allowStaleRetry) {
+                                debugMigrationEvent(
+                                    "P3",
+                                    listOf("H3"),
+                                    "stale_retry",
+                                    "started",
+                                    mapOf("retryAllowed" to true),
+                                )
                                 Toast.makeText(
                                     this,
                                     ui(
@@ -651,6 +947,15 @@ class OpenLessLocalMigrationActivity : Activity() {
                                 ).show()
                                 showMigrationRestoreMode(bundleBase64, password, allowStaleRetry = false)
                             } else {
+                                if (stale) {
+                                    debugMigrationEvent(
+                                        "P3",
+                                        listOf("H3"),
+                                        "stale_retry",
+                                        "blocked",
+                                        mapOf("retryAllowed" to false),
+                                    )
+                                }
                                 Toast.makeText(this, ui("导入未完成：${error.message}", "Import not completed: ${error.message}"), Toast.LENGTH_LONG).show()
                             }
                         }
