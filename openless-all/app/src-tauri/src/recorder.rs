@@ -2998,7 +2998,7 @@ mod tests {
     fn warm_config_change_keeps_staged_claim_on_cold_fallback() {
         let hub = WarmCaptureHub::new();
         hub.enabled.store(true, Ordering::Release);
-        hub.sink.arm(42).unwrap();
+        hub.sink.arm(42, true).unwrap();
 
         hub.configure(
             false,
