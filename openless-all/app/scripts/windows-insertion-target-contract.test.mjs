@@ -175,6 +175,30 @@ assert.match(
 );
 assert.match(
   windowsHost,
+  /pub\(crate\) fn capture_focused_selection_caret_with_stage[\s\S]*?FocusedSelectionCaret[\s\S]*?selection_context_before[\s\S]*?selection_context_after/,
+  'collapsed UIA recovery must snapshot a metadata-only pre-copy caret identity',
+);
+const caretRecovery = windowsHost.match(
+  /pub\(crate\) fn capture_focused_selection_from_collapsed_caret_with_stage[\s\S]*?(?=\npub\(crate\) fn capture_focused_selection_anchor\()/,
+)?.[0];
+assert.ok(caretRecovery, 'the collapsed-caret recovery helper must exist');
+assert.match(
+  caretRecovery,
+  /expected_caret[\s\S]*?matches\(&current_caret\)[\s\S]*?MoveEndpointByUnit[\s\S]*?selection_observation\(expected/,
+  'collapsed UIA caret recovery must require the exact pre-copy caret before expanding a bounded range',
+);
+assert.match(
+  caretRecovery,
+  /line_break_units[\s\S]*?unit_counts[\s\S]*?MoveEndpointByUnit/,
+  'collapsed-caret recovery must account for provider-specific newline character units',
+);
+assert.match(
+  selectionAnchorRefresh,
+  /position\.is_none\(\)[\s\S]*?capture_focused_selection_from_collapsed_caret_with_stage[\s\S]*?CaretReconstructed/,
+  'PreviewConfirm must use collapsed-caret recovery only after normal position capture fails',
+);
+assert.match(
+  windowsHost,
   /focused_selection_observation[\s\S]*?let mut read_error = false[\s\S]*?GetText[\s\S]*?read_error = true[\s\S]*?continue[\s\S]*?if let Some\(observation\) = changed/,
   'selection observation must continue to later ancestor providers when an earlier candidate cannot return text',
 );
@@ -194,7 +218,7 @@ assert.match(
   'empty and collapsed UIA selections must use only a bounded pre-copy retry budget',
 );
 const anchorCapture = windowsHost.match(
-  /pub\(crate\) fn capture_focused_selection_anchor_with_stage[\s\S]*?(?=\npub\(crate\) fn capture_focused_selection_anchor\()/,
+  /pub\(crate\) fn capture_focused_selection_anchor_with_stage[\s\S]*?(?=\npub\(crate\) fn capture_focused_selection_from_collapsed_caret_with_stage)/,
 )?.[0];
 assert.ok(anchorCapture, 'the post-copy UIA anchor capture helper must exist');
 assert.match(

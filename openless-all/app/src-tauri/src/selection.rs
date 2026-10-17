@@ -92,6 +92,8 @@ pub(crate) struct SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     windows_selection_position: Option<crate::host_document::FocusedSelectionPosition>,
     #[cfg(target_os = "windows")]
+    windows_selection_caret: Option<crate::host_document::FocusedSelectionCaret>,
+    #[cfg(target_os = "windows")]
     windows_selection_position_stage: &'static str,
     #[cfg(target_os = "windows")]
     windows_selection_position_initial_stage: &'static str,
@@ -284,12 +286,13 @@ fn refresh_selection_insertion_target_anchor(
             .windows_selection_position
             .as_ref()
             .map_or(true, |position| position.is_provisional_empty_text());
+        let mut recovered_anchor = None;
         if should_reacquire_position {
             let previous_position = target.windows_selection_position.clone();
             if !selection_insertion_target_is_current(target) {
                 return "target_changed_before_position";
             }
-            let (position, stage) =
+            let (mut position, mut stage) =
                 crate::host_document::capture_focused_selection_position_with_stage();
             target.windows_selection_position_stage = stage.as_str();
             if position.is_none() {
@@ -308,6 +311,20 @@ fn refresh_selection_insertion_target_anchor(
                         diagnostics.control_noncollapsed,
                     ),
                 );
+                if let Some(expected_caret) = target.windows_selection_caret.as_ref() {
+                    if let Some((recovered_position, anchor)) = crate::host_document
+                        ::capture_focused_selection_from_collapsed_caret_with_stage(
+                            &selection.text,
+                            expected_caret,
+                        )
+                        .0
+                    {
+                        position = Some(recovered_position);
+                        recovered_anchor = Some(anchor);
+                        stage = crate::host_document::FocusedSelectionCaptureStage::CaretReconstructed;
+                        target.windows_selection_position_stage = stage.as_str();
+                    }
+                }
             }
             log::info!(
                 "[selection-polish] event=preview_position_reacquire capture_id={} result_stage={} position_captured={}",
@@ -334,8 +351,14 @@ fn refresh_selection_insertion_target_anchor(
         if !selection_insertion_target_is_current(target) {
             return "target_changed_before_anchor";
         }
-        let (anchor, stage) =
-            crate::host_document::capture_focused_selection_anchor_with_stage(&selection.text);
+        let (anchor, stage) = if let Some(anchor) = recovered_anchor {
+            (
+                Some(anchor),
+                crate::host_document::FocusedSelectionCaptureStage::CaretReconstructed,
+            )
+        } else {
+            crate::host_document::capture_focused_selection_anchor_with_stage(&selection.text)
+        };
         let Some(anchor) = anchor else {
             return stage.as_str();
         };
@@ -648,11 +671,17 @@ fn capture_selection_insertion_target_impl(capture_position: bool) -> SelectionI
         } else {
             (None, "not_requested")
         };
+        let windows_selection_caret = if capture_position && windows_selection_position.is_none() {
+            crate::host_document::capture_focused_selection_caret_with_stage().0
+        } else {
+            None
+        };
         return SelectionInsertionTarget {
             capture_id: next_selection_capture_id(),
             windows: capture_windows_selection_target(),
             windows_selection_anchor: None,
             windows_selection_position,
+            windows_selection_caret,
             windows_selection_position_stage,
             windows_selection_position_initial_stage: windows_selection_position_stage,
         };
@@ -770,6 +799,7 @@ pub(crate) fn test_preview_target_with_anchor() -> SelectionInsertionTarget {
         }),
         windows_selection_anchor: Some(crate::host_document::FocusedSelectionAnchor::for_test()),
         windows_selection_position: None,
+        windows_selection_caret: None,
         windows_selection_position_stage: "matched",
         windows_selection_position_initial_stage: "matched",
     }

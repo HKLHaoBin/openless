@@ -96,6 +96,9 @@ pub(crate) enum FocusedSelectionCaptureStage {
     ContextAfterUnavailable,
     ExpectedMismatch,
     PositionChanged,
+    CaretChanged,
+    CaretReconstructed,
+    CaretRecoveryAmbiguous,
 }
 
 impl FocusedSelectionCaptureStage {
@@ -122,6 +125,9 @@ impl FocusedSelectionCaptureStage {
             Self::ContextAfterUnavailable => "context_after_unavailable",
             Self::ExpectedMismatch => "expected_mismatch",
             Self::PositionChanged => "position_changed",
+            Self::CaretChanged => "caret_changed",
+            Self::CaretReconstructed => "caret_reconstructed",
+            Self::CaretRecoveryAmbiguous => "caret_recovery_ambiguous",
         }
     }
 
@@ -152,6 +158,8 @@ fn capture_stage(error: &str) -> FocusedSelectionCaptureStage {
         "context_before" => FocusedSelectionCaptureStage::ContextBeforeUnavailable,
         "context_after" => FocusedSelectionCaptureStage::ContextAfterUnavailable,
         "expected_mismatch" => FocusedSelectionCaptureStage::ExpectedMismatch,
+        "caret_changed" => FocusedSelectionCaptureStage::CaretChanged,
+        "caret_recovery_ambiguous" => FocusedSelectionCaptureStage::CaretRecoveryAmbiguous,
         _ => FocusedSelectionCaptureStage::UiAutomationUnavailable,
     }
 }
@@ -404,6 +412,25 @@ impl FocusedSelectionPosition {
             && self.process_id == other.process_id
             && self.start_offset == other.start_offset
             && self.end_offset == other.end_offset
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FocusedSelectionCaret {
+    runtime_id: Vec<i32>,
+    process_id: i32,
+    offset: i32,
+    before: String,
+    after: String,
+}
+
+impl FocusedSelectionCaret {
+    pub(crate) fn matches(&self, other: &FocusedSelectionCaret) -> bool {
+        self.runtime_id == other.runtime_id
+            && self.process_id == other.process_id
+            && self.offset == other.offset
+            && selection_context_matches(&self.before, &other.before)
+            && selection_context_matches(&self.after, &other.after)
     }
 }
 
@@ -669,6 +696,74 @@ pub(crate) fn capture_focused_selection_position() -> Option<FocusedSelectionPos
     capture_focused_selection_position_with_stage().0
 }
 
+unsafe fn collapsed_selection_caret_identity(
+    element: &IUIAutomationElement,
+    pattern: &IUIAutomationTextPattern,
+    caret: &IUIAutomationTextRange,
+) -> std::result::Result<FocusedSelectionCaret, &'static str> {
+    let endpoint_comparison = caret
+        .CompareEndpoints(
+            TextPatternRangeEndpoint_Start,
+            caret,
+            TextPatternRangeEndpoint_End,
+        )
+        .map_err(|_| "endpoint_comparison")?;
+    if endpoint_comparison != 0 {
+        return Err("endpoint_offsets_inconsistent");
+    }
+    let start_offset = selection_endpoint_offset(pattern, caret, TextPatternRangeEndpoint_Start)
+        .map_err(|_| "start_offset")?;
+    let end_offset = selection_endpoint_offset(pattern, caret, TextPatternRangeEndpoint_End)
+        .map_err(|_| "end_offset")?;
+    if start_offset != end_offset {
+        return Err("endpoint_offsets_inconsistent");
+    }
+    let runtime_id = runtime_id(element).map_err(|_| "runtime_id")?;
+    let process_id = element.CurrentProcessId().map_err(|_| "process_id")?;
+    let before = selection_context_before(pattern, caret).map_err(|_| "context_before")?;
+    let after = selection_context_after(pattern, caret).map_err(|_| "context_after")?;
+    Ok(FocusedSelectionCaret {
+        runtime_id,
+        process_id,
+        offset: start_offset,
+        before,
+        after,
+    })
+}
+
+pub(crate) fn capture_focused_selection_caret_with_stage(
+) -> (Option<FocusedSelectionCaret>, FocusedSelectionCaptureStage) {
+    let result = with_voice_edit_uia(|uia| unsafe {
+        let candidates = focused_selection_candidates(uia)?;
+        let mut fallback = "collapsed_selection";
+        let mut captured: Option<FocusedSelectionCaret> = None;
+        for (element, pattern, caret) in candidates {
+            let current = match collapsed_selection_caret_identity(&element, &pattern, &caret) {
+                Ok(current) => current,
+                Err(error) => {
+                    fallback = error;
+                    continue;
+                }
+            };
+            if let Some(existing) = captured.as_ref() {
+                if existing.matches(&current) {
+                    continue;
+                }
+                return Err("caret_recovery_ambiguous".to_string());
+            }
+            captured = Some(current);
+        }
+        captured.ok_or_else(|| fallback.to_string())
+    });
+    match result {
+        Ok(caret) => (
+            Some(caret),
+            FocusedSelectionCaptureStage::CollapsedSelection,
+        ),
+        Err(error) => (None, capture_stage(&error)),
+    }
+}
+
 const FOCUSED_SELECTION_ANCHOR_ATTEMPTS: usize = 3;
 const FOCUSED_SELECTION_ANCHOR_RETRY_DELAY_MS: u64 = 12;
 
@@ -815,6 +910,216 @@ pub(crate) fn capture_focused_selection_anchor_with_stage(
         ));
     }
     unreachable!("focused selection anchor attempts must be nonzero");
+}
+
+pub(crate) fn capture_focused_selection_from_collapsed_caret_with_stage(
+    expected: &str,
+    expected_caret: &FocusedSelectionCaret,
+) -> (
+    Option<(FocusedSelectionPosition, FocusedSelectionAnchor)>,
+    FocusedSelectionCaptureStage,
+) {
+    let expected = expected.trim();
+    let requested_units = expected.chars().count();
+    if requested_units == 0 || requested_units > i32::MAX as usize {
+        return (None, FocusedSelectionCaptureStage::EmptySelection);
+    }
+    let requested_units = requested_units as i32;
+    let normalized_expected = normalize_line_endings(expected);
+    let line_break_units = normalized_expected
+        .chars()
+        .filter(|character| *character == '\n')
+        .count()
+        .min(i32::MAX as usize) as i32;
+    let common_unit_counts = [
+        requested_units,
+        requested_units.saturating_sub(line_break_units),
+        requested_units.saturating_add(line_break_units),
+        requested_units.saturating_sub(1),
+        requested_units.saturating_add(1),
+    ];
+    let max_recovery_units = expected
+        .encode_utf16()
+        .count()
+        .saturating_add(line_break_units as usize)
+        .saturating_add(2)
+        .min(ObservedInsertion::MAX_DOCUMENT_UTF16) as i32;
+    let mut unit_counts = Vec::with_capacity(max_recovery_units as usize);
+    for count in common_unit_counts {
+        if count > 0 && !unit_counts.contains(&count) {
+            unit_counts.push(count);
+        }
+    }
+    for count in 1..=max_recovery_units {
+        if !common_unit_counts.contains(&count) {
+            unit_counts.push(count);
+        }
+    }
+    let result = with_voice_edit_uia(|uia| unsafe {
+        let candidates = focused_selection_candidates(uia)?;
+        let mut fallback = "collapsed_selection";
+        let mut recovered: Option<(FocusedSelectionPosition, FocusedSelectionAnchor)> = None;
+        for (element, pattern, caret) in candidates {
+            let current_caret = match collapsed_selection_caret_identity(&element, &pattern, &caret)
+            {
+                Ok(current_caret) => current_caret,
+                Err(error) => {
+                    fallback = error;
+                    continue;
+                }
+            };
+            if !expected_caret.matches(&current_caret) {
+                fallback = "caret_changed";
+                continue;
+            }
+            for (endpoint, direction) in [
+                (TextPatternRangeEndpoint_Start, -1),
+                (TextPatternRangeEndpoint_End, 1),
+            ] {
+                for units in unit_counts.iter().copied() {
+                    let mut candidate = match pattern.DocumentRange() {
+                        Ok(range) => range,
+                        Err(_) => {
+                            fallback = "selection_range";
+                            continue;
+                        }
+                    };
+                    if candidate
+                        .MoveEndpointByRange(
+                            TextPatternRangeEndpoint_Start,
+                            &caret,
+                            TextPatternRangeEndpoint_End,
+                        )
+                        .is_err()
+                        || candidate
+                            .MoveEndpointByRange(
+                                TextPatternRangeEndpoint_End,
+                                &caret,
+                                TextPatternRangeEndpoint_End,
+                            )
+                            .is_err()
+                    {
+                        fallback = "selection_range";
+                        continue;
+                    }
+                    let moved = match candidate.MoveEndpointByUnit(
+                        endpoint,
+                        TextUnit_Character,
+                        direction * units,
+                    ) {
+                        Ok(moved) => moved,
+                        Err(_) => {
+                            fallback = "selection_range";
+                            continue;
+                        }
+                    };
+                    if moved != direction * units {
+                        fallback = "expected_mismatch";
+                        continue;
+                    }
+                    let selected_text = match candidate
+                        .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)
+                    {
+                        Ok(text) => text.to_string(),
+                        Err(_) => {
+                            fallback = "selected_text";
+                            continue;
+                        }
+                    };
+                    if selection_observation(expected, Some(&selected_text)).status
+                        != FocusedSelectionStatus::Matched
+                    {
+                        fallback = "expected_mismatch";
+                        continue;
+                    }
+                    let runtime_id = match runtime_id(&element) {
+                        Ok(id) => id,
+                        Err(_) => {
+                            fallback = "runtime_id";
+                            continue;
+                        }
+                    };
+                    let process_id = match element.CurrentProcessId() {
+                        Ok(id) => id,
+                        Err(_) => {
+                            fallback = "process_id";
+                            continue;
+                        }
+                    };
+                    let start_offset = match selection_endpoint_offset(
+                        &pattern,
+                        &candidate,
+                        TextPatternRangeEndpoint_Start,
+                    ) {
+                        Ok(offset) => offset,
+                        Err(_) => {
+                            fallback = "start_offset";
+                            continue;
+                        }
+                    };
+                    let end_offset = match selection_endpoint_offset(
+                        &pattern,
+                        &candidate,
+                        TextPatternRangeEndpoint_End,
+                    ) {
+                        Ok(offset) => offset,
+                        Err(_) => {
+                            fallback = "end_offset";
+                            continue;
+                        }
+                    };
+                    if start_offset >= end_offset {
+                        fallback = "endpoint_offsets_inconsistent";
+                        continue;
+                    }
+                    let before = match selection_context_before(&pattern, &candidate) {
+                        Ok(context) => context,
+                        Err(_) => {
+                            fallback = "context_before";
+                            continue;
+                        }
+                    };
+                    let after = match selection_context_after(&pattern, &candidate) {
+                        Ok(context) => context,
+                        Err(_) => {
+                            fallback = "context_after";
+                            continue;
+                        }
+                    };
+                    let position = FocusedSelectionPosition {
+                        runtime_id: runtime_id.clone(),
+                        process_id,
+                        start_offset,
+                        end_offset,
+                        selected_text,
+                    };
+                    let anchor = FocusedSelectionAnchor {
+                        runtime_id,
+                        process_id,
+                        start_offset,
+                        end_offset,
+                        before,
+                        after,
+                    };
+                    if let Some((existing, _)) = recovered.as_ref() {
+                        if existing.matches_position(&position) {
+                            continue;
+                        }
+                        return Err("caret_recovery_ambiguous".to_string());
+                    }
+                    recovered = Some((position, anchor));
+                }
+            }
+        }
+        recovered.ok_or_else(|| fallback.to_string())
+    });
+    match result {
+        Ok(recovered) => (
+            Some(recovered),
+            FocusedSelectionCaptureStage::CaretReconstructed,
+        ),
+        Err(error) => (None, capture_stage(&error)),
+    }
 }
 
 pub(crate) fn capture_focused_selection_anchor(expected: &str) -> Option<FocusedSelectionAnchor> {
