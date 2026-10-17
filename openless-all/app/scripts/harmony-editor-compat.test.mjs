@@ -375,3 +375,16 @@ rejected.state.setOrCreate('cloudEnabled', true);
 rejected.session.publish(composition);
 assert.equal(rejected.cloudTimers.length, 0, 'unverified editors never query cloud');
 console.log('Harmony cloud candidates: opt-in, privacy, serial queries, stale replies and native/external selection passed');
+
+normal.session.insertSymbol('，');
+assert.equal(normal.state.get('symbolFeedback'), '正在输入「，」');
+await normal.drain();
+assert.equal(normal.state.get('symbolFeedback'), '已输入「，」');
+anonymousBridge.session.insertSymbol('！');
+await anonymousBridge.drain();
+assert.equal(anonymousBridge.state.get('symbolFeedback'), '已发送「！」', 'bridge dispatch is not a confirmed editor write');
+failedWrite.session.insertSymbol('。');
+await failedWrite.drain();
+assert.equal(failedWrite.state.get('symbolFeedback'), '未能确认，请检查输入框');
+normal.session.detach();
+assert.equal(normal.state.get('symbolFeedback'), '', 'editor feedback must not leak across bindings');

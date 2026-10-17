@@ -22,6 +22,7 @@ class InputPanelState {
   pendingCommit: boolean = false;
   writeInFlight: boolean = false;
   cloudEnabled: boolean = false;
+  symbolFeedback: string = '';
 }
 
 export const imeStorage: LocalStorage = new LocalStorage(new InputPanelState());
@@ -51,6 +52,7 @@ class InputSession {
   private cloudEpoch: number = 0;
   private cloudTimer: number = -1;
   private cloudInFlight: boolean = false;
+  private feedbackTimer: number = -1;
   private localCandidates: string[] = [];
   private cloudChoices: string[] = [];
   private cloudSettings?: preferences.Preferences;
@@ -138,6 +140,8 @@ class InputSession {
   }
 
   detach(): void {
+    clearTimeout(this.feedbackTimer);
+    imeStorage.setOrCreate('symbolFeedback', '');
     this.cancelVoice();
     this.resetObservation();
     this.generation++;
@@ -294,6 +298,29 @@ class InputSession {
     if (text.length) this.perform('insert', (client: inputMethodEngine.InputClient) => this.writeText(client, text));
   }
 
+  bindingVersion(): number { return this.generation; }
+
+  private symbolMessage(message: string): void {
+    clearTimeout(this.feedbackTimer);
+    imeStorage.setOrCreate('symbolFeedback', message);
+    this.feedbackTimer = setTimeout(() => { imeStorage.setOrCreate('symbolFeedback', ''); }, 1400);
+  }
+
+  insertSymbol(text: string): void {
+    if (!this.client) { this.symbolMessage('请先选择输入框'); return; }
+    this.symbolMessage('正在输入「' + text + '」');
+    if (imeStorage.get<boolean>('chinese')) { this.rimeOperation('literal', text, true); return; }
+    const generation = this.generation;
+    this.perform('symbol', async (client: inputMethodEngine.InputClient): Promise<boolean> => {
+      let ok = false;
+      try { ok = await this.writeText(client, text); } catch (_) {}
+      if (generation === this.generation && client === this.client) {
+        this.symbolMessage(ok ? (this.compatibilityEditor ? '已发送「' : '已输入「') + text + '」' : '未能确认，请检查输入框');
+      }
+      return ok;
+    });
+  }
+
   backspace(): void {
     // Check encoding inside the serial queue; fast typing may still be pending.
     this.rimeOperation('backspace', '');
@@ -365,7 +392,7 @@ class InputSession {
     }
   }
 
-  private rimeOperation(operation: string, argument: string): void {
+  private rimeOperation(operation: string, argument: string, feedback: boolean = false): void {
     const generation = this.generation;
     const epoch = this.queueEpoch;
     const client = this.client;
@@ -389,14 +416,21 @@ class InputSession {
         if (generation !== this.generation || epoch !== this.queueEpoch) return;
         state = await rimeRequest('ack', this.rimeSession);
         if (generation !== this.generation || epoch !== this.queueEpoch) return;
+        this.publish(state);
       }
       if (operation === 'literal' && !delimiter && argument && !await this.writeText(client, argument)) {
         throw new Error('标点写入失败，请重新选择输入框');
       }
-      if (generation === this.generation && client === this.client && epoch === this.queueEpoch) this.publish(state);
+      if (generation === this.generation && client === this.client && epoch === this.queueEpoch) {
+        this.publish(state);
+        if (feedback) this.symbolMessage((delimiter ? '已加入拼音「' : this.compatibilityEditor ? '已发送「' : '已输入「') + argument + '」');
+      }
     }).catch((error: Error) => {
       console.error('[OpenLess IME] operation=' + operation + ' failed code=' + (error as BusinessError).code);
-      if (generation === this.generation && epoch === this.queueEpoch) imeStorage.setOrCreate('status', error.message);
+      if (generation === this.generation && epoch === this.queueEpoch) {
+        imeStorage.setOrCreate('status', error.message);
+        if (feedback) this.symbolMessage('未能确认，请检查输入框');
+      }
     });
   }
 

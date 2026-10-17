@@ -1,6 +1,7 @@
 import { inputMethod } from '@kit.IMEKit';
 import { imeStorage, inputSession } from '../inputmethod/InputSession';
 import { panelLayout } from '../inputmethod/PanelLayout';
+import { SymbolGesture, letterSymbol, digitSymbol } from '../inputmethod/SymbolGesture';
 
 const BACKGROUND: Resource = $r('app.color.ime_panel_background');
 const KEY: Resource = $r('app.color.ime_key_background');
@@ -19,6 +20,7 @@ struct InputMethodPanel {
   @LocalStorageLink('preedit') preedit: string = '';
   @LocalStorageLink('candidates') candidates: string[] = [];
   @LocalStorageLink('cloudEnabled') cloudEnabled: boolean = false;
+  @LocalStorageLink('symbolFeedback') symbolFeedback: string = '';
   @LocalStorageLink('rimeReady') rimeReady: boolean = false;
   @LocalStorageLink('page') page: number = 0;
   @LocalStorageLink('hasNext') hasNext: boolean = false;
@@ -38,6 +40,10 @@ struct InputMethodPanel {
   @State utility: number = 0;
   @State expanded: boolean = false;
   @State symbolPage: number = 0;
+  @State previewId: string = '';
+  @State previewSymbol: string = '';
+  @State previewArmed: boolean = false;
+  private symbolGesture: SymbolGesture = new SymbolGesture();
 
   private row(index: number): string[] {
     if (this.layer === 2) {
@@ -63,12 +69,93 @@ struct InputMethodPanel {
 
   private hint(index: number, position: number): string {
     if (this.layer !== 0) return '';
-    const hints: string[] = this.chinese ? ['1234567890', '@#￥%&-+（）', "，。？！：；'"] :
-      ['1234567890', '@#$%&-+()', ",.?!:;'"];
-    if (this.showNumberRow && index === 0) return '';
-    const duplicated = this.keyboardLayout === 'split' &&
-      ((index === 1 && position >= 5) || (index === 2 && position >= 4));
-    return hints[index].charAt(duplicated ? position - 1 : position);
+    return letterSymbol(index, position, this.keyboardLayout === 'split', this.chinese);
+  }
+
+  private keyContext(): string {
+    return inputSession.bindingVersion().toString() + ':' + this.chinese + ':' + this.layer + ':' + this.symbolPage + ':' + this.keyboardLayout + ':' + this.utility;
+  }
+
+  private clearPreview(id: string): void {
+    if (this.previewId === id) { this.previewId = ''; this.previewSymbol = ''; this.previewArmed = false; }
+  }
+
+  private armSymbol(id: string, symbol: string, mode: string): void {
+    if (this.symbolGesture.arm(id, symbol, this.keyContext(), mode)) {
+      this.previewId = id; this.previewSymbol = symbol; this.previewArmed = true;
+    }
+  }
+
+  private moveSymbol(id: string, event: GestureEvent): void {
+    const armed = this.symbolGesture.move(id, event.offsetX, event.offsetY, this.swipeDistance());
+    if (this.previewId === id) this.previewArmed = armed;
+  }
+
+  private swipeDistance(): number { return Math.max(22, Math.min(30, this.keyHeight * 0.48)); }
+
+  private finishSymbol(id: string, mode: string): void {
+    const symbol = this.symbolGesture.finish(id, this.keyContext(), mode);
+    this.clearPreview(id);
+    if (symbol) this.insertSymbol(symbol);
+  }
+
+  private cancelSymbol(id: string, mode: string = ''): void {
+    if (this.symbolGesture.cancel(id, mode)) this.clearPreview(id);
+  }
+
+  private insertSymbol(symbol: string): void {
+    inputSession.insertSymbol(symbol);
+    if (this.uppercase && !this.capsLock) this.uppercase = false;
+  }
+
+  private tapKey(id: string, key: string, letter: boolean): void {
+    if (!this.symbolGesture.tap(id, this.keyContext())) return;
+    this.clearPreview(id);
+    if (letter) this.insert(key); else this.insertSymbol(key);
+  }
+
+  @Builder
+  characterKey(key: string, hint: string, id: string, weight: number, letter: boolean) {
+    Stack({ alignContent: Alignment.Top }) {
+      Button({ type: ButtonType.Normal }) {
+        Column({ space: 0 }) {
+          if (hint) {
+            Text(hint).fontSize(10).fontColor(this.previewId === id && this.previewArmed ? '#FFFFFF' : MUTED)
+              .height(13).width('100%').textAlign(TextAlign.End).padding({ right: 6 })
+          }
+          Text(letter && this.chinese ? key.toUpperCase() : key).fontSize(letter ? 22 : 24)
+            .fontColor(this.previewId === id && this.previewArmed ? '#FFFFFF' : INK)
+        }.width('100%').height('100%').justifyContent(FlexAlign.Center)
+      }.width('100%').height('100%').borderRadius(7).padding(0)
+        .backgroundColor(this.previewId === id && this.previewArmed ? ACCENT : KEY)
+        .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).focusable(false)
+        .accessibilityText(hint ? key + '，长按或上滑输入' + hint : key)
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Down) this.symbolGesture.begin(id, this.keyContext());
+          else if (event.type === TouchType.Cancel) this.cancelSymbol(id);
+        })
+        .gesture(GestureGroup(GestureMode.Exclusive,
+          PanGesture({ direction: PanDirection.Up, distance: this.swipeDistance() })
+            .onActionStart((event: GestureEvent) => { this.armSymbol(id, hint, 'swipe'); this.moveSymbol(id, event); })
+            .onActionUpdate((event: GestureEvent) => { this.moveSymbol(id, event); })
+            .onActionEnd((event: GestureEvent) => { this.moveSymbol(id, event); this.finishSymbol(id, 'swipe'); })
+            .onActionCancel(() => { this.cancelSymbol(id, 'swipe'); }),
+          LongPressGesture({ duration: 350, repeat: false })
+            .onAction(() => { this.armSymbol(id, hint || key, 'hold'); })
+            .onActionEnd(() => { this.finishSymbol(id, 'hold'); })
+            .onActionCancel(() => { this.cancelSymbol(id, 'hold'); }),
+          TapGesture().onAction(() => { this.tapKey(id, key, letter); })
+        ))
+      if (this.previewId === id && this.previewSymbol) {
+        Column({ space: 1 }) {
+          Text(this.previewSymbol).fontSize(27).fontColor(this.previewArmed ? ACCENT : MUTED)
+          Text(this.previewArmed ? '松开输入' : '松开取消').fontSize(10).fontColor(MUTED)
+        }.height(50).constraintSize({ minWidth: 60 }).padding({ left: 8, right: 8 })
+          .justifyContent(FlexAlign.Center).backgroundColor(KEY).borderRadius(9)
+          .shadow({ radius: 8, color: '#33000000', offsetY: 2 }).translate({ y: -50 })
+          .hitTestBehavior(HitTestMode.None)
+      }
+    }.height(this.keyHeight).layoutWeight(weight).zIndex(this.previewId === id ? 10 : 0)
   }
 
   private insert(text: string): void {
@@ -185,18 +272,7 @@ struct InputMethodPanel {
       }
       ForEach(this.row(index), (key: string, position: number) => {
         if (this.keyboardLayout === 'split' && position === (index === 2 ? 4 : 5)) { Blank().layoutWeight(2) }
-        Button({ type: ButtonType.Normal }) {
-          Column({ space: 0 }) {
-            if (this.layer === 0) { Text(this.hint(index, position)).fontSize(10).fontColor(MUTED).height(13) }
-            Text(this.layer === 0 && this.chinese ? key.toUpperCase() : key).fontSize(this.layer === 0 ? 22 : 20).fontColor(INK)
-          }.width('100%').height('100%').justifyContent(FlexAlign.Center)
-        }.height(this.keyHeight).layoutWeight(1).borderRadius(7).padding(0).backgroundColor(KEY)
-          .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).focusable(false).accessibilityText(key)
-          .onClick(() => { this.insert(key); })
-          .gesture(LongPressGesture().onAction(() => {
-            const hint = this.hint(index, position);
-            if (hint) this.insert(hint);
-          }))
+        this.characterKey(key, this.hint(index, position), 'letter:' + index + ':' + position + ':' + key, 1, this.layer === 0)
       }, (key: string, position: number) => position.toString() + ':' + key)
       if (index === 1 && this.layer === 0) { Blank().layoutWeight(this.keyboardLayout === 'split' ? 0.3 : 0.5) }
       if (index === 2) {
@@ -218,11 +294,9 @@ struct InputMethodPanel {
 
   @Builder
   punctuation(comma: boolean) {
-    Button(comma ? (this.chinese ? '，' : ',') : (this.chinese ? '。' : '.'), { type: ButtonType.Normal })
-      .height(this.keyHeight).layoutWeight(0.85).fontSize(22).fontColor(INK).backgroundColor(KEY)
-      .borderRadius(7).padding(0).focusable(false)
-      .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
-      .onClick(() => { this.insert(comma ? (this.chinese ? '，' : ',') : (this.chinese ? '。' : '.')); })
+    this.characterKey(comma ? (this.chinese ? '，' : ',') : (this.chinese ? '。' : '.'),
+      comma ? (this.chinese ? '！' : '!') : (this.chinese ? '？' : '?'),
+      comma ? 'comma' : 'period', 0.85, false)
   }
 
   @Builder
@@ -275,10 +349,7 @@ struct InputMethodPanel {
     Row({ space: 5 }) {
       ForEach(['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'], (digit: string, index: number) => {
         if (this.keyboardLayout === 'split' && index === 5) { Blank().layoutWeight(2) }
-        Button(digit, { type: ButtonType.Normal }).height(this.keyHeight).layoutWeight(1).fontSize(24)
-          .fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
-          .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
-          .onClick(() => { this.insert(digit); })
+        this.characterKey(digit, digitSymbol(digit, this.chinese), 'digit:' + digit, 1, false)
       }, (digit: string) => digit)
     }.height(this.keyHeight).width('100%')
   }
@@ -465,16 +536,25 @@ struct InputMethodPanel {
     }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).padding(12)
   }
 
+  private headerHint(): string {
+    if (this.previewId) return (this.previewArmed ? '松开输入「' : '松开取消「') + this.previewSymbol + '」';
+    if (this.symbolFeedback) return this.symbolFeedback;
+    if (this.preedit) return this.preedit;
+    if (this.connected && this.chinese && !this.rimeReady && this.status === '可输入') return '正在准备中文输入…';
+    if (this.status === '可输入' || this.status === 'Rime 拼音') return '长按或上滑按键，输入上方符号';
+    return this.status;
+  }
+
   build() {
     Column({ space: 6 }) {
       if (this.keyboardLayout === 'floating') { this.floatingHandle() }
       Column({ space: 0 }) {
-        if (this.preedit || this.pendingCommit ||
+        if (this.previewId || this.symbolFeedback || this.preedit || this.pendingCommit ||
+          (this.connected && this.voicePhase === 'idle' && this.utility === 0 && this.layer === 0 && this.rimeReady) ||
           (this.status !== '可输入' && this.status !== 'Rime 拼音' && this.status !== '等待输入框') ||
           (this.connected && this.chinese && !this.rimeReady)) {
           Row() {
-            Text(this.preedit || (this.connected && this.chinese && !this.rimeReady && this.status === '可输入' ?
-              '正在准备中文输入…' : this.status))
+            Text(this.headerHint())
               .fontSize(12).fontColor(MUTED).maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
           }.height(14).width('100%').padding({ left: 8, right: 8 })
