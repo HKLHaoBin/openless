@@ -161,8 +161,17 @@ await noReceipt.drain();
 assert.equal(noReceipt.state.get('writeInFlight'), false, 'unresponsive IPC has a bounded UI wait');
 assert.equal(noReceipt.state.get('pendingCommit'), true);
 noReceipt.session.observeText('测试');
+noReceipt.session.observeSelection(2, 2);
 await noReceipt.pump();
 assert.equal(noReceipt.acknowledgements(), 0, 'without a baseline, text alone is insufficient proof');
+noReceipt.session.acknowledgePendingCommit();
+await noReceipt.drain();
+noReceipt.session.selectCandidate(0);
+await noReceipt.pump();
+noReceipt.session.observeText('测试测试');
+noReceipt.session.observeSelection(4, 4);
+await noReceipt.drain();
+assert.equal(noReceipt.acknowledgements(), 2, 'manual recovery preserves the active-field baseline for the next word');
 
 let releaseOldWrite, hangingAttempts = 0;
 const hanging = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {

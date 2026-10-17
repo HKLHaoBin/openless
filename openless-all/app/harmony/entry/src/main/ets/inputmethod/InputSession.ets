@@ -334,7 +334,8 @@ class InputSession {
     const session = this.rimeSession;
     const epoch = ++this.queueEpoch;
     this.writeId++;
-    this.resetObservation();
+    this.expectedText = undefined;
+    this.confirmWrite = undefined;
     imeStorage.setOrCreate('writeInFlight', false);
     // Only these explicit user decisions can release an uncertain submission.
     // They never resend text, and late IPC results cannot ack a newer word.
