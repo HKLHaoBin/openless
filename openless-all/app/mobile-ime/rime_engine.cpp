@@ -121,6 +121,17 @@ std::string request(const std::string& op, const std::string& handle, const std:
             size_t n = 0; auto key = std::stoi(arg, &n);
             if (n != arg.size()) throw std::runtime_error("Invalid Rime key");
             api->process_key(id, key, 0);
+        } else if (op == "external") {
+            const auto separator = arg.find('@');
+            if (separator == std::string::npos) throw std::runtime_error("External candidate revision required");
+            size_t n = 0;
+            const auto revision = std::stoul(arg.substr(0, separator), &n);
+            const auto text = arg.substr(separator + 1);
+            if (n != separator || revision != session.revision || text.empty() || text.size() > 512 ||
+                text.find_first_of("\r\n\t") != std::string::npos)
+                throw std::runtime_error("External candidate is stale or invalid");
+            api->clear_composition(id);
+            session.pending = text;
         } else if (op == "confirm") {
             api->commit_composition(id);
         } else if (op == "select" || op == "select_absolute") {

@@ -10,7 +10,7 @@ internal object OpenLessRime {
     external fun nativeRequest(operation: String, session: String, argument: String): String
     @Synchronized fun initialize(context: Context) {
         if (initialized) return
-        val shared = File(context.filesDir, "rime-shared-1.17.0-pinyin-0c6861-learning-v2").apply { mkdirs() }
+        val shared = File(context.filesDir, "rime-shared-1.17.0-ice-da1fbe60-v1").apply { mkdirs() }
         val files = context.assets.list("rime") ?: error("Rime assets unavailable")
         require(files.isNotEmpty())
         for (name in files) {

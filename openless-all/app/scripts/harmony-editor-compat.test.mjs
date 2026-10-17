@@ -10,8 +10,9 @@ const compiled = ts.transpileModule(stripImports(source), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
-function host(getEditorAttribute, clientOverrides = {}) {
+function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () => []) {
   const schemas = [], inserted = [];
+  const cloudTimers = [], operations = [];
   let pending = '', acknowledgements = 0;
   let timer, recordings = 0;
   class Storage {
@@ -26,9 +27,12 @@ function host(getEditorAttribute, clientOverrides = {}) {
   const exports = {};
   vm.runInNewContext(compiled, {
     exports, console, LocalStorage: Storage, VoiceClient: Voice,
+    preferences: { getPreferences: async () => ({ get: async () => false, put: async () => {}, flush: async () => {} }) },
+    cloudCandidates: queryCloud,
     setTimeout: (callback, delay) => {
       if (delay === 800) return setTimeout(callback, 20);
       if (delay === 150 || delay === 60) return setTimeout(callback, 1);
+      if (delay === 180) { cloudTimers.push(callback); return -1; }
       timer = callback; return -1;
     }, clearTimeout: (handle) => { if (handle !== -1) clearTimeout(handle); },
     initializeRime: async () => {}, testRime: async () => {},
@@ -40,11 +44,13 @@ function host(getEditorAttribute, clientOverrides = {}) {
       PATTERN_PASSWORD_SCREEN_LOCK: 12, PATTERN_NEW_PASSWORD: 13,
     },
     rimeRequest: async (operation, session, argument) => {
+      operations.push([operation, argument]);
       if (operation === 'create') { schemas.push(argument); pending = ''; }
       if (operation === 'select') pending = '测试';
+      if (operation === 'external') pending = argument.slice(argument.indexOf('@') + 1);
       if (operation === 'ack') { acknowledgements++; pending = ''; }
       if (operation === 'clear') pending = '';
-      return { session: 'test', revision: 1, input: '', preedit: '', candidates: [], commit: pending, page: 0, hasNext: false };
+      return { session: 'test', revision: 1, input: '', preedit: '', candidates: ['测试'], commit: pending, page: 0, hasNext: false };
     },
   });
   const client = { getEditorAttribute, insertText: async (text) => { inserted.push(text); return true; }, ...clientOverrides };
@@ -58,6 +64,7 @@ function host(getEditorAttribute, clientOverrides = {}) {
     await session.queue;
   };
   return { session, state, schemas, inserted, drain, pump, timeout: () => timer(), recordings: () => recordings,
+    cloudTimers, operations,
     acknowledgements: () => acknowledgements };
 }
 
@@ -306,3 +313,65 @@ await detached.drain();
 assert.deepEqual(detached.schemas, []);
 assert.equal(detached.state.get('connected'), false);
 console.log('Harmony editor compatibility: transports, commit acknowledgements, cancellation, attributes and privacy passed');
+
+let resolveCloud, cloudQueries = 0;
+const cloud = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {}, () => {
+  cloudQueries++; return new Promise((resolve) => { resolveCloud = resolve; });
+});
+await cloud.drain();
+const composition = { session: 'test', revision: 1, input: 'nihao', preedit: 'ni hao',
+  candidates: ['你好', '你号'], commit: '', page: 0, hasNext: true };
+cloud.session.publish(composition);
+assert.equal(cloud.cloudTimers.length, 0, 'cloud is off by default');
+cloud.state.setOrCreate('cloudEnabled', true);
+cloud.session.publish(composition);
+cloud.cloudTimers.shift()();
+assert.equal(cloudQueries, 1);
+resolveCloud(['你好', '你好世界']);
+await cloud.pump();
+assert.deepEqual(Array.from(cloud.state.get('candidates')), ['你好', '你好世界', '你号']);
+cloud.session.selectCandidate(1, '你号');
+await cloud.drain();
+assert(cloud.operations.some(([op, arg]) => op === 'select' && arg === '1@1'), 'cloud insertion must not shift the native selection index');
+cloud.session.publish(composition);
+cloud.cloudTimers.shift()();
+resolveCloud(['你好', '你好世界']);
+await cloud.pump();
+cloud.session.selectCandidate(1);
+await cloud.drain();
+assert.deepEqual(cloud.inserted, ['测试', '你好世界']);
+assert(cloud.operations.some(([op, arg]) => op === 'external' && arg === '1@你好世界'));
+cloud.session.publish(composition);
+cloud.cloudTimers.shift()();
+cloud.session.detach();
+resolveCloud(['迟到的候选']);
+await cloud.pump();
+assert.equal(cloud.state.get('candidates').length, 0, 'late cloud replies cannot populate a different field');
+password.state.setOrCreate('cloudEnabled', true);
+password.session.publish(composition);
+assert.equal(password.cloudTimers.length, 0, 'password input never schedules cloud queries');
+
+let finishQuery, queryCount = 0;
+const serialCloud = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {}, () => {
+  queryCount++; return new Promise((resolve) => { finishQuery = resolve; });
+});
+await serialCloud.drain();
+serialCloud.state.setOrCreate('cloudEnabled', true);
+serialCloud.session.publish(composition);
+serialCloud.cloudTimers.shift()();
+serialCloud.session.publish({ ...composition, revision: 2, input: 'nihaoma', candidates: ['你好吗'] });
+serialCloud.cloudTimers.shift()();
+assert.equal(queryCount, 1, 'only one cloud IPC may occupy the worker pool');
+finishQuery(['过期回复']);
+await serialCloud.pump();
+assert.deepEqual(Array.from(serialCloud.state.get('candidates')), ['你好吗']);
+serialCloud.cloudTimers.shift()();
+assert.equal(queryCount, 2, 'after a slow reply, query the latest composition only');
+serialCloud.session.toggleCloudCandidates();
+finishQuery(['你好么']);
+await serialCloud.pump();
+assert.deepEqual(Array.from(serialCloud.state.get('candidates')), ['你好吗'], 'switching cloud off discards in-flight results');
+rejected.state.setOrCreate('cloudEnabled', true);
+rejected.session.publish(composition);
+assert.equal(rejected.cloudTimers.length, 0, 'unverified editors never query cloud');
+console.log('Harmony cloud candidates: opt-in, privacy, serial queries, stale replies and native/external selection passed');

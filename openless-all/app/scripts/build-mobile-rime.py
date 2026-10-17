@@ -18,6 +18,8 @@ SOURCES = {
     'leveldb': ('google/leveldb', '1.23'),
     'opencc': ('BYVoid/OpenCC', 'ver.1.1.9'),
     'pinyin': ('rime/rime-pinyin-simp', '0c6861ef7420ee780270ca6d993d18d4101049d0'),
+    'ice': ('iDvel/rime-ice', 'da1fbe602e38f26db846fa10120ee64c2b0324c0'),
+    'essay': ('rime/rime-essay', '054920de4f54c9e5994276a96a4fc2a35cb51aa3'),
     'prelude': ('rime/rime-prelude', '082425ea0684bca36474415d4a0e8db9b016487e'),
 }
 
@@ -142,7 +144,31 @@ def main():
     shutil.copy2(APP / 'third_party/rime-stroke/stroke.dict.yaml', data / 'stroke.dict.yaml')
     (data / 'stroke.schema.yaml').write_text('schema:\n  schema_id: stroke\n  name: 笔画\nengine:\n  translators: [table_translator]\ntranslator:\n  dictionary: stroke\n', encoding='utf-8')
     (data / 'default.custom.yaml').write_text('patch:\n  schema_list:\n    - schema: pinyin_simp\n  menu/page_size: 8\n', encoding='utf-8')
+    # Native Rime dictionary/spelling from upstream Ice. Lua utility processors
+    # are not required for its dictionaries and are intentionally not advertised.
+    ice = src['ice']
+    notice = '# OpenLess modification (2026-10-17): flattened import names for mobile assets.\n'
+    dictionary = notice + (ice / 'rime_ice.dict.yaml').read_text()
+    for table in ['8105', 'base', 'ext', 'tencent', 'others']:
+        dictionary = dictionary.replace('cn_dicts/' + table, 'ice_' + table)
+        content = (ice / 'cn_dicts' / (table + '.dict.yaml')).read_text()
+        content = content.replace('name: ' + table, 'name: ice_' + table, 1)
+        content = content.replace('name: cn_dicts/' + table, 'name: ice_' + table, 1)
+        (data / ('ice_' + table + '.dict.yaml')).write_text(notice + content)
+    (data / 'rime_ice.dict.yaml').write_text(dictionary)
+    shutil.copy2(ice / 'LICENSE', data / 'rime-ice-LICENSE')
+    shutil.copy2(src['essay'] / 'essay.txt', data / 'essay.txt')
+    shutil.copy2(src['essay'] / 'LICENSE', data / 'essay-LICENSE')
+    shutil.copy2(src['essay'] / 'AUTHORS', data / 'essay-AUTHORS')
     base_schema = (data / 'pinyin_simp.schema.yaml').read_text()
+    import re
+    ice_schema = (ice / 'rime_ice.schema.yaml').read_text()
+    speller = ice_schema[ice_schema.index('\nspeller:') + 1:]
+    base_schema = re.sub(r'(?ms)^speller:\n.*?(?=^translator:)', lambda _: speller + '\n', base_schema)
+    base_schema = base_schema.replace('  dictionary: pinyin_simp', '  dictionary: rime_ice')
+    base_schema = base_schema.replace('\ntranslator:\n', '\ntranslator:\n  enable_word_completion: true\n')
+    base_schema = base_schema.replace('  segmentors:', '  filters: [uniquifier]\n  segmentors:')
+    (data / 'openless-data-version.txt').write_text('ice-da1fbe60-v1\n')
     # Both platforms share the same user dictionary and stock Rime learning.
     # No platform-specific frequency overlay competes with native ranking.
     learning = base_schema.replace('schema_id: pinyin_simp', 'schema_id: openless_pinyin_learning')

@@ -24,10 +24,18 @@ export async function rimeRequest(operation: string, session: string = '', argum
   return state;
 }
 
+interface CloudReply { ok: boolean; value?: string[]; }
+export async function cloudCandidates(filesDir: string, cacheDir: string, pinyin: string): Promise<string[]> {
+  const initialized: CloudReply = JSON.parse(nativeHost.initBackend(filesDir + '/openless', cacheDir + '/openless'));
+  if (!initialized.ok) return [];
+  const reply: CloudReply = JSON.parse(await nativeHost.invokeAsync('ime_cloud_candidates', JSON.stringify({ pinyin: pinyin })));
+  return reply.ok ? reply.value || [] : [];
+}
+
 export function initializeRime(filesDir: string, resources: resourceManager.ResourceManager, profile: string = 'rime-user'): Promise<void> {
   if (initialization) return initialization;
   initialization = (async (): Promise<void> => {
-    const shared = filesDir + '/rime-shared-1.17.0-pinyin-0c6861-learning-v2';
+    const shared = filesDir + '/rime-shared-1.17.0-ice-da1fbe60-v1';
     if (!fs.accessSync(shared)) fs.mkdirSync(shared);
     const decoder = util.TextDecoder.create('utf-8');
     const files: string[] = JSON.parse(decoder.decodeToString(await resources.getRawFileContent('rime/manifest.json')));

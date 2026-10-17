@@ -12,6 +12,23 @@ import org.junit.runner.RunWith
 /** Real packaged JNI + dictionary test, using a non-learning disposable session. */
 @RunWith(AndroidJUnit4::class)
 class RimeEngineIntegrationTest {
+    @Test fun externalCandidateUsesRevisionAndPendingCommitContract() {
+        OpenLessRime.initialize(InstrumentationRegistry.getInstrumentation().targetContext)
+        val session = OpenLessRime.request("create", "", "private").getString("session")
+        try {
+            val state = typePinyin(session, "nihao")
+            val revision = state.getLong("revision")
+            try {
+                OpenLessRime.request("external", session, "${revision - 1}@你好世界")
+                fail("A cloud reply from an obsolete composition must be rejected")
+            } catch (_: IllegalStateException) {}
+            val selected = OpenLessRime.request("external", session, "$revision@你好世界")
+            assertEquals("你好世界", selected.getString("commit"))
+            assertEquals("", selected.getString("input"))
+            assertEquals("你好世界", OpenLessRime.request("state", session).getString("commit"))
+            assertEquals("", OpenLessRime.request("ack", session).getString("commit"))
+        } finally { OpenLessRime.request("destroy", session) }
+    }
     @Test fun candidatesDeletionStaleSelectionAndCommitAcknowledgement() {
         OpenLessRime.initialize(InstrumentationRegistry.getInstrumentation().targetContext)
         var state = OpenLessRime.request("create", "", "private")

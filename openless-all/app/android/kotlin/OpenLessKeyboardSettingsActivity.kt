@@ -252,6 +252,12 @@ class OpenLessKeyboardSettingsActivity : Activity() {
             },
         )
 
+        content.addView(sectionLabel(ui("拼音云候选", "Cloud Pinyin candidates")))
+        content.addView(Switch(this).apply {
+            text = ui("Google 云候选（发送当前拼音；密码和隐私输入禁用）", "Google cloud candidates (sends Pinyin; disabled in private fields)")
+            isChecked = prefs.getBoolean("cloud_pinyin_enabled", false)
+            setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("cloud_pinyin_enabled", checked).apply() }
+        })
         content.addView(sectionLabel(ui("英文键盘", "English keyboard")))
         val englishSuggestionsRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         englishSuggestionsRow.addView(

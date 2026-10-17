@@ -18,6 +18,7 @@ struct InputMethodPanel {
   @LocalStorageLink('chinese') chinese: boolean = true;
   @LocalStorageLink('preedit') preedit: string = '';
   @LocalStorageLink('candidates') candidates: string[] = [];
+  @LocalStorageLink('cloudEnabled') cloudEnabled: boolean = false;
   @LocalStorageLink('rimeReady') rimeReady: boolean = false;
   @LocalStorageLink('page') page: number = 0;
   @LocalStorageLink('hasNext') hasNext: boolean = false;
@@ -153,7 +154,7 @@ struct InputMethodPanel {
               .fontColor(index === 0 ? ACCENT : INK).backgroundColor(Color.Transparent)
               .padding({ left: 12, right: 12 }).focusable(false)
               .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
-              .onClick(() => { inputSession.selectCandidate(index); this.expanded = false; this.utility = 0; })
+              .onClick(() => { inputSession.selectCandidate(index, candidate); this.expanded = false; this.utility = 0; })
           }, (candidate: string, index: number) => index.toString() + ':' + candidate)
         }
       }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).layoutWeight(1).height(34)
@@ -380,7 +381,7 @@ struct InputMethodPanel {
               .fontColor(index === 0 ? ACCENT : INK).backgroundColor(KEY).borderRadius(7)
               .padding({ left: 18, right: 18 }).margin({ right: 6, bottom: 6 }).focusable(false)
               .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
-              .onClick(() => { inputSession.selectCandidate(index); this.expanded = false; this.utility = 0; })
+              .onClick(() => { inputSession.selectCandidate(index, candidate); this.expanded = false; this.utility = 0; })
           }, (candidate: string, index: number) => index.toString() + ':' + candidate)
         }.width('100%')
       }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
@@ -403,6 +404,9 @@ struct InputMethodPanel {
       Text('键盘工具').fontSize(17).fontWeight(FontWeight.Medium).fontColor(INK)
       Button('键盘布局').focusable(false).fontColor(INK).backgroundColor(KEY)
         .onClick(() => { this.utility = 3; })
+      Button(this.cloudEnabled ? '云候选：开（Google）' : '云候选：关').focusable(false).fontColor(INK).backgroundColor(KEY)
+        .onClick(() => { inputSession.toggleCloudCandidates(); })
+      Text('开启后将当前拼音发送给 Google，密码框不查询').fontSize(12).fontColor(MUTED)
       Row({ space: 12 }) {
         Button('OpenLess 设置').focusable(false).fontColor(INK).backgroundColor(KEY)
           .onClick(() => { inputSession.settings(); })

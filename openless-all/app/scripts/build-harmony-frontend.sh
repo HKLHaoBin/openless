@@ -14,7 +14,7 @@ SIGNING_DIR="${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/
 BUILD_PROJECT="$CACHE_ROOT/harmony/openless-project"
 WEB_DIST="$CACHE_ROOT/harmony/web-dist"
 export OPENLESS_RIME_PREFIX="$CACHE_ROOT/mobile-rime/harmony/install"
-if [ ! -f "$OPENLESS_RIME_PREFIX/lib/librime.a" ]; then
+if [ ! -f "$OPENLESS_RIME_PREFIX/lib/librime.a" ] || [ ! -f "$CACHE_ROOT/mobile-rime/data/openless-data-version.txt" ]; then
   python3 "$APP_ROOT/scripts/build-mobile-rime.py" harmony
 fi
 mkdir -p "$BUILD_PROJECT" "$HVIGOR_USER_HOME" "$CACHE_ROOT/npm"

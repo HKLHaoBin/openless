@@ -1,6 +1,6 @@
 # Android / 鸿蒙输入法后端整理与引擎选型
 
-核对日期：2026-10-14。移动端已确定统一采用 librime，不引入 Fcitx5。Linux 保留现有 Fcitx5 系统宿主。Android 用 JNI、鸿蒙用 Node-API 接到同一套 `mobile-ime/rime_engine.cpp`；两端保留原生键盘和系统输入接口。
+核对日期：2026-10-17。移动端已确定统一采用 librime，不引入 Fcitx5。Linux 保留现有 Fcitx5 系统宿主。Android 用 JNI、鸿蒙用 Node-API 接到同一套 `mobile-ime/rime_engine.cpp`；两端保留原生键盘和系统输入接口。
 
 鸿蒙已完成 Rime 1.17.0 arm64 构建与签名安装，真机自检通过 `nihao` → “你好”候选、编码退格、候选确认、取消。用户已确认中文候选出现。Android 已改接共用引擎，NDK arm64 原生库及 JNI 编译通过，尚未完成 APK 真机验收和旧学习数据导入。
 
@@ -10,9 +10,7 @@
 
 鸿蒙退格使用 IME Kit `InputClient.deleteForward` 删除光标前的内容；`deleteBackward` 删除光标后内容。方向和按键交互已修正，用户确认可删除。诊断仅记录动作类型、返回值和错误码，不记录输入内容；删除键支持长按重复。
 
-安卓版 `OpenLessImeService.kt` 约 5952 行，集中承担视图布局、输入连接、键盘模式、语音、结果编辑、词库、学习与状态恢复。现有 `LitePinyinController` 已与 View / InputConnection 分离，但 `LitePinyinRepository` 仍是 Kotlin 私有实现，鸿蒙无法直接复用。
-
-现有拼音使用单字全拼、短语简拼、用户选词频率和贪心音节切分。拼音模式下空格清空编码并插入空格，不能像常见拼音输入法那样确认首选候选。这些是代码可确认的行为；“安卓整体不好用”还需真实输入场景测评，不能仅凭传闻认定。
+移动端现已接入共享 librime，旧 LitePinyin 算法及 TSV 已移除。2026-10-17 核对本机配置发现，桌面默认实际为 Fcitx5 libime 拼音并启用云拼音，而非 Rime。移动端继续使用 Rime，升级固定修订的雾凇中文词库与拼写规则，并接入默认关闭的 Google 云候选；不迁移桌面个人词典，也不引入 Fcitx 到移动端。完整能力及隐私边界见 `openless-all/app/mobile-ime/README.md`。
 
 ## 开源候选
 

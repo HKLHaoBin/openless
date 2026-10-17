@@ -14,11 +14,13 @@ internal class RimePinyinController(context: Context) {
     private val context = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
+    private val cloudWorker = Executors.newSingleThreadExecutor()
     @Volatile private var generation = 0L
     @Volatile private var requestId = 0L
     @Volatile private var learning = false
     @Volatile private var encoding = ""
     @Volatile private var candidates: List<String> = emptyList()
+    @Volatile private var cloudChoices: Set<String> = emptySet()
     @Volatile private var candidateRevision = 0L
     private var session = ""
     private var pending = ""
@@ -102,7 +104,9 @@ internal class RimePinyinController(context: Context) {
                 val result = if (rows == null) emptyList() else (0 until rows.length()).map { rows.getString(it) }
                 main.post {
                     if (epoch != generation || revision != requestId) return@post
-                    encoding = input; candidates = result; candidateRevision = state.optLong("revision"); update(result)
+                    encoding = input; candidates = result; cloudChoices = emptySet()
+                    candidateRevision = state.optLong("revision"); update(result)
+                    scheduleCloud(input, result, epoch, revision, update)
                 }
             } catch (error: Throwable) {
                 Log.e("OpenLessRime", "engine request failed: ${error.javaClass.simpleName}")
@@ -129,6 +133,10 @@ internal class RimePinyinController(context: Context) {
         submit("backspace", "", update, deleteFromEditor)
     }
     fun selectCandidate(text: String, update: (List<String>) -> Unit) {
+        if (cloudChoices.contains(text)) {
+            submit("external", "$candidateRevision@$text", update)
+            return
+        }
         val index = candidates.indexOf(text)
         if (index >= 0) submit("select_absolute", "$index@$candidateRevision", update)
     }
@@ -138,13 +146,34 @@ internal class RimePinyinController(context: Context) {
     }
     fun insertLiteral(text: String, update: (List<String>) -> Unit) { submit("literal", text, update) }
     fun clear() {
-        generation++; requestId++; encoding = ""; candidates = emptyList()
+        generation++; requestId++; encoding = ""; candidates = emptyList(); cloudChoices = emptySet()
         worker.execute {
             try { if (session.isNotEmpty()) OpenLessRime.request("destroy", session) }
             catch (_: Throwable) {} finally { session = ""; pending = ""; pendingLiteral = "" }
         }
     }
-    fun shutdown() { clear(); worker.shutdown() }
+    fun shutdown() { clear(); worker.shutdown(); cloudWorker.shutdownNow() }
+    private fun cloudEnabled(): Boolean = learning && context.getSharedPreferences("openless_ime_ui", Context.MODE_PRIVATE)
+        .getBoolean("cloud_pinyin_enabled", false)
+
+    private fun scheduleCloud(input: String, local: List<String>, epoch: Long, revision: Long, update: (List<String>) -> Unit) {
+        if (!cloudEnabled() || !input.matches(Regex("[a-z']{2,64}"))) return
+        main.postDelayed({
+            if (!cloudEnabled() || epoch != generation || revision != requestId) return@postDelayed
+            cloudWorker.execute {
+                if (!cloudEnabled() || epoch != generation || revision != requestId) return@execute
+                val rows = runCatching {
+                    val json = org.json.JSONArray(OpenLessNative.nativeCloudPinyin(input))
+                    (0 until json.length()).map { json.getString(it) }.filterNot(local::contains)
+                }.getOrDefault(emptyList())
+                main.post {
+                    if (!cloudEnabled() || epoch != generation || revision != requestId || encoding != input) return@post
+                    cloudChoices = rows.toSet()
+                    update(local.take(1) + rows + local.drop(1))
+                }
+            }
+        }, 180)
+    }
     fun recordCommittedText(text: String) {
         if (!learning) return
         confirmedText.append(text)

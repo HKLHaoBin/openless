@@ -185,6 +185,9 @@ fn credential_key(args: &Value) -> Result<openless_core::CredentialKey, String> 
 fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
     let b = &host.backend;
     let value = match command {
+        "ime_cloud_candidates" => json!(host
+            .runtime
+            .block_on(openless_core::ime_cloud::query(required(&args, "pinyin")?))),
         "accept_pending_correction" => {
             b.accept_pending_correction(required(&args, "id")?)
                 .map_err(|e| e.to_string())?;

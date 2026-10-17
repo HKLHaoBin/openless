@@ -1,6 +1,7 @@
 import { inputMethodEngine, InputMethodExtensionContext } from '@kit.IMEKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { initializeRime, rimeRequest, RimeState, testRime } from './RimeClient';
+import { initializeRime, rimeRequest, RimeState, testRime, cloudCandidates } from './RimeClient';
+import { preferences } from '@kit.ArkData';
 import { VoiceClient } from './VoiceClient';
 
 class InputPanelState {
@@ -20,6 +21,7 @@ class InputPanelState {
   voiceLevel: number = 0;
   pendingCommit: boolean = false;
   writeInFlight: boolean = false;
+  cloudEnabled: boolean = false;
 }
 
 export const imeStorage: LocalStorage = new LocalStorage(new InputPanelState());
@@ -46,6 +48,12 @@ class InputSession {
   private compatibilityEditor: boolean = false;
   private queueEpoch: number = 0;
   private writeId: number = 0;
+  private cloudEpoch: number = 0;
+  private cloudTimer: number = -1;
+  private cloudInFlight: boolean = false;
+  private localCandidates: string[] = [];
+  private cloudChoices: string[] = [];
+  private cloudSettings?: preferences.Preferences;
 
   attach(context: InputMethodExtensionContext, keyboard: inputMethodEngine.KeyboardController,
     client: inputMethodEngine.InputClient): void {
@@ -55,6 +63,14 @@ class InputSession {
     this.context = context;
     this.keyboard = keyboard;
     this.client = client;
+    this.cloudSettings = undefined;
+    imeStorage.setOrCreate('cloudEnabled', false);
+    preferences.getPreferences(context, { name: 'ime_cloud_candidates' }).then(async (settings: preferences.Preferences) => {
+      if (generation !== this.generation) return;
+      this.cloudSettings = settings;
+      const enabled = await settings.get('enabled', false);
+      if (generation === this.generation) imeStorage.setOrCreate('cloudEnabled', enabled === true);
+    }).catch(() => {});
     this.action = inputMethodEngine.ENTER_KEY_TYPE_UNSPECIFIED;
     this.resetObservation();
     this.compatibilityEditor = false;
@@ -284,6 +300,10 @@ class InputSession {
   }
 
   private resetCandidates(): void {
+    this.cloudEpoch++;
+    clearTimeout(this.cloudTimer);
+    this.cloudChoices = [];
+    this.localCandidates = [];
     this.encoding = '';
     imeStorage.setOrCreate('preedit', '');
     imeStorage.setOrCreate('candidates', [] as string[]);
@@ -291,6 +311,10 @@ class InputSession {
   }
 
   private publish(state: RimeState): void {
+    this.cloudEpoch++;
+    clearTimeout(this.cloudTimer);
+    this.cloudChoices = [];
+    this.localCandidates = state.candidates;
     this.candidateRevision = state.revision;
     this.encoding = state.input;
     imeStorage.setOrCreate('preedit', state.preedit || state.input);
@@ -299,6 +323,46 @@ class InputSession {
     imeStorage.setOrCreate('hasNext', state.hasNext);
     imeStorage.setOrCreate('pendingCommit', !!state.commit);
     imeStorage.setOrCreate('status', 'Rime 拼音');
+    this.scheduleCloud();
+  }
+
+  private scheduleCloud(): void {
+    clearTimeout(this.cloudTimer);
+    const context = this.context;
+    const generation = this.generation;
+    const epoch = this.cloudEpoch;
+    const input = this.encoding;
+    if (context && input.length >= 2 && imeStorage.get<number>('page') === 0 && !imeStorage.get<boolean>('pendingCommit') &&
+      imeStorage.get<boolean>('chinese') &&
+      imeStorage.get<boolean>('cloudEnabled') && imeStorage.get<boolean>('editorVerified') &&
+      !imeStorage.get<boolean>('password') && /^[a-z']{2,64}$/.test(input)) {
+      this.cloudTimer = setTimeout(() => {
+        if (this.cloudInFlight || epoch !== this.cloudEpoch || generation !== this.generation || !imeStorage.get<boolean>('cloudEnabled')) return;
+        this.cloudInFlight = true;
+        cloudCandidates(context.filesDir, context.cacheDir, input).then((rows: string[]) => {
+          console.info('[OpenLess IME] cloud response candidates=' + rows.length);
+          if (epoch !== this.cloudEpoch || generation !== this.generation || !imeStorage.get<boolean>('cloudEnabled')) return;
+          this.cloudChoices = rows.filter((text: string) => !this.localCandidates.includes(text));
+          imeStorage.setOrCreate('candidates', this.localCandidates.slice(0, 1).concat(this.cloudChoices).concat(this.localCandidates.slice(1)));
+        }).catch(() => {}).finally(() => {
+          this.cloudInFlight = false;
+          if (epoch !== this.cloudEpoch) this.scheduleCloud();
+        });
+      }, 180);
+    }
+  }
+
+  toggleCloudCandidates(): void {
+    if (!this.cloudSettings) { imeStorage.setOrCreate('status', '云候选设置暂不可用'); return; }
+    const enabled = !imeStorage.get<boolean>('cloudEnabled');
+    imeStorage.setOrCreate('cloudEnabled', enabled);
+    this.cloudEpoch++;
+    clearTimeout(this.cloudTimer);
+    this.cloudChoices = [];
+    imeStorage.setOrCreate('candidates', this.localCandidates);
+    if (this.cloudSettings) {
+      this.cloudSettings.put('enabled', enabled).then(() => this.cloudSettings?.flush()).catch(() => {});
+    }
   }
 
   private rimeOperation(operation: string, argument: string): void {
@@ -336,10 +400,19 @@ class InputSession {
     });
   }
 
-  selectCandidate(index: number): void { this.rimeOperation('select', index.toString() + '@' + this.candidateRevision.toString()); }
+  selectCandidate(index: number, expectedText: string = ''): void {
+    const displayed = imeStorage.get<string[]>('candidates') || [];
+    const text = expectedText || displayed[index];
+    if (text === undefined || !displayed.includes(text)) return;
+    const local = this.localCandidates.indexOf(text);
+    if (local >= 0) this.rimeOperation('select', local.toString() + '@' + this.candidateRevision.toString());
+    else if (this.cloudChoices.includes(text)) this.rimeOperation('external', this.candidateRevision.toString() + '@' + text);
+  }
   space(): void { this.rimeOperation('space', ''); }
   page(next: boolean): void { this.rimeOperation('key', next ? '65366' : '65365'); }
   toggleLanguage(): void {
+    this.cloudEpoch++;
+    clearTimeout(this.cloudTimer);
     const chinese = !imeStorage.get<boolean>('chinese');
     imeStorage.setOrCreate('chinese', chinese);
     if (this.rimeSession) this.rimeOperation('clear', '');
