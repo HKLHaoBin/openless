@@ -22,6 +22,7 @@ struct InputMethodPanel {
   @LocalStorageLink('page') page: number = 0;
   @LocalStorageLink('hasNext') hasNext: boolean = false;
   @LocalStorageLink('password') password: boolean = false;
+  @LocalStorageLink('editorVerified') editorVerified: boolean = false;
   @LocalStorageLink('voicePhase') voicePhase: string = 'idle';
   @LocalStorageLink('voiceText') voiceText: string = '';
   @LocalStorageLink('voiceLevel') voiceLevel: number = 0;
@@ -114,7 +115,7 @@ struct InputMethodPanel {
       this.toolbarButton('☺', '表情', () => { this.utility = this.utility === 2 ? 0 : 2; })
       Button('语音', { type: ButtonType.Normal }).height(32).layoutWeight(1.4).fontSize(14)
         .backgroundColor(Color.Transparent).fontColor(MUTED).focusable(false)
-        .enabled(this.connected && !this.password && !this.pendingCommit && this.voicePhase === 'idle')
+        .enabled(this.connected && this.editorVerified && !this.password && !this.pendingCommit && this.voicePhase === 'idle')
         .onClick(() => { this.voice(); })
       this.toolbarButton('⌄', '收起键盘', () => { inputSession.hide(); })
     }.width('100%').height(34)

@@ -14,6 +14,7 @@ class InputPanelState {
   page: number = 0;
   hasNext: boolean = false;
   password: boolean = false;
+  editorVerified: boolean = false;
   voicePhase: string = 'idle';
   voiceText: string = '';
   voiceLevel: number = 0;
@@ -51,25 +52,16 @@ class InputSession {
     imeStorage.setOrCreate('enterLabel', '换行');
     imeStorage.setOrCreate('rimeReady', false);
     imeStorage.setOrCreate('password', true);
+    imeStorage.setOrCreate('editorVerified', false);
     this.resetCandidates();
-    client.getEditorAttribute().then((attribute: inputMethodEngine.EditorAttribute) => {
+    this.readAttributes(client).then((attribute: inputMethodEngine.EditorAttribute) => {
       if (this.client !== client || generation !== this.generation) return;
       const password = [inputMethodEngine.PATTERN_PASSWORD, inputMethodEngine.PATTERN_PASSWORD_NUMBER,
         inputMethodEngine.PATTERN_PASSWORD_SCREEN_LOCK, inputMethodEngine.PATTERN_NEW_PASSWORD].includes(attribute.inputPattern);
       imeStorage.setOrCreate('chinese', !password);
       imeStorage.setOrCreate('password', password);
-      if (!password) {
-        this.queue = this.queue.then(async (): Promise<void> => {
-          await initializeRime(context.filesDir, context.resourceManager);
-          await testRime(context.filesDir, context.resourceManager);
-          // Normal fields learn locally; passwords never create a Rime session.
-          const state = await rimeRequest('create', '', 'learning');
-          if (generation !== this.generation) { await rimeRequest('destroy', state.session); return; }
-          this.rimeSession = state.session;
-          imeStorage.setOrCreate('rimeReady', true);
-          this.publish(state);
-        }).catch(() => { if (generation === this.generation) imeStorage.setOrCreate('status', '中文引擎加载失败，可切换英文'); });
-      }
+      imeStorage.setOrCreate('editorVerified', true);
+      if (!password) this.prepareRime(context, generation, true);
       this.action = attribute.enterKeyType;
       let label = '换行';
       if (this.action === inputMethodEngine.ENTER_KEY_TYPE_SEND) label = '发送';
@@ -78,7 +70,40 @@ class InputSession {
       else if (this.action === inputMethodEngine.ENTER_KEY_TYPE_NEXT) label = '下一项';
       else if (this.action === inputMethodEngine.ENTER_KEY_TYPE_GO) label = '前往';
       imeStorage.setOrCreate('enterLabel', label);
-    }).catch(() => {});
+    }).catch((error: BusinessError) => {
+      if (this.client !== client || generation !== this.generation) return;
+      // Compatibility runtimes may not implement editor attributes. Keep
+      // typing available, but never learn or record audio in an unknown field.
+      console.warn('[OpenLess IME] editor attributes unavailable code=' + error.code);
+      imeStorage.setOrCreate('password', false);
+      imeStorage.setOrCreate('chinese', true);
+      this.prepareRime(context, generation, false);
+    });
+  }
+
+  private async readAttributes(client: inputMethodEngine.InputClient): Promise<inputMethodEngine.EditorAttribute> {
+    let timer: number = -1;
+    const deadline = new Promise<inputMethodEngine.EditorAttribute>((_resolve, reject) => {
+      timer = setTimeout(() => { reject(new Error('editor attributes timeout')); }, 1200);
+    });
+    try {
+      return await Promise.race([Promise.resolve().then(() => client.getEditorAttribute()), deadline]);
+    } finally { clearTimeout(timer); }
+  }
+
+  private prepareRime(context: InputMethodExtensionContext, generation: number, learning: boolean): void {
+    this.queue = this.queue.then(async (): Promise<void> => {
+      if (generation !== this.generation) return;
+      await initializeRime(context.filesDir, context.resourceManager);
+      await testRime(context.filesDir, context.resourceManager);
+      if (generation !== this.generation) return;
+      const state = await rimeRequest('create', '', learning ? 'learning' : 'private');
+      if (generation !== this.generation) { await rimeRequest('destroy', state.session); return; }
+      this.rimeSession = state.session;
+      imeStorage.setOrCreate('rimeReady', true);
+      this.publish(state);
+      console.info('[OpenLess IME] editor ready learning=' + learning);
+    }).catch(() => { if (generation === this.generation) imeStorage.setOrCreate('status', '中文引擎加载失败，可切换英文'); });
   }
 
   detach(): void {
@@ -92,6 +117,7 @@ class InputSession {
     if (session) this.queue = this.queue.then(async (): Promise<void> => { await rimeRequest('destroy', session); }).catch(() => {});
     this.resetCandidates();
     imeStorage.setOrCreate('connected', false);
+    imeStorage.setOrCreate('editorVerified', false);
     imeStorage.setOrCreate('status', '等待输入框');
   }
 
@@ -210,6 +236,10 @@ class InputSession {
     const context = this.context;
     const client = this.client;
     if (!context || !client || imeStorage.get<boolean>('password') || imeStorage.get<string>('voicePhase') !== 'idle') return;
+    if (!imeStorage.get<boolean>('editorVerified')) {
+      imeStorage.setOrCreate('status', '当前输入框不支持语音，请在系统原生应用中使用');
+      return;
+    }
     if (imeStorage.get<boolean>('pendingCommit')) { imeStorage.setOrCreate('status', '请先重新确认待写入的候选词'); return; }
     const generation = this.generation;
     const voiceGeneration = ++this.voiceGeneration;
