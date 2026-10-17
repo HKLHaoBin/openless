@@ -4,7 +4,9 @@ import vm from 'node:vm';
 import ts from 'typescript';
 
 const source = readFileSync(new URL('../harmony/entry/src/main/ets/inputmethod/RimeClient.ets', import.meta.url), 'utf8');
-const compiled = ts.transpileModule(source.replace(/^import .*;\n/gm, ''), {
+const stripImports = text => text.replace(/\r\n/g, '\n').replace(/^import .*;\n/gm, '');
+assert.equal(stripImports(source), stripImports(source.replace(/\r?\n/g, '\r\n')));
+const compiled = ts.transpileModule(stripImports(source), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
