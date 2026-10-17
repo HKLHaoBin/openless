@@ -99,6 +99,11 @@
   ; installer unable to replace the file or the registry pointing at old code.
   SetOutPath "$INSTDIR\windows-ime\${PLATFORM_DIR}"
   File /oname=${OPENLESS_IME_FILENAME} "$%${ENV_VAR}%"
+  ${IfNot} ${FileExists} "$INSTDIR\windows-ime\${PLATFORM_DIR}\${OPENLESS_IME_FILENAME}"
+    !insertmacro OPENLESS_IME_DIAGNOSTIC_EVENT stage_${PLATFORM_DIR}_missing
+    DetailPrint "OpenLess TSF IME ${PLATFORM_DIR} DLL staging failed"
+    Abort
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL

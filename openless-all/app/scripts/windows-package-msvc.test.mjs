@@ -464,6 +464,31 @@ assert.match(
   /stage_x64_begin[\s\S]*stage_x64_complete[\s\S]*stage_x86_begin[\s\S]*stage_x86_complete/,
   'NSIS should mark both IME staging boundaries in order',
 );
+const stageMacro = nsisHook.match(
+  /!macro OPENLESS_IME_STAGE_AND_REPLACE[\s\S]*?!macroend/,
+)?.[0];
+assert.ok(stageMacro, 'NSIS IME staging macro should exist');
+assert.match(
+  stageMacro,
+  /File \/oname=\$\{OPENLESS_IME_FILENAME\}/,
+  'NSIS staging should write the canonical versioned IME filename',
+);
+assert.match(
+  stageMacro,
+  /\$\{IfNot\} \$\{FileExists\}/,
+  'NSIS staging should verify that the DLL exists after extraction',
+);
+assert.match(
+  stageMacro,
+  /\$INSTDIR\\windows-ime\\\$\{PLATFORM_DIR\}\\\$\{OPENLESS_IME_FILENAME\}/,
+  'NSIS staging should verify the exact installed DLL path',
+);
+assert.match(
+  stageMacro,
+  /OPENLESS_IME_DIAGNOSTIC_EVENT stage_\$\{PLATFORM_DIR\}_missing/,
+  'NSIS staging failure should emit the bounded P4 stage marker',
+);
+assert.match(stageMacro, /\bAbort\b/, 'NSIS must abort when staged DLL verification fails');
 assert.match(
   nsisHook,
   /OPENLESS_IME_ABORT_IF_FAILED \$0 "x64 registration"/,
