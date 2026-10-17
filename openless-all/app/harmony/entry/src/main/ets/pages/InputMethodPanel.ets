@@ -1,5 +1,6 @@
 import { inputMethod } from '@kit.IMEKit';
 import { imeStorage, inputSession } from '../inputmethod/InputSession';
+import { panelLayout } from '../inputmethod/PanelLayout';
 
 const BACKGROUND: Resource = $r('app.color.ime_panel_background');
 const KEY: Resource = $r('app.color.ime_key_background');
@@ -25,6 +26,9 @@ struct InputMethodPanel {
   @LocalStorageLink('voiceText') voiceText: string = '';
   @LocalStorageLink('voiceLevel') voiceLevel: number = 0;
   @LocalStorageLink('pendingCommit') pendingCommit: boolean = false;
+  @LocalStorageLink('keyboardLayout') keyboardLayout: string = 'standard';
+  @LocalStorageLink('keyHeight') keyHeight: number = 52;
+  @LocalStorageLink('showNumberRow') showNumberRow: boolean = true;
   @State uppercase: boolean = false;
   @State capsLock: boolean = false;
   @State layer: number = 0;
@@ -49,7 +53,8 @@ struct InputMethodPanel {
         ['@', '#', '%', '&', '*', '+', '/']
       ][index];
     }
-    const letters: string[] = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+    const letters: string[] = this.keyboardLayout === 'split' ?
+      ['qwertyuiop', 'asdfgghjkl', 'zxcvvbnm'] : ['qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
     return (!this.chinese && this.uppercase ? letters[index].toUpperCase() : letters[index]).split('');
   }
 
@@ -57,7 +62,10 @@ struct InputMethodPanel {
     if (this.layer !== 0) return '';
     const hints: string[] = this.chinese ? ['1234567890', '@#￥%&-+（）', "，。？！：；'"] :
       ['1234567890', '@#$%&-+()', ",.?!:;'"];
-    return hints[index].charAt(position);
+    if (this.showNumberRow && index === 0) return '';
+    const duplicated = this.keyboardLayout === 'split' &&
+      ((index === 1 && position >= 5) || (index === 2 && position >= 4));
+    return hints[index].charAt(duplicated ? position - 1 : position);
   }
 
   private insert(text: string): void {
@@ -102,6 +110,7 @@ struct InputMethodPanel {
   keyboardToolbar() {
     Row({ space: 6 }) {
       this.toolbarButton('☰', '输入法工具', () => { this.utility = this.utility === 1 ? 0 : 1; })
+      this.toolbarButton('▦', '键盘布局', () => { this.utility = this.utility === 3 ? 0 : 3; })
       this.toolbarButton('☺', '表情', () => { this.utility = this.utility === 2 ? 0 : 2; })
       Button('语音', { type: ButtonType.Normal }).height(32).layoutWeight(1.4).fontSize(14)
         .backgroundColor(Color.Transparent).fontColor(MUTED).focusable(false)
@@ -139,10 +148,10 @@ struct InputMethodPanel {
   @Builder
   keyRow(index: number) {
     Row({ space: 5 }) {
-      if (index === 1 && this.layer === 0) { Blank().layoutWeight(0.5) }
+      if (index === 1 && this.layer === 0) { Blank().layoutWeight(this.keyboardLayout === 'split' ? 0.3 : 0.5) }
       if (index === 2) {
         Button(this.layer === 2 ? (this.symbolPage === 0 ? '更多' : '常用') : this.capsLock ? '⇪' : '⇧', { type: ButtonType.Normal })
-          .height(52).layoutWeight(1.45).fontSize(this.layer > 0 ? 15 : 25)
+          .height(this.keyHeight).layoutWeight(this.keyboardLayout === 'split' ? 1.2 : 1.45).fontSize(this.layer > 0 ? 15 : 25)
           .fontColor(this.uppercase && this.layer === 0 ? ACCENT : INK)
           .backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false).enabled(this.connected)
           .accessibilityText(this.layer > 0 ? '切换符号页' : '切换大写')
@@ -155,59 +164,143 @@ struct InputMethodPanel {
           }))
       }
       ForEach(this.row(index), (key: string, position: number) => {
+        if (this.keyboardLayout === 'split' && position === (index === 2 ? 4 : 5)) { Blank().layoutWeight(2) }
         Button({ type: ButtonType.Normal }) {
           Column({ space: 0 }) {
             if (this.layer === 0) { Text(this.hint(index, position)).fontSize(10).fontColor(MUTED).height(13) }
-            Text(key).fontSize(this.layer === 0 ? 22 : 20).fontColor(INK)
+            Text(this.layer === 0 && this.chinese ? key.toUpperCase() : key).fontSize(this.layer === 0 ? 22 : 20).fontColor(INK)
           }.width('100%').height('100%').justifyContent(FlexAlign.Center)
-        }.height(52).layoutWeight(1).borderRadius(7).padding(0).backgroundColor(KEY)
+        }.height(this.keyHeight).layoutWeight(1).borderRadius(7).padding(0).backgroundColor(KEY)
           .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).focusable(false).accessibilityText(key)
           .onClick(() => { this.insert(key); })
           .gesture(LongPressGesture().onAction(() => {
             const hint = this.hint(index, position);
             if (hint) this.insert(hint);
           }))
-      }, (key: string) => key)
-      if (index === 1 && this.layer === 0) { Blank().layoutWeight(0.5) }
+      }, (key: string, position: number) => position.toString() + ':' + key)
+      if (index === 1 && this.layer === 0) { Blank().layoutWeight(this.keyboardLayout === 'split' ? 0.3 : 0.5) }
       if (index === 2) {
-        Button('⌫', { type: ButtonType.Normal }).height(52).layoutWeight(1.45).fontSize(25)
+        Button('⌫', { type: ButtonType.Normal }).height(this.keyHeight).layoutWeight(this.keyboardLayout === 'split' ? 1.2 : 1.45).fontSize(25)
           .fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
           .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).accessibilityText('删除光标前的文字')
           .onClick(() => { inputSession.backspace(); })
           .gesture(LongPressGesture({ repeat: true }).onAction(() => { inputSession.backspace(); }))
       }
-    }.width('100%').height(52)
+    }.width('100%').height(this.keyHeight)
+  }
+
+  @Builder
+  bottomKey(label: string, weight: number, action: () => void) {
+    Button(label, { type: ButtonType.Normal }).height(this.keyHeight).layoutWeight(weight)
+      .fontSize(15).fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
+      .onClick(() => { action(); })
+  }
+
+  @Builder
+  punctuation(comma: boolean) {
+    Button(comma ? (this.chinese ? '，' : ',') : (this.chinese ? '。' : '.'), { type: ButtonType.Normal })
+      .height(this.keyHeight).layoutWeight(0.85).fontSize(22).fontColor(INK).backgroundColor(KEY)
+      .borderRadius(7).padding(0).focusable(false)
+      .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
+      .onClick(() => { this.insert(comma ? (this.chinese ? '，' : ',') : (this.chinese ? '。' : '.')); })
+  }
+
+  @Builder
+  spaceKey(weight: number) {
+    Button({ type: ButtonType.Normal }) {
+      if (this.keyboardLayout === 'split') {
+        Column({ space: 0 }) {
+          Text('语音').fontSize(10).fontColor(MUTED)
+          Text('⎵').fontSize(28).fontColor(INK)
+        }.width('100%').height('100%').justifyContent(FlexAlign.Center)
+      } else { Text(this.chinese ? '空格' : 'space').fontSize(15).fontColor(MUTED) }
+    }.height(this.keyHeight).layoutWeight(weight).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
+      .accessibilityText('空格，长按语音输入')
+      .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
+      .onClick(() => { inputSession.space(); })
+      .gesture(LongPressGesture().onAction(() => { if (!this.password && this.voicePhase === 'idle') this.voice(); }))
   }
 
   @Builder
   bottomRow() {
     Row({ space: 5 }) {
-      Button(this.layer > 0 ? '返回' : '符', { type: ButtonType.Normal }).height(52).layoutWeight(1.1)
-        .fontSize(15).fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
-        .onClick(() => { this.layer = this.layer > 0 ? 0 : 2; this.symbolPage = 0; })
-      Button(this.chinese ? '中/英' : '英/中', { type: ButtonType.Normal }).height(52).layoutWeight(1.2)
+      this.bottomKey(this.layer > 0 ? '返回' : '符号', this.keyboardLayout === 'split' ? 1.2 : 1.1,
+        () => { this.layer = this.layer > 0 ? 0 : 2; this.symbolPage = 0; })
+      Button(this.chinese ? '中/英' : '英/中', { type: ButtonType.Normal }).height(this.keyHeight).layoutWeight(0.95)
         .fontSize(14).fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
         .enabled(this.connected && !this.password).onClick(() => { this.language(); })
         .gesture(LongPressGesture().onAction(() => { this.inputMethods(); }))
-      Button('123', { type: ButtonType.Normal }).height(52).layoutWeight(1.1)
-        .fontSize(15).fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
-        .onClick(() => { this.layer = this.layer === 1 ? 0 : 1; })
-      Button(this.chinese ? '，' : ',', { type: ButtonType.Normal }).height(52).layoutWeight(0.8)
-        .fontSize(21).fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
-        .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
-        .accessibilityText(this.chinese ? '中文逗号' : '英文逗号')
-        .onClick(() => { this.insert(this.chinese ? '，' : ','); })
-      Button(this.chinese ? '空格' : 'space', { type: ButtonType.Normal }).height(52).layoutWeight(3.0)
-        .fontSize(15).fontColor(MUTED).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
-        .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { inputSession.space(); })
-        .gesture(LongPressGesture().onAction(() => { if (!this.password && this.voicePhase === 'idle') this.voice(); }))
-      Button(this.chinese ? '。' : '.', { type: ButtonType.Normal }).height(52).layoutWeight(0.9)
-        .fontSize(21).fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
-        .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { this.insert(this.chinese ? '。' : '.'); })
-      Button(this.enterLabel, { type: ButtonType.Normal }).height(52).layoutWeight(1.65)
-        .fontSize(16).fontColor('#FFFFFF').backgroundColor(ACCENT).borderRadius(7).padding(0).focusable(false)
+      if (this.keyboardLayout === 'split') { this.bottomKey('◎', 0.8, () => { this.inputMethods(); }) }
+      else { this.bottomKey('123', 0.9, () => { this.layer = this.layer === 1 ? 0 : 1; }) }
+      this.punctuation(true)
+      if (this.keyboardLayout === 'split') {
+        this.spaceKey(1.1)
+        Blank().layoutWeight(2)
+        this.spaceKey(1.1)
+      } else { this.spaceKey(3) }
+      this.punctuation(false)
+      if (this.keyboardLayout === 'split') {
+        this.bottomKey('☺', 0.8, () => { this.utility = this.utility === 2 ? 0 : 2; })
+        this.bottomKey('123', 0.9, () => { this.layer = this.layer === 1 ? 0 : 1; })
+      }
+      Button(this.enterLabel, { type: ButtonType.Normal }).height(this.keyHeight).layoutWeight(1.25)
+        .fontSize(16).fontColor(this.keyboardLayout === 'split' ? INK : '#FFFFFF')
+        .backgroundColor(this.keyboardLayout === 'split' ? FUNCTION_KEY : ACCENT).borderRadius(7).padding(0).focusable(false)
         .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { inputSession.enter(); })
-    }.width('100%').height(52)
+    }.width('100%').height(this.keyHeight)
+  }
+
+  @Builder
+  digitRow() {
+    Row({ space: 5 }) {
+      ForEach(['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'], (digit: string, index: number) => {
+        if (this.keyboardLayout === 'split' && index === 5) { Blank().layoutWeight(2) }
+        Button(digit, { type: ButtonType.Normal }).height(this.keyHeight).layoutWeight(1).fontSize(24)
+          .fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
+          .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
+          .onClick(() => { this.insert(digit); })
+      }, (digit: string) => digit)
+    }.height(this.keyHeight).width('100%')
+  }
+
+  @Builder
+  layoutChooser() {
+    Column({ space: 14 }) {
+      Text('键盘布局').fontSize(17).fontColor(INK)
+      Row({ space: 10 }) {
+        ForEach(['standard', 'split', 'floating'], (mode: string, index: number) => {
+          Button(['标准键盘', '分离键盘', '悬浮键盘'][index], { type: ButtonType.Normal })
+            .height(48).layoutWeight(1).fontSize(15).borderRadius(8).padding(0).focusable(false)
+            .fontColor(this.keyboardLayout === mode ? '#FFFFFF' : INK)
+            .backgroundColor(this.keyboardLayout === mode ? ACCENT : KEY)
+            .onClick(() => { this.layer = 0; this.expanded = false; this.utility = 0; panelLayout.select(mode); })
+        }, (mode: string) => mode)
+      }.width('100%')
+      Text('悬浮键盘可拖动顶部横条，使用 − / + 调整大小').fontSize(13).fontColor(MUTED)
+      Button('返回键盘').focusable(false).fontColor(ACCENT).backgroundColor(KEY)
+        .onClick(() => { this.utility = 0; })
+    }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).padding(8)
+  }
+
+  @Builder
+  floatingHandle() {
+    Row({ space: 4 }) {
+      Button('−').height(24).layoutWeight(1).fontSize(18).padding(0).focusable(false)
+        .fontColor(INK).backgroundColor(Color.Transparent).accessibilityText('缩小悬浮键盘')
+        .onClick(() => { panelLayout.resize(-0.1); })
+      Row() { Text('━━━━').fontSize(16).fontColor(MUTED) }
+        .height(24).layoutWeight(5).justifyContent(FlexAlign.Center).accessibilityText('拖动悬浮键盘')
+        .gesture(PanGesture().onActionStart(() => { panelLayout.beginMove(); })
+          .onActionUpdate((event: GestureEvent) => { panelLayout.drag(event.offsetX, event.offsetY); })
+          .onActionEnd(() => { panelLayout.endMove(); })
+          .onActionCancel(() => { panelLayout.endMove(); }))
+      Button('+').height(24).layoutWeight(1).fontSize(18).padding(0).focusable(false)
+        .fontColor(INK).backgroundColor(Color.Transparent).accessibilityText('放大悬浮键盘')
+        .onClick(() => { panelLayout.resize(0.1); })
+      Button('↙').height(24).layoutWeight(1).fontSize(18).padding(0).focusable(false)
+        .fontColor(INK).backgroundColor(Color.Transparent).accessibilityText('恢复固定键盘')
+        .onClick(() => { panelLayout.select('standard'); })
+    }.height(24).width('100%')
   }
 
   @Builder
@@ -288,7 +381,9 @@ struct InputMethodPanel {
   @Builder
   tools() {
     Column({ space: 16 }) {
-      Text('OpenLess').fontSize(17).fontWeight(FontWeight.Medium).fontColor(INK)
+      Text('键盘工具').fontSize(17).fontWeight(FontWeight.Medium).fontColor(INK)
+      Button('键盘布局').focusable(false).fontColor(INK).backgroundColor(KEY)
+        .onClick(() => { this.utility = 3; })
       Row({ space: 12 }) {
         Button('OpenLess 设置').focusable(false).fontColor(INK).backgroundColor(KEY)
           .onClick(() => { inputSession.settings(); })
@@ -347,6 +442,7 @@ struct InputMethodPanel {
 
   build() {
     Column({ space: 6 }) {
+      if (this.keyboardLayout === 'floating') { this.floatingHandle() }
       Column({ space: 0 }) {
         if (this.preedit || this.pendingCommit ||
           (this.status !== '可输入' && this.status !== 'Rime 拼音' && this.status !== '等待输入框') ||
@@ -368,16 +464,19 @@ struct InputMethodPanel {
       if (this.voicePhase !== 'idle') { this.voicePanel() }
       else if (this.utility === 1) { this.tools() }
       else if (this.utility === 2) { this.emoji() }
+      else if (this.utility === 3) { this.layoutChooser() }
       else if (this.expanded && this.candidates.length > 0) { this.expandedCandidates() }
       else if (this.layer === 1) { this.numberPad() }
       else {
         Column({ space: 6 }) {
+          if (this.showNumberRow && this.layer === 0) { this.digitRow() }
           this.keyRow(0)
           this.keyRow(1)
           this.keyRow(2)
           this.bottomRow()
-        }.width('100%').height(226)
+        }.width('100%').layoutWeight(1).justifyContent(FlexAlign.End)
       }
     }.width('100%').height('100%').padding({ left: 6, right: 6, top: 4, bottom: 8 }).backgroundColor(BACKGROUND)
+      .borderRadius(this.keyboardLayout === 'floating' ? 12 : 0).clip(true)
   }
 }

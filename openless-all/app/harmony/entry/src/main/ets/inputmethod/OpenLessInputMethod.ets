@@ -1,5 +1,6 @@
 import { InputMethodExtensionAbility, inputMethodEngine } from '@kit.IMEKit';
 import { display } from '@kit.ArkUI';
+import { panelLayout } from './PanelLayout';
 import { imeStorage, inputSession } from './InputSession';
 
 export default class OpenLessInputMethod extends InputMethodExtensionAbility {
@@ -8,6 +9,9 @@ export default class OpenLessInputMethod extends InputMethodExtensionAbility {
   private ready?: Promise<void>;
   private active: boolean = false;
   private visible: boolean = false;
+  private onDisplayChange = (): void => {
+    if (this.active && this.panel) panelLayout.refresh();
+  };
 
   private onStart = (keyboard: inputMethodEngine.KeyboardController, client: inputMethodEngine.InputClient): void => {
     inputSession.attach(this.context, keyboard, client);
@@ -22,7 +26,12 @@ export default class OpenLessInputMethod extends InputMethodExtensionAbility {
   private onShow = (): void => {
     this.visible = true;
     this.ensurePanel().then(() => {
-      if (this.active && this.visible) return this.panel?.show();
+      if (this.active && this.visible) {
+        return panelLayout.refresh().then(() => {
+          if (this.active && this.visible) return this.panel?.show();
+          return undefined;
+        });
+      }
       return undefined;
     }).catch(() => { imeStorage.setOrCreate('status', '键盘加载失败'); });
   };
@@ -38,6 +47,7 @@ export default class OpenLessInputMethod extends InputMethodExtensionAbility {
     this.engine.on('inputStop', this.onStop);
     this.engine.on('keyboardShow', this.onShow);
     this.engine.on('keyboardHide', this.onHide);
+    display.on('change', this.onDisplayChange);
     console.info('[OpenLess IME] created');
   }
 
@@ -62,12 +72,12 @@ export default class OpenLessInputMethod extends InputMethodExtensionAbility {
     }
     this.panel = panel;
     try {
-      const screen = display.getDefaultDisplaySync();
-      await panel.resize(screen.width, Math.round(300 * screen.densityPixels));
+      await panelLayout.attach(panel, this.context);
       await panel.setUiContent('pages/InputMethodPanel', imeStorage);
       console.info('[OpenLess IME] panel ready');
     } catch (_) {
       this.panel = undefined;
+      panelLayout.detach();
       await this.engine.destroyPanel(panel);
       throw new Error('panel content failed');
     }
@@ -80,9 +90,11 @@ export default class OpenLessInputMethod extends InputMethodExtensionAbility {
     this.engine.off('inputStop', this.onStop);
     this.engine.off('keyboardShow', this.onShow);
     this.engine.off('keyboardHide', this.onHide);
+    display.off('change', this.onDisplayChange);
     inputSession.detach();
     const panel = this.panel;
     this.panel = undefined;
+    panelLayout.detach();
     if (panel) this.engine.destroyPanel(panel).catch(() => {});
     console.info('[OpenLess IME] destroyed');
   }
