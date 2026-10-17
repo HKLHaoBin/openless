@@ -53,8 +53,10 @@
       <!-- Keep each release's DLL at a distinct path. TSF client processes can keep
            an older DLL mapped for their whole lifetime, so an in-place upgrade can
            otherwise leave the registry pointing at the old protocol. -->
-      <Custom Action="UnregisterOpenLessImeX86" Before="InstallFiles"><![CDATA[Installed AND NOT REMOVE]]></Custom>
-      <Custom Action="UnregisterOpenLessImeX64" Before="UnregisterOpenLessImeX86"><![CDATA[Installed AND NOT REMOVE]]></Custom>
+      <!-- Unregister on both upgrades and complete uninstall. REMOVE=ALL must not skip /u,
+           otherwise the DLL disappears while COM/TSF registration still points at it. -->
+      <Custom Action="UnregisterOpenLessImeX86" Before="InstallFiles"><![CDATA[Installed]]></Custom>
+      <Custom Action="UnregisterOpenLessImeX64" Before="UnregisterOpenLessImeX86"><![CDATA[Installed]]></Custom>
       <Custom Action="RegisterOpenLessImeX64" After="InstallFiles"><![CDATA[NOT REMOVE]]></Custom>
       <Custom Action="RegisterOpenLessImeX86" After="RegisterOpenLessImeX64"><![CDATA[NOT REMOVE]]></Custom>
     </InstallExecuteSequence>

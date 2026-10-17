@@ -26,6 +26,16 @@ const HRESULT_TIMEOUT: u32 = 0x8007_05B4;
 const HRESULT_CANCELLED: u32 = 0x8007_04C7;
 
 #[cfg(target_os = "windows")]
+fn diagnostic_build_id() -> &'static str {
+    let value = option_env!("OPENLESS_BUILD_ID").unwrap_or("unbound");
+    if value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        value
+    } else {
+        "unbound"
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn emit_tsf_diagnostic_probe(
     probe_id: &str,
     hypothesis_ids: &str,
@@ -40,9 +50,11 @@ fn emit_tsf_diagnostic_probe(
         .unwrap_or(0);
     log::info!(
         target: "diagnosing-bugs",
-        "{{\"schema\":\"diagnosing-bugs.v1\",\"session_id\":\"{}\",\"run_id\":\"tsf-runtime-{}\",\"probe_id\":\"{}\",\"hypothesis_ids\":{},\"event\":\"{}\",\"outcome\":\"{}\",\"safe\":{{{}}},\"ts\":{}}}",
+        "{{\"schema\":\"diagnosing-bugs.v1\",\"session_id\":\"{}\",\"run_id\":\"tsf-runtime-{}\",\"build_id\":\"{}\",\"protocol_revision\":\"0x{:08X}\",\"probe_id\":\"{}\",\"hypothesis_ids\":{},\"event\":\"{}\",\"outcome\":\"{}\",\"safe\":{{{}}},\"ts\":{}}}",
         session_id,
         std::process::id(),
+        diagnostic_build_id(),
+        IME_STATUS_PROTOCOL_VERSION,
         probe_id,
         hypothesis_ids,
         event,

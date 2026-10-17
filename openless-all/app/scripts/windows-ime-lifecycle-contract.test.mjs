@@ -103,6 +103,30 @@ assert.ok(
 );
 
 assert.match(
+  ipc,
+  /option_env!\("OPENLESS_BUILD_ID"\)/,
+  'TSF diagnostics should read the immutable build provenance injected by CI',
+);
+assert.ok(
+  ipc.includes('\\"build_id\\":\\"{}\\"'),
+  'P1/P2/P3 diagnostics should carry the bounded artifact build identity',
+);
+assert.match(
+  ipc,
+  /diagnostic_build_id\(\)/,
+  'P1/P2/P3 diagnostics should sanitize the artifact build identity',
+);
+assert.ok(
+  ipc.includes('\\"protocol_revision\\":\\"0x{:08X}\\"'),
+  'P1/P2/P3 diagnostics should record the expected protocol revision',
+);
+assert.match(
+  ipc,
+  /IME_STATUS_PROTOCOL_VERSION/,
+  'P1/P2/P3 diagnostics should use the current protocol revision constant',
+);
+
+assert.match(
   textService,
   /kCopyDataVersion[\s\S]*kStatusProtocolVersion/,
   'IME should answer the protocol probe so stale in-process DLLs are diagnosable',

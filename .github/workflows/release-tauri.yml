@@ -19,6 +19,8 @@ name: Release Tauri (cross-platform)
 
 on:
   push:
+    branches:
+      - '**'
     tags:
       - 'v*-tauri'
   workflow_dispatch:
@@ -88,6 +90,15 @@ jobs:
           # Repair packaging against the immutable, already-tested tag, never the tooling branch.
           ref: ${{ inputs.release_tag || github.ref }}
           submodules: false
+
+      - name: Export source build provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::source SHA is not a full immutable commit"; exit 1; }
+          echo "OPENLESS_BUILD_ID=$source_sha" >> "$GITHUB_ENV"
+          echo "source_sha=$source_sha" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-node@v4
         with:
@@ -511,6 +522,25 @@ jobs:
           OPENLESS_RELEASE_TAG: ${{ env.OPENLESS_RELEASE_TAG }}
         run: node scripts/write-updater-manifest.mjs
 
+      - name: Write Windows artifact provenance
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        working-directory: 'openless-all/app'
+        run: |
+          $manifestDir = Join-Path (Resolve-Path 'src-tauri\target\release\bundle') 'provenance'
+          New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
+          $version = (Get-Content 'src-tauri\tauri.conf.json' -Raw | ConvertFrom-Json).version
+          [ordered]@{
+            schema = 'openless.artifact-provenance.v1'
+            source_sha = $env:OPENLESS_BUILD_ID
+            workflow_sha = $env:GITHUB_WORKFLOW_SHA
+            run_id = $env:GITHUB_RUN_ID
+            ref = $env:GITHUB_REF
+            app_version = $version
+            platform = 'windows'
+            protocol_revision = '0x4F4C0009'
+          } | ConvertTo-Json -Compress | Set-Content -Encoding utf8NoBOM (Join-Path $manifestDir 'openless-provenance.json')
+
       # ── Collect artifacts ──
       - name: List artifacts (debug)
         shell: bash
@@ -566,6 +596,7 @@ jobs:
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi
+            openless-all/app/src-tauri/target/release/bundle/provenance/openless-provenance.json
           if-no-files-found: error
 
       - name: Upload Windows updater artifacts
