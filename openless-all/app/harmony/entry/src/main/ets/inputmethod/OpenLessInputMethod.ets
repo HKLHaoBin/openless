@@ -63,7 +63,7 @@ export default class OpenLessInputMethod extends InputMethodExtensionAbility {
     this.panel = panel;
     try {
       const screen = display.getDefaultDisplaySync();
-      await panel.resize(screen.width, Math.round(360 * screen.densityPixels));
+      await panel.resize(screen.width, Math.round(300 * screen.densityPixels));
       await panel.setUiContent('pages/InputMethodPanel', imeStorage);
       console.info('[OpenLess IME] panel ready');
     } catch (_) {

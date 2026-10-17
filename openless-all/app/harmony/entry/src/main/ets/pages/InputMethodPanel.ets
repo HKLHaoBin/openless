@@ -30,25 +30,34 @@ struct InputMethodPanel {
   @State layer: number = 0;
   @State utility: number = 0;
   @State expanded: boolean = false;
+  @State symbolPage: number = 0;
 
   private row(index: number): string[] {
-    if (this.layer === 1) return [
-      ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
-      ['@', '#', '￥', '%', '&', '*', '(', ')', '-', '+'],
-      ['，', '。', '？', '！', '：', '；', '/']
-    ][index];
-    if (this.layer === 2) return [
-      ['[', ']', '{', '}', '<', '>', '=', '_', '~', '|'],
-      ['$', '€', '£', '¥', '℃', '°', '×', '÷', '√', 'π'],
-      ['…', '—', '、', '·', '「', '」', '\\']
-    ][index];
+    if (this.layer === 2) {
+      if (this.symbolPage === 1) return [
+        ['$', '€', '£', '¥', '℃', '°', '×', '÷', '√', 'π'],
+        ['[', ']', '{', '}', '<', '>', '=', '_', '~'],
+        ['…', '—', '、', '·', '|', '\\', '^']
+      ][index];
+      return this.chinese ? [
+        ['，', '。', '？', '！', '：', '；', '、', '…', '—', '·'],
+        ['（', '）', '【', '】', '《', '》', '“', '”', '￥'],
+        ['@', '#', '%', '&', '*', '+', '/']
+      ][index] : [
+        [',', '.', '?', '!', ':', ';', "'", '"', '-', '_'],
+        ['(', ')', '[', ']', '{', '}', '<', '>', '$'],
+        ['@', '#', '%', '&', '*', '+', '/']
+      ][index];
+    }
     const letters: string[] = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
     return (!this.chinese && this.uppercase ? letters[index].toUpperCase() : letters[index]).split('');
   }
 
   private hint(index: number, position: number): string {
     if (this.layer !== 0) return '';
-    return ['1234567890', '@#￥%&-+()', ',.?!:;\''][index].charAt(position);
+    const hints: string[] = this.chinese ? ['1234567890', '@#￥%&-+（）', "，。？！：；'"] :
+      ['1234567890', '@#$%&-+()', ",.?!:;'"];
+    return hints[index].charAt(position);
   }
 
   private insert(text: string): void {
@@ -63,7 +72,7 @@ struct InputMethodPanel {
   }
 
   private shift(): void {
-    if (this.layer > 0) { this.layer = this.layer === 1 ? 2 : 1; return; }
+    if (this.layer === 2) { this.symbolPage = this.symbolPage === 0 ? 1 : 0; return; }
     if (this.chinese) inputSession.toggleLanguage();
     this.uppercase = !this.uppercase;
     this.capsLock = false;
@@ -84,7 +93,7 @@ struct InputMethodPanel {
   @Builder
   toolbarButton(label: string, description: string, action: () => void) {
     Button(label, { type: ButtonType.Normal })
-      .height(38).layoutWeight(1).fontSize(17).fontColor(MUTED)
+      .height(32).layoutWeight(1).fontSize(17).fontColor(MUTED)
       .backgroundColor(Color.Transparent).borderRadius(8).padding(0).focusable(false)
       .accessibilityText(description).onClick(() => { action(); })
   }
@@ -93,26 +102,25 @@ struct InputMethodPanel {
   keyboardToolbar() {
     Row({ space: 6 }) {
       this.toolbarButton('☰', '输入法工具', () => { this.utility = this.utility === 1 ? 0 : 1; })
-      Text('OpenLess').fontSize(14).fontWeight(FontWeight.Medium).fontColor(MUTED).layoutWeight(2)
       this.toolbarButton('☺', '表情', () => { this.utility = this.utility === 2 ? 0 : 2; })
-      Button('语音', { type: ButtonType.Normal }).height(38).layoutWeight(1.4).fontSize(14)
+      Button('语音', { type: ButtonType.Normal }).height(32).layoutWeight(1.4).fontSize(14)
         .backgroundColor(Color.Transparent).fontColor(MUTED).focusable(false)
         .enabled(this.connected && !this.password && !this.pendingCommit && this.voicePhase === 'idle')
         .onClick(() => { this.voice(); })
       this.toolbarButton('⌄', '收起键盘', () => { inputSession.hide(); })
-    }.width('100%').height(42)
+    }.width('100%').height(34)
   }
 
   @Builder
   candidateBar() {
     Row({ space: 4 }) {
-      Button('☰', { type: ButtonType.Normal }).width(38).height(40).padding(0).fontSize(20)
+      Button('☰', { type: ButtonType.Normal }).width(38).height(32).padding(0).fontSize(20)
         .fontColor(MUTED).backgroundColor(Color.Transparent).focusable(false)
         .accessibilityText('输入法工具').onClick(() => { this.utility = this.utility === 1 ? 0 : 1; })
       Scroll() {
         Row({ space: 2 }) {
           ForEach(this.candidates, (candidate: string, index: number) => {
-            Button(candidate, { type: ButtonType.Normal }).height(40).fontSize(21)
+            Button(candidate, { type: ButtonType.Normal }).height(32).fontSize(21)
               .fontWeight(index === 0 ? FontWeight.Medium : FontWeight.Regular)
               .fontColor(index === 0 ? ACCENT : INK).backgroundColor(Color.Transparent)
               .padding({ left: 12, right: 12 }).focusable(false)
@@ -120,12 +128,12 @@ struct InputMethodPanel {
               .onClick(() => { inputSession.selectCandidate(index); this.expanded = false; this.utility = 0; })
           }, (candidate: string, index: number) => index.toString() + ':' + candidate)
         }
-      }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).layoutWeight(1).height(42)
-      Button(this.expanded ? '⌃' : '⌄', { type: ButtonType.Normal }).width(38).height(40).padding(0).fontSize(22)
+      }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).layoutWeight(1).height(34)
+      Button(this.expanded ? '⌃' : '⌄', { type: ButtonType.Normal }).width(38).height(32).padding(0).fontSize(22)
         .fontColor(MUTED).backgroundColor(Color.Transparent).focusable(false)
         .accessibilityText(this.expanded ? '收起候选词' : '展开候选词')
         .onClick(() => { this.expanded = !this.expanded; this.utility = 0; })
-    }.width('100%').height(42)
+    }.width('100%').height(34)
   }
 
   @Builder
@@ -133,7 +141,7 @@ struct InputMethodPanel {
     Row({ space: 5 }) {
       if (index === 1 && this.layer === 0) { Blank().layoutWeight(0.5) }
       if (index === 2) {
-        Button(this.layer === 1 ? '#+=' : this.layer === 2 ? '123' : this.capsLock ? '⇪' : '⇧', { type: ButtonType.Normal })
+        Button(this.layer === 2 ? (this.symbolPage === 0 ? '更多' : '常用') : this.capsLock ? '⇪' : '⇧', { type: ButtonType.Normal })
           .height(52).layoutWeight(1.45).fontSize(this.layer > 0 ? 15 : 25)
           .fontColor(this.uppercase && this.layer === 0 ? ACCENT : INK)
           .backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false).enabled(this.connected)
@@ -176,7 +184,7 @@ struct InputMethodPanel {
     Row({ space: 5 }) {
       Button(this.layer > 0 ? '返回' : '符', { type: ButtonType.Normal }).height(52).layoutWeight(1.1)
         .fontSize(15).fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
-        .onClick(() => { this.layer = this.layer > 0 ? 0 : 2; })
+        .onClick(() => { this.layer = this.layer > 0 ? 0 : 2; this.symbolPage = 0; })
       Button(this.chinese ? '中/英' : '英/中', { type: ButtonType.Normal }).height(52).layoutWeight(1.2)
         .fontSize(14).fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
         .enabled(this.connected && !this.password).onClick(() => { this.language(); })
@@ -184,7 +192,12 @@ struct InputMethodPanel {
       Button('123', { type: ButtonType.Normal }).height(52).layoutWeight(1.1)
         .fontSize(15).fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
         .onClick(() => { this.layer = this.layer === 1 ? 0 : 1; })
-      Button(this.chinese ? '空格' : 'space', { type: ButtonType.Normal }).height(52).layoutWeight(3.3)
+      Button(this.chinese ? '，' : ',', { type: ButtonType.Normal }).height(52).layoutWeight(0.8)
+        .fontSize(21).fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
+        .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
+        .accessibilityText(this.chinese ? '中文逗号' : '英文逗号')
+        .onClick(() => { this.insert(this.chinese ? '，' : ','); })
+      Button(this.chinese ? '空格' : 'space', { type: ButtonType.Normal }).height(52).layoutWeight(3.0)
         .fontSize(15).fontColor(MUTED).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
         .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { inputSession.space(); })
         .gesture(LongPressGesture().onAction(() => { if (!this.password && this.voicePhase === 'idle') this.voice(); }))
@@ -334,16 +347,24 @@ struct InputMethodPanel {
 
   build() {
     Column({ space: 6 }) {
-      Row() {
-        Text(this.preedit || (this.connected && this.chinese && !this.rimeReady && this.status === '可输入' ? '正在准备中文输入…' : this.status === 'Rime 拼音' ? '' : this.status))
-          .fontSize(13).fontColor(MUTED).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-        if (this.pendingCommit) {
-          Button('重新确认').height(24).fontSize(12).fontColor(ACCENT).backgroundColor(Color.Transparent)
-            .focusable(false).onClick(() => { inputSession.retryCommit(); })
+      Column({ space: 0 }) {
+        if (this.preedit || this.pendingCommit ||
+          (this.status !== '可输入' && this.status !== 'Rime 拼音' && this.status !== '等待输入框') ||
+          (this.connected && this.chinese && !this.rimeReady)) {
+          Row() {
+            Text(this.preedit || (this.connected && this.chinese && !this.rimeReady && this.status === '可输入' ?
+              '正在准备中文输入…' : this.status))
+              .fontSize(12).fontColor(MUTED).maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+            if (this.pendingCommit) {
+              Button('重新确认').height(14).fontSize(12).fontColor(ACCENT).backgroundColor(Color.Transparent)
+                .focusable(false).onClick(() => { inputSession.retryCommit(); })
+            }
+          }.height(14).width('100%').padding({ left: 8, right: 8 })
         }
-      }.height(22).width('100%').padding({ left: 8, right: 8 })
-      if (this.candidates.length > 0 && this.voicePhase === 'idle') { this.candidateBar() }
-      else { this.keyboardToolbar() }
+        if (this.candidates.length > 0 && this.voicePhase === 'idle') { this.candidateBar() }
+        else { this.keyboardToolbar() }
+      }.height(48).width('100%').justifyContent(FlexAlign.End)
       if (this.voicePhase !== 'idle') { this.voicePanel() }
       else if (this.utility === 1) { this.tools() }
       else if (this.utility === 2) { this.emoji() }
@@ -355,8 +376,8 @@ struct InputMethodPanel {
           this.keyRow(1)
           this.keyRow(2)
           this.bottomRow()
-        }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
+        }.width('100%').height(226)
       }
-    }.width('100%').height('100%').padding({ left: 6, right: 6, top: 4, bottom: 10 }).backgroundColor(BACKGROUND)
+    }.width('100%').height('100%').padding({ left: 6, right: 6, top: 4, bottom: 8 }).backgroundColor(BACKGROUND)
   }
 }
