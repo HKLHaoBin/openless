@@ -160,8 +160,23 @@ const positionCapture = windowsHost.match(
 assert.ok(positionCapture, 'the pre-copy UIA position capture helper must exist');
 assert.match(
   windowsHost,
-  /fn focused_selection_candidates[\s\S]*?RawViewWalker\(\)[\s\S]*?GetParentElement[\s\S]*?GetCurrentPatternAs::<IUIAutomationTextPattern>/,
+  /RawViewWalker\(\)[\s\S]*?focused_selection_candidates_with_walker/,
   'Windows selection capture must inspect a bounded UIA ancestor chain when the focused provider reports only a caret',
+);
+assert.match(
+  windowsHost,
+  /focused_selection_candidates_with_walker[\s\S]*?GetCurrentPatternAs::<IUIAutomationTextPattern>[\s\S]*?GetParentElement/,
+  'UIA candidate traversal must inspect each bounded ancestor provider',
+);
+assert.match(
+  windowsHost,
+  /focused_selection_provider_diagnostics[\s\S]*?ControlViewWalker\(\)[\s\S]*?provider_noncollapsed_count/,
+  'UIA diagnostics must compare bounded RawView and ControlView providers using metadata-only endpoint counts',
+);
+assert.match(
+  windowsHost,
+  /focused_selection_observation[\s\S]*?let mut read_error = false[\s\S]*?GetText[\s\S]*?read_error = true[\s\S]*?continue[\s\S]*?if let Some\(observation\) = changed/,
+  'selection observation must continue to later ancestor providers when an earlier candidate cannot return text',
 );
 assert.match(
   positionCapture,

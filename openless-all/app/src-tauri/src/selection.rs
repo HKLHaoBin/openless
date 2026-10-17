@@ -292,6 +292,23 @@ fn refresh_selection_insertion_target_anchor(
             let (position, stage) =
                 crate::host_document::capture_focused_selection_position_with_stage();
             target.windows_selection_position_stage = stage.as_str();
+            if position.is_none() {
+                let diagnostics = crate::host_document::focused_selection_provider_diagnostics();
+                crate::selection::emit_preview_diagnostic(
+                    target.capture_id(),
+                    "P1",
+                    "[\"H1\"]",
+                    "provider_summary",
+                    "observed",
+                    &format!(
+                        "\"raw_candidates\":{},\"raw_noncollapsed\":{},\"control_candidates\":{},\"control_noncollapsed\":{}",
+                        diagnostics.raw_candidates,
+                        diagnostics.raw_noncollapsed,
+                        diagnostics.control_candidates,
+                        diagnostics.control_noncollapsed,
+                    ),
+                );
+            }
             log::info!(
                 "[selection-polish] event=preview_position_reacquire capture_id={} result_stage={} position_captured={}",
                 target.capture_id(),

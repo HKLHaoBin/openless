@@ -212,8 +212,17 @@ fn selection_observation(expected: &str, selected: Option<&str>) -> FocusedSelec
     }
 }
 
-unsafe fn focused_selection_candidates(
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct FocusedSelectionProviderDiagnostics {
+    pub(crate) raw_candidates: u32,
+    pub(crate) raw_noncollapsed: u32,
+    pub(crate) control_candidates: u32,
+    pub(crate) control_noncollapsed: u32,
+}
+
+unsafe fn focused_selection_candidates_with_walker(
     uia: &IUIAutomation,
+    walker: &IUIAutomationTreeWalker,
 ) -> std::result::Result<
     Vec<(
         IUIAutomationElement,
@@ -225,7 +234,6 @@ unsafe fn focused_selection_candidates(
     let mut element = uia
         .GetFocusedElement()
         .map_err(|_| "focused_element".to_string())?;
-    let walker = uia.RawViewWalker().map_err(|_| "uia".to_string())?;
     let mut candidates = Vec::new();
     for _ in 0..8 {
         if let Ok(pattern) =
@@ -251,6 +259,21 @@ unsafe fn focused_selection_candidates(
         }
         element = parent;
     }
+    Ok(candidates)
+}
+
+unsafe fn focused_selection_candidates(
+    uia: &IUIAutomation,
+) -> std::result::Result<
+    Vec<(
+        IUIAutomationElement,
+        IUIAutomationTextPattern,
+        IUIAutomationTextRange,
+    )>,
+    String,
+> {
+    let walker = uia.RawViewWalker().map_err(|_| "uia".to_string())?;
+    let candidates = focused_selection_candidates_with_walker(uia, &walker)?;
     if candidates.is_empty() {
         Err("selection_not_single".to_string())
     } else {
@@ -258,19 +281,72 @@ unsafe fn focused_selection_candidates(
     }
 }
 
+unsafe fn provider_noncollapsed_count(
+    candidates: &[(
+        IUIAutomationElement,
+        IUIAutomationTextPattern,
+        IUIAutomationTextRange,
+    )],
+) -> u32 {
+    candidates
+        .iter()
+        .filter(|(_, _, selected)| {
+            selected
+                .CompareEndpoints(
+                    TextPatternRangeEndpoint_Start,
+                    selected,
+                    TextPatternRangeEndpoint_End,
+                )
+                .is_ok_and(|comparison| comparison != 0)
+        })
+        .count() as u32
+}
+
+pub(crate) fn focused_selection_provider_diagnostics() -> FocusedSelectionProviderDiagnostics {
+    with_voice_edit_uia(|uia| unsafe {
+        let raw_candidates = uia
+            .RawViewWalker()
+            .ok()
+            .and_then(|walker| focused_selection_candidates_with_walker(uia, &walker).ok())
+            .unwrap_or_default();
+        let control_candidates = uia
+            .ControlViewWalker()
+            .ok()
+            .and_then(|walker| focused_selection_candidates_with_walker(uia, &walker).ok())
+            .unwrap_or_default();
+        Ok(FocusedSelectionProviderDiagnostics {
+            raw_candidates: raw_candidates.len() as u32,
+            raw_noncollapsed: provider_noncollapsed_count(&raw_candidates),
+            control_candidates: control_candidates.len() as u32,
+            control_noncollapsed: provider_noncollapsed_count(&control_candidates),
+        })
+    })
+    .unwrap_or_default()
+}
+
 pub(crate) fn focused_selection_observation(expected: &str) -> FocusedSelectionObservation {
     with_voice_edit_uia(|uia| unsafe {
         let candidates = focused_selection_candidates(uia)
             .map_err(|_| "selectionTargetUnavailable".to_string())?;
         let mut changed = None;
+        let mut read_error = false;
         for (_, pattern, selected_range) in candidates {
-            let selected = selected_range
-                .GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32)
-                .map_err(|_| "selectionTargetUnavailable".to_string())?
-                .to_string();
+            let selected =
+                match selected_range.GetText((ObservedInsertion::MAX_DOCUMENT_UTF16 + 1) as i32) {
+                    Ok(selected) => selected.to_string(),
+                    Err(_) => {
+                        read_error = true;
+                        continue;
+                    }
+                };
             let selected = if selected.trim().is_empty() {
-                selection_range_text(&pattern, &selected_range)
-                    .map_err(|_| "selectionTargetUnavailable".to_string())?
+                match selection_range_text(&pattern, &selected_range) {
+                    Ok(selected) => selected,
+                    Err(_) => {
+                        read_error = true;
+                        continue;
+                    }
+                }
             } else {
                 selected
             };
@@ -280,7 +356,13 @@ pub(crate) fn focused_selection_observation(expected: &str) -> FocusedSelectionO
             }
             changed = Some(observation);
         }
-        Ok(changed.unwrap_or_else(|| selection_observation(expected, None)))
+        if let Some(observation) = changed {
+            Ok(observation)
+        } else if read_error {
+            Err("selectionTargetUnavailable".to_string())
+        } else {
+            Ok(selection_observation(expected, None))
+        }
     })
     .unwrap_or_else(|_| selection_observation(expected, None))
 }
