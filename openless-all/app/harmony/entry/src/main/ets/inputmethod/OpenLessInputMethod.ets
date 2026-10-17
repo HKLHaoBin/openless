@@ -2,6 +2,7 @@ import { InputMethodExtensionAbility, inputMethodEngine } from '@kit.IMEKit';
 import { display } from '@kit.ArkUI';
 import { panelLayout } from './PanelLayout';
 import { imeStorage, inputSession } from './InputSession';
+import { initializeRime } from './RimeClient';
 
 export default class OpenLessInputMethod extends InputMethodExtensionAbility {
   private engine: inputMethodEngine.InputMethodAbility = inputMethodEngine.getInputMethodAbility();
@@ -55,6 +56,11 @@ export default class OpenLessInputMethod extends InputMethodExtensionAbility {
     this.engine.on('keyboardShow', this.onShow);
     this.engine.on('keyboardHide', this.onHide);
     display.on('change', this.onDisplayChange);
+    // Prepare dictionaries in parallel with panel creation and editor attributes.
+    // This creates no session and never enables learning or network queries.
+    initializeRime(this.context.filesDir, this.context.resourceManager).catch(() => {
+      console.warn('[OpenLess IME] dictionary prewarm failed; retry on input');
+    });
     console.info('[OpenLess IME] created');
   }
 

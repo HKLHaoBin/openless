@@ -44,9 +44,18 @@ export function initializeRime(filesDir: string, resources: resourceManager.Reso
       const path = shared + '/' + name;
       if (fs.accessSync(path)) continue;
       const bytes = await resources.getRawFileContent('rime/' + name);
-      const file = fs.openSync(path + '.tmp', fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
-      try { fs.writeSync(file.fd, bytes.buffer); } finally { fs.closeSync(file); }
-      fs.renameSync(path + '.tmp', path);
+      const file = await fs.open(path + '.tmp', fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
+      try {
+        let offset = 0;
+        while (offset < bytes.byteLength) {
+          const chunk = bytes.buffer.slice(bytes.byteOffset + offset,
+            bytes.byteOffset + Math.min(bytes.byteLength, offset + 262144));
+          const written = await fs.write(file.fd, chunk);
+          if (written <= 0 || written > chunk.byteLength) throw new Error('Rime 资源写入不完整');
+          offset += written;
+        }
+      } finally { await fs.close(file); }
+      await fs.rename(path + '.tmp', path);
     }
     await rimeRequest('initialize', shared, filesDir + '/' + profile);
     console.info('[OpenLess Rime] initialized');

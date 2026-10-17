@@ -1,6 +1,6 @@
 import { inputMethodEngine, InputMethodExtensionContext } from '@kit.IMEKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { initializeRime, rimeRequest, RimeState, testRime, cloudCandidates } from './RimeClient';
+import { initializeRime, rimeRequest, RimeState, cloudCandidates } from './RimeClient';
 import { preferences } from '@kit.ArkData';
 import { VoiceClient } from './VoiceClient';
 
@@ -128,7 +128,6 @@ class InputSession {
     this.queue = this.queue.then(async (): Promise<void> => {
       if (generation !== this.generation || epoch !== this.queueEpoch) return;
       await initializeRime(context.filesDir, context.resourceManager);
-      await testRime(context.filesDir, context.resourceManager);
       if (generation !== this.generation || epoch !== this.queueEpoch) return;
       const state = await rimeRequest('create', '', learning ? 'learning' : 'private');
       if (generation !== this.generation || epoch !== this.queueEpoch) { await rimeRequest('destroy', state.session); return; }

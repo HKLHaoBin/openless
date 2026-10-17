@@ -118,14 +118,17 @@ struct InputMethodPanel {
   characterKey(key: string, hint: string, id: string, weight: number, letter: boolean) {
     Stack({ alignContent: Alignment.Top }) {
       Button({ type: ButtonType.Normal }) {
-        Column({ space: 0 }) {
-          if (hint) {
-            Text(hint).fontSize(10).fontColor(this.previewId === id && this.previewArmed ? '#FFFFFF' : MUTED)
-              .height(13).width('100%').textAlign(TextAlign.End).padding({ right: 6 })
-          }
+        Stack({ alignContent: Alignment.Center }) {
           Text(letter && this.chinese ? key.toUpperCase() : key).fontSize(letter ? 22 : 24)
             .fontColor(this.previewId === id && this.previewArmed ? '#FFFFFF' : INK)
-        }.width('100%').height('100%').justifyContent(FlexAlign.Center)
+          if (hint) {
+            Column() {
+              Text(hint).fontSize(10).fontColor(this.previewId === id && this.previewArmed ? '#FFFFFF' : MUTED)
+                .height(13).width('100%').textAlign(TextAlign.End)
+            }.width('100%').height('100%').padding({ top: 3, right: 6 })
+              .hitTestBehavior(HitTestMode.None)
+          }
+        }.width('100%').height('100%')
       }.width('100%').height('100%').borderRadius(7).padding(0)
         .backgroundColor(this.previewId === id && this.previewArmed ? ACCENT : KEY)
         .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).focusable(false)
@@ -255,10 +258,10 @@ struct InputMethodPanel {
   @Builder
   keyRow(index: number) {
     Row({ space: 5 }) {
-      if (index === 1 && this.layer === 0) { Blank().layoutWeight(this.keyboardLayout === 'split' ? 0.3 : 0.5) }
+      if (index === 1 && this.layer === 0 && this.keyboardLayout !== 'split') { Blank().layoutWeight(0.5) }
       if (index === 2) {
         Button(this.layer === 2 ? (this.symbolPage === 0 ? '更多' : '常用') : this.capsLock ? '⇪' : '⇧', { type: ButtonType.Normal })
-          .height(this.keyHeight).layoutWeight(this.keyboardLayout === 'split' ? 1.2 : 1.45).fontSize(this.layer > 0 ? 15 : 25)
+          .height(this.keyHeight).layoutWeight(this.keyboardLayout === 'split' ? 1 : 1.5).fontSize(this.layer > 0 ? 15 : 25)
           .fontColor(this.uppercase && this.layer === 0 ? ACCENT : INK)
           .backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false).enabled(this.connected)
           .accessibilityText(this.layer > 0 ? '切换符号页' : '切换大写')
@@ -274,9 +277,9 @@ struct InputMethodPanel {
         if (this.keyboardLayout === 'split' && position === (index === 2 ? 4 : 5)) { Blank().layoutWeight(2) }
         this.characterKey(key, this.hint(index, position), 'letter:' + index + ':' + position + ':' + key, 1, this.layer === 0)
       }, (key: string, position: number) => position.toString() + ':' + key)
-      if (index === 1 && this.layer === 0) { Blank().layoutWeight(this.keyboardLayout === 'split' ? 0.3 : 0.5) }
+      if (index === 1 && this.layer === 0 && this.keyboardLayout !== 'split') { Blank().layoutWeight(0.5) }
       if (index === 2) {
-        Button('⌫', { type: ButtonType.Normal }).height(this.keyHeight).layoutWeight(this.keyboardLayout === 'split' ? 1.2 : 1.45).fontSize(25)
+        Button('⌫', { type: ButtonType.Normal }).height(this.keyHeight).layoutWeight(this.keyboardLayout === 'split' ? 1 : 1.5).fontSize(25)
           .fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
           .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).accessibilityText('删除光标前的文字')
           .onClick(() => { inputSession.backspace(); })
@@ -328,9 +331,9 @@ struct InputMethodPanel {
       else { this.bottomKey('123', 0.9, () => { this.layer = this.layer === 1 ? 0 : 1; }) }
       this.punctuation(true)
       if (this.keyboardLayout === 'split') {
-        this.spaceKey(1.1)
+        this.spaceKey(1.2)
         Blank().layoutWeight(2)
-        this.spaceKey(1.1)
+        this.spaceKey(1.2)
       } else { this.spaceKey(3) }
       this.punctuation(false)
       if (this.keyboardLayout === 'split') {
