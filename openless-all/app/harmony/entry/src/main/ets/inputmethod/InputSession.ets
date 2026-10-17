@@ -24,11 +24,6 @@ class InputPanelState {
 
 export const imeStorage: LocalStorage = new LocalStorage(new InputPanelState());
 
-class EditorSnapshot {
-  cursor: number = -1;
-  before: string = '';
-}
-
 // Only the system-provided client may edit the target app. Never retain a
 // queued operation across inputStop/inputStart or inspect another app's text.
 class InputSession {
@@ -49,8 +44,6 @@ class InputSession {
   private expectedText?: string;
   private confirmWrite?: () => void;
   private compatibilityEditor: boolean = false;
-  private confirmedCompatibilityField: boolean = false;
-  private allowUnconfirmedContinuation: boolean = false;
   private queueEpoch: number = 0;
   private writeId: number = 0;
 
@@ -65,7 +58,6 @@ class InputSession {
     this.action = inputMethodEngine.ENTER_KEY_TYPE_UNSPECIFIED;
     this.resetObservation();
     this.compatibilityEditor = false;
-    this.confirmedCompatibilityField = false;
     imeStorage.setOrCreate('connected', true);
     imeStorage.setOrCreate('status', '可输入');
     imeStorage.setOrCreate('enterLabel', '换行');
@@ -193,57 +185,17 @@ class InputSession {
     this.observedText = text.length <= 4096 ? text : undefined;
   }
 
-  private async readSnapshot(client: inputMethodEngine.InputClient): Promise<EditorSnapshot | undefined> {
-    if (!this.compatibilityEditor || !imeStorage.get<boolean>('editorVerified') ||
-      imeStorage.get<boolean>('password')) return undefined;
-    const generation = this.generation;
-    let active = true;
-    let timer: number = -1;
-    const deadline = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 150); });
-    const read = async (): Promise<EditorSnapshot | undefined> => {
-      const first = await client.getTextIndexAtCursor();
-      if (!active || generation !== this.generation || this.client !== client) return undefined;
-      const before = await client.getForward(64);
-      if (!active || generation !== this.generation || this.client !== client) return undefined;
-      const last = await client.getTextIndexAtCursor();
-      if (first !== last || first < 0 || before.length > 64) return undefined;
-      const snapshot = new EditorSnapshot();
-      snapshot.cursor = last;
-      snapshot.before = before;
-      return snapshot;
-    };
-    try { return await Promise.race([read().catch(() => undefined), deadline]); }
-    finally { active = false; clearTimeout(timer); }
-  }
-
-  private async confirmReadback(client: inputMethodEngine.InputClient, text: string,
-    baseline: EditorSnapshot, writeId: number): Promise<boolean> {
-    // A changed suffix alone is ambiguous (especially repeated words). Require
-    // the exact cursor delta and the complete bounded prefix after insertion.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      await new Promise<void>((resolve) => { setTimeout(resolve, 60); });
-      if (this.client !== client || writeId !== this.writeId) return false;
-      const after = await this.readSnapshot(client);
-      if (this.client !== client || writeId !== this.writeId) return false;
-      if (after && after.cursor === baseline.cursor + text.length &&
-        after.before === (baseline.before + text).slice(-64)) return true;
-    }
-    return false;
-  }
-
   private async writeText(client: inputMethodEngine.InputClient, text: string): Promise<boolean> {
-    if (this.allowUnconfirmedContinuation && this.compatibilityEditor && this.confirmedCompatibilityField &&
+    if (this.compatibilityEditor &&
       imeStorage.get<boolean>('editorVerified') && !imeStorage.get<boolean>('password')) {
-      // This opt-in bridge policy is enabled only after the user confirms an
-      // actual insertion in this field. Dispatch once, never replay on timeout.
+      // Advancing Rime means the commit was dispatched, not that the host
+      // acknowledged it. A missing bridge reply must not lock composition.
+      // Dispatch once and never replay a late or failed operation.
       this.observeDispatched(client, client.insertText(text), 'write');
       console.info('[OpenLess IME] compatibility write dispatched without acknowledgement');
       return true;
     }
     const writeId = ++this.writeId;
-    const snapshot = await this.readSnapshot(client);
-    if (this.client !== client || writeId !== this.writeId) return false;
-    if (this.compatibilityEditor) console.info('[OpenLess IME] editor readback available=' + (snapshot !== undefined));
     const baseline = this.observedText;
     const begin = this.selectionBegin;
     const end = this.selectionEnd;
@@ -262,9 +214,7 @@ class InputSession {
         if (ok) return true;
         return observed;
       }).catch(() => observed);
-      const readback = snapshot ? this.confirmReadback(client, text, snapshot, writeId).then((ok: boolean) =>
-        ok ? true : observed) : observed;
-      const ok = await Promise.race([sent, observed, readback, deadline]);
+      const ok = await Promise.race([sent, observed, deadline]);
       console.info('[OpenLess IME] write transport=async-observed result=' + ok);
       return ok;
     } catch (error) {
@@ -416,7 +366,6 @@ class InputSession {
     if (!imeStorage.get<boolean>('pendingCommit') || !this.client || !this.rimeSession) return;
     const generation = this.generation;
     const session = this.rimeSession;
-    if (operation === 'ack' && this.compatibilityEditor) this.confirmedCompatibilityField = true;
     const epoch = ++this.queueEpoch;
     this.writeId++;
     this.expectedText = undefined;

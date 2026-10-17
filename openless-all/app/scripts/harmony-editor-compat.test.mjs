@@ -112,7 +112,7 @@ await failedWrite.drain();
 assert.equal(failedWrite.state.get('pendingCommit'), false);
 assert.equal(failedWrite.acknowledgements(), 1, 'cancel does not claim another failed write succeeded');
 
-const syncFailure = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'com.droi.tong' }), {
+const syncFailure = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {
   insertText: async () => { throw { code: 12800003 }; },
   insertTextSync: () => { throw { code: 12800003 }; },
 });
@@ -135,7 +135,7 @@ assert.equal(anonymousBridge.state.get('pendingCommit'), false);
 assert.equal(anonymousBridge.acknowledgements(), 1);
 
 let observedAttempts = 0;
-const observed = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }), {
+const observed = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {
   insertText: () => { observedAttempts++; return new Promise(() => {}); },
 });
 await observed.drain();
@@ -153,7 +153,7 @@ assert.equal(observed.acknowledgements(), 1, 'exact selected-range replacement c
 assert.equal(observedAttempts, 1, 'observation must not replay the insertion');
 assert.equal(observed.state.get('pendingCommit'), false);
 
-const noReceipt = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }), {
+const noReceipt = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {
   insertText: () => new Promise(() => {}),
 });
 await noReceipt.drain();
@@ -174,49 +174,16 @@ noReceipt.session.observeSelection(4, 4);
 await noReceipt.drain();
 assert.equal(noReceipt.acknowledgements(), 2, 'manual recovery preserves the active-field baseline for the next word');
 
-let fieldText = '原文', fieldCursor = 2, readbackWrites = 0;
-const readback = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }), {
-  getTextIndexAtCursor: async () => fieldCursor,
-  getForward: async (length) => fieldText.slice(0, fieldCursor).slice(-length),
-  insertText: (text) => {
-    readbackWrites++;
-    fieldText += text;
-    fieldCursor += text.length;
-    return new Promise(() => {});
-  },
-});
-await readback.drain();
-readback.session.selectCandidate(0);
-await readback.drain();
-readback.session.selectCandidate(0);
-await readback.drain();
-assert.equal(readbackWrites, 2);
-assert.equal(readback.acknowledgements(), 2, 'readback permits repeated words without native write replies');
-assert.equal(fieldText, '原文测试测试');
-
-const unchanged = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }), {
-  getTextIndexAtCursor: async () => 2,
-  getForward: async () => '测试',
-  insertText: async () => false,
-});
-await unchanged.drain();
-unchanged.session.selectCandidate(0);
-await unchanged.drain();
-assert.equal(unchanged.acknowledgements(), 0, 'an existing identical word is not proof of a new insertion');
-assert.equal(unchanged.state.get('pendingCommit'), true);
-
 let dispatchedDeletes = 0, dispatchedWrites = 0;
+const dispatchedReplies = [];
 const continuous = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }), {
-  insertText: () => { dispatchedWrites++; return new Promise(() => {}); },
+  insertText: () => { dispatchedWrites++; return new Promise((resolve) => dispatchedReplies.push(resolve)); },
   deleteForward: async () => { dispatchedDeletes++; return new Promise(() => {}); },
 });
 await continuous.drain();
-continuous.session.allowUnconfirmedContinuation = true;
 continuous.session.selectCandidate(0);
 await continuous.drain();
-assert.equal(continuous.state.get('pendingCommit'), true, 'first write still requires actual confirmation');
-continuous.session.acknowledgePendingCommit();
-await continuous.drain();
+assert.equal(continuous.state.get('pendingCommit'), false, 'missing bridge replies must not lock the first commit');
 for (let i = 0; i < 3; i++) continuous.session.selectCandidate(0);
 await continuous.drain();
 assert.equal(dispatchedWrites, 4, 'one and only one dispatch per selected word');
@@ -224,6 +191,10 @@ assert.equal(continuous.state.get('pendingCommit'), false);
 for (let i = 0; i < 5; i++) continuous.session.backspace();
 await continuous.drain();
 assert.equal(dispatchedDeletes, 5, 'missing delete replies must not serialize repeat keys behind timeouts');
+dispatchedReplies[0](false);
+await continuous.pump();
+assert.equal(dispatchedWrites, 4, 'a late false reply must never resend committed text');
+assert.equal(continuous.state.get('pendingCommit'), false, 'late bridge replies must not lock the next composition');
 continuous.session.attach({ filesDir: '/test', resourceManager: {} }, {}, {
   getEditorAttribute: async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }),
   insertText: () => new Promise(() => {}),
@@ -231,7 +202,10 @@ continuous.session.attach({ filesDir: '/test', resourceManager: {} }, {}, {
 await continuous.drain();
 continuous.session.selectCandidate(0);
 await continuous.drain();
-assert.equal(continuous.state.get('pendingCommit'), true, 'each newly bound field needs its own confirmation');
+assert.equal(continuous.state.get('pendingCommit'), false, 'new compatibility fields also allow continuous composition');
+dispatchedReplies[1](false);
+await continuous.pump();
+assert.equal(continuous.state.get('status'), 'Rime 拼音', 'old editor failures must not affect the new field');
 
 let releaseOldWrite, hangingAttempts = 0;
 const hanging = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {
