@@ -133,6 +133,7 @@ pub(crate) fn backend_dependencies(
                 .then(|| prefs.microphone_device_name.clone()),
             openless_core::AudioProcessingConfig {
                 enhancement_enabled: prefs.audio_enhancement_enabled,
+                echo_cancellation_enabled: prefs.echo_cancellation_enabled,
             },
         );
     }

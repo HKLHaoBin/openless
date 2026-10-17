@@ -1436,6 +1436,9 @@ export const zhCN = {
         '保持麦克风流就绪，并在内存中保留最多 500 毫秒音频，减少按下热键后第一句话被漏识别的情况。确认录音前不会保存或上传音频；此模式会增加功耗并保持系统麦克风指示灯亮起。',
       audioEnhancementLabel: '轻量麦克风增强',
       audioEnhancementDesc: '对本机麦克风应用轻量降噪、增益与软限幅，不包含回声消除。默认关闭。',
+      echoCancellationLabel: '播放回声抑制',
+      echoCancellationDesc:
+        '在保持系统播放声音的同时，使用桌面音频输出作为参考抑制回声。此功能为尽力而为，部分设备、蓝牙路径或 Linux ALSA 环境可能不可用。',
       muteDuringRecordingLabel: '录音时静音',
       muteDuringRecordingDesc: '录音期间临时静音系统输出，避免扬声器回音。',
       audioCueLabel: '录音提示音',

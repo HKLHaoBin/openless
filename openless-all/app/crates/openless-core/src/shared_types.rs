@@ -412,6 +412,10 @@ pub struct UserPreferences {
     /// Disabled by default until an audio-quality baseline supports changing it.
     #[serde(default)]
     pub audio_enhancement_enabled: bool,
+    /// Use a desktop render/monitor reference for best-effort echo cancellation.
+    /// Disabled by default and local to the host audio device.
+    #[serde(default)]
+    pub echo_cancellation_enabled: bool,
     /// Reconnect the current ASR after recording ends and submit the whole PCM. Default off.
     #[serde(default)]
     pub stable_transcription_enabled: bool,
@@ -979,6 +983,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     audio_enhancement_enabled: bool,
     #[serde(default)]
+    echo_cancellation_enabled: bool,
+    #[serde(default)]
     stable_transcription_enabled: bool,
     #[serde(default)]
     low_latency_dictation_enabled: bool,
@@ -1240,6 +1246,7 @@ impl Default for UserPreferencesWire {
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
             audio_enhancement_enabled: prefs.audio_enhancement_enabled,
+            echo_cancellation_enabled: prefs.echo_cancellation_enabled,
             stable_transcription_enabled: prefs.stable_transcription_enabled,
             low_latency_dictation_enabled: prefs.low_latency_dictation_enabled,
             audio_cue_on_record: prefs.audio_cue_on_record,
@@ -1444,6 +1451,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
             audio_enhancement_enabled: wire.audio_enhancement_enabled,
+            echo_cancellation_enabled: wire.echo_cancellation_enabled,
             stable_transcription_enabled: wire.stable_transcription_enabled,
             low_latency_dictation_enabled: wire.low_latency_dictation_enabled,
             audio_cue_on_record: wire.audio_cue_on_record,
@@ -1825,6 +1833,7 @@ impl Default for UserPreferences {
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
             audio_enhancement_enabled: false,
+            echo_cancellation_enabled: false,
             stable_transcription_enabled: false,
             low_latency_dictation_enabled: false,
             audio_cue_on_record: true,
