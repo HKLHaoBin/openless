@@ -106,6 +106,34 @@ impl SelectionInsertionTargetValidation {
     }
 }
 
+/// Emit the bounded, metadata-only diagnostics used to distinguish the Issue #1014
+/// PreviewConfirm hypotheses. The prefix is deliberately unique so one exported log
+/// can be filtered without exposing selection or document contents.
+pub(crate) fn emit_preview_debug_probe(
+    probe_id: &'static str,
+    hypothesis_ids: &'static [&'static str],
+    event: &'static str,
+    outcome: &'static str,
+    safe: serde_json::Value,
+) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    let record = serde_json::json!({
+        "schema": "diagnosing-bugs.v1",
+        "session_id": "issue-1014-20261018",
+        "run_id": "preview-confirm-repro",
+        "probe_id": probe_id,
+        "hypothesis_ids": hypothesis_ids,
+        "event": event,
+        "outcome": outcome,
+        "safe": safe,
+        "ts": ts,
+    });
+    log::info!("[DEBUG-PREVIEW-1014] {record}");
+}
+
 pub struct SelectionCaptureOutcome {
     pub selection: Option<SelectionContext>,
 }
@@ -858,9 +886,24 @@ fn classify_simulated_copy_result(
 /// stops a head/tail stand-in from authorizing a paste over the omitted middle.
 #[cfg(target_os = "windows")]
 fn selected_text_for_validation() -> Option<String> {
-    let text = simulate_copy_and_read()?;
-    let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    let text = simulate_copy_and_read();
+    let chars = text
+        .as_deref()
+        .map(|value| value.trim().chars().count())
+        .unwrap_or(0);
+    emit_preview_debug_probe(
+        "P2",
+        &["H1", "H3"],
+        "selection_copy_validation",
+        if text.is_some() {
+            "captured"
+        } else {
+            "unavailable"
+        },
+        serde_json::json!({ "chars": chars, "present": text.is_some() }),
+    );
+    let trimmed = text?.trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
