@@ -95,6 +95,8 @@ pub(crate) enum FocusedSelectionCaptureStage {
     ContextBeforeUnavailable,
     ContextAfterUnavailable,
     ExpectedMismatch,
+    ExpectedMovementMismatch,
+    ExpectedTextMismatch,
     PositionChanged,
     CaretChanged,
     CaretReconstructed,
@@ -124,6 +126,8 @@ impl FocusedSelectionCaptureStage {
             Self::ContextBeforeUnavailable => "context_before_unavailable",
             Self::ContextAfterUnavailable => "context_after_unavailable",
             Self::ExpectedMismatch => "expected_mismatch",
+            Self::ExpectedMovementMismatch => "expected_movement_mismatch",
+            Self::ExpectedTextMismatch => "expected_text_mismatch",
             Self::PositionChanged => "position_changed",
             Self::CaretChanged => "caret_changed",
             Self::CaretReconstructed => "caret_reconstructed",
@@ -158,6 +162,8 @@ fn capture_stage(error: &str) -> FocusedSelectionCaptureStage {
         "context_before" => FocusedSelectionCaptureStage::ContextBeforeUnavailable,
         "context_after" => FocusedSelectionCaptureStage::ContextAfterUnavailable,
         "expected_mismatch" => FocusedSelectionCaptureStage::ExpectedMismatch,
+        "expected_movement_mismatch" => FocusedSelectionCaptureStage::ExpectedMovementMismatch,
+        "expected_text_mismatch" => FocusedSelectionCaptureStage::ExpectedTextMismatch,
         "caret_changed" => FocusedSelectionCaptureStage::CaretChanged,
         "caret_recovery_ambiguous" => FocusedSelectionCaptureStage::CaretRecoveryAmbiguous,
         _ => FocusedSelectionCaptureStage::UiAutomationUnavailable,
@@ -1012,7 +1018,7 @@ pub(crate) fn capture_focused_selection_from_collapsed_caret_with_stage(
                         }
                     };
                     if moved != direction * units {
-                        fallback = "expected_mismatch";
+                        fallback = "expected_movement_mismatch";
                         continue;
                     }
                     let selected_text = match candidate
@@ -1027,7 +1033,7 @@ pub(crate) fn capture_focused_selection_from_collapsed_caret_with_stage(
                     if selection_observation(expected, Some(&selected_text)).status
                         != FocusedSelectionStatus::Matched
                     {
-                        fallback = "expected_mismatch";
+                        fallback = "expected_text_mismatch";
                         continue;
                     }
                     let runtime_id = match runtime_id(&element) {

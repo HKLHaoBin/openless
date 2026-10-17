@@ -203,6 +203,16 @@ assert.match(
   'collapsed-caret recovery must retain a bounded UTF-16 unit candidate for surrogate pairs',
 );
 assert.match(
+  caretRecovery,
+  /fallback = "expected_movement_mismatch"[\s\S]*?fallback = "expected_text_mismatch"/,
+  'collapsed-caret recovery must distinguish unit-boundary movement mismatches from candidate text mismatches in P1 metadata',
+);
+assert.match(
+  windowsHost,
+  /ExpectedMovementMismatch[\s\S]*?expected_movement_mismatch[\s\S]*?ExpectedTextMismatch[\s\S]*?expected_text_mismatch/,
+  'P1 recovery mismatch stages must remain bounded metadata-only enum values',
+);
+assert.match(
   selectionAnchorRefresh,
   /position\.is_none\(\)[\s\S]*?capture_focused_selection_from_collapsed_caret_with_stage[\s\S]*?CaretReconstructed/,
   'PreviewConfirm must use collapsed-caret recovery only after normal position capture fails',
