@@ -9,6 +9,7 @@ const FUNCTION_KEY: Resource = $r('app.color.ime_function_background');
 const INK: Resource = $r('app.color.ime_foreground');
 const MUTED: Resource = $r('app.color.ime_secondary');
 const ACCENT: Resource = $r('app.color.ime_accent');
+const KEY_SHADOW: Resource = $r('app.color.ime_key_shadow');
 
 @Entry(imeStorage)
 @Component
@@ -44,6 +45,12 @@ struct InputMethodPanel {
   @State previewSymbol: string = '';
   @State previewArmed: boolean = false;
   private symbolGesture: SymbolGesture = new SymbolGesture();
+
+  @Styles
+  keySurface() {
+    .borderRadius(7)
+    .shadow({ radius: 0.5, color: KEY_SHADOW, offsetX: 0, offsetY: 1 })
+  }
 
   private row(index: number): string[] {
     if (this.layer === 2) {
@@ -93,6 +100,8 @@ struct InputMethodPanel {
 
   private swipeDistance(): number { return Math.max(22, Math.min(30, this.keyHeight * 0.48)); }
 
+  private keyGap(): number { return this.keyboardLayout === 'standard' ? 6 : 5; }
+
   private finishSymbol(id: string, mode: string): void {
     const symbol = this.symbolGesture.finish(id, this.keyContext(), mode);
     this.clearPreview(id);
@@ -129,7 +138,7 @@ struct InputMethodPanel {
               .hitTestBehavior(HitTestMode.None)
           }
         }.width('100%').height('100%')
-      }.width('100%').height('100%').borderRadius(7).padding(0)
+      }.width('100%').height('100%').keySurface().padding(0)
         .backgroundColor(this.previewId === id && this.previewArmed ? ACCENT : KEY)
         .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).focusable(false)
         .accessibilityText(hint ? key + '，长按或上滑输入' + hint : key)
@@ -257,13 +266,13 @@ struct InputMethodPanel {
 
   @Builder
   keyRow(index: number) {
-    Row({ space: 5 }) {
+    Row({ space: this.keyGap() }) {
       if (index === 1 && this.layer === 0 && this.keyboardLayout !== 'split') { Blank().layoutWeight(0.5) }
       if (index === 2) {
         Button(this.layer === 2 ? (this.symbolPage === 0 ? '更多' : '常用') : this.capsLock ? '⇪' : '⇧', { type: ButtonType.Normal })
           .height(this.keyHeight).layoutWeight(this.keyboardLayout === 'split' ? 1 : 1.5).fontSize(this.layer > 0 ? 15 : 25)
           .fontColor(this.uppercase && this.layer === 0 ? ACCENT : INK)
-          .backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false).enabled(this.connected)
+          .backgroundColor(FUNCTION_KEY).keySurface().padding(0).focusable(false).enabled(this.connected)
           .accessibilityText(this.layer > 0 ? '切换符号页' : '切换大写')
           .onClick(() => { this.shift(); })
           .gesture(LongPressGesture().onAction(() => {
@@ -280,7 +289,7 @@ struct InputMethodPanel {
       if (index === 1 && this.layer === 0 && this.keyboardLayout !== 'split') { Blank().layoutWeight(0.5) }
       if (index === 2) {
         Button('⌫', { type: ButtonType.Normal }).height(this.keyHeight).layoutWeight(this.keyboardLayout === 'split' ? 1 : 1.5).fontSize(25)
-          .fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
+          .fontColor(INK).backgroundColor(FUNCTION_KEY).keySurface().padding(0).focusable(false)
           .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).accessibilityText('删除光标前的文字')
           .onClick(() => { inputSession.backspace(); })
           .gesture(LongPressGesture({ repeat: true }).onAction(() => { inputSession.backspace(); }))
@@ -291,7 +300,7 @@ struct InputMethodPanel {
   @Builder
   bottomKey(label: string, weight: number, action: () => void) {
     Button(label, { type: ButtonType.Normal }).height(this.keyHeight).layoutWeight(weight)
-      .fontSize(15).fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
+      .fontSize(15).fontColor(INK).backgroundColor(FUNCTION_KEY).keySurface().padding(0).focusable(false)
       .onClick(() => { action(); })
   }
 
@@ -311,7 +320,7 @@ struct InputMethodPanel {
           Text('⎵').fontSize(28).fontColor(INK)
         }.width('100%').height('100%').justifyContent(FlexAlign.Center)
       } else { Text(this.chinese ? '空格' : 'space').fontSize(15).fontColor(MUTED) }
-    }.height(this.keyHeight).layoutWeight(weight).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
+    }.height(this.keyHeight).layoutWeight(weight).backgroundColor(KEY).keySurface().padding(0).focusable(false)
       .accessibilityText('空格，长按语音输入')
       .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
       .onClick(() => { inputSession.space(); })
@@ -320,11 +329,11 @@ struct InputMethodPanel {
 
   @Builder
   bottomRow() {
-    Row({ space: 5 }) {
+    Row({ space: this.keyGap() }) {
       this.bottomKey(this.layer > 0 ? '返回' : '符号', this.keyboardLayout === 'split' ? 1.2 : 1.1,
         () => { this.layer = this.layer > 0 ? 0 : 2; this.symbolPage = 0; })
       Button(this.chinese ? '中/英' : '英/中', { type: ButtonType.Normal }).height(this.keyHeight).layoutWeight(0.95)
-        .fontSize(14).fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
+        .fontSize(14).fontColor(INK).backgroundColor(FUNCTION_KEY).keySurface().padding(0).focusable(false)
         .enabled(this.connected && !this.password).onClick(() => { this.language(); })
         .gesture(LongPressGesture().onAction(() => { this.inputMethods(); }))
       if (this.keyboardLayout === 'split') { this.bottomKey('◎', 0.8, () => { this.inputMethods(); }) }
@@ -341,15 +350,15 @@ struct InputMethodPanel {
         this.bottomKey('123', 0.9, () => { this.layer = this.layer === 1 ? 0 : 1; })
       }
       Button(this.enterLabel, { type: ButtonType.Normal }).height(this.keyHeight).layoutWeight(1.25)
-        .fontSize(16).fontColor(this.keyboardLayout === 'split' ? INK : '#FFFFFF')
-        .backgroundColor(this.keyboardLayout === 'split' ? FUNCTION_KEY : ACCENT).borderRadius(7).padding(0).focusable(false)
+        .fontSize(16).fontColor(INK)
+        .backgroundColor(FUNCTION_KEY).keySurface().padding(0).focusable(false)
         .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { inputSession.enter(); })
     }.width('100%').height(this.keyHeight)
   }
 
   @Builder
   digitRow() {
-    Row({ space: 5 }) {
+    Row({ space: this.keyGap() }) {
       ForEach(['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'], (digit: string, index: number) => {
         if (this.keyboardLayout === 'split' && index === 5) { Blank().layoutWeight(2) }
         this.characterKey(digit, digitSymbol(digit, this.chinese), 'digit:' + digit, 1, false)
@@ -403,7 +412,7 @@ struct InputMethodPanel {
       Column({ space: 6 }) {
         ForEach(['+', '-', '×', '÷'], (value: string) => {
           Button(value, { type: ButtonType.Normal }).height(52).width('100%').fontSize(22)
-            .fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
+            .fontColor(INK).backgroundColor(FUNCTION_KEY).keySurface().padding(0).focusable(false)
             .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { this.insert(value); })
         }, (value: string) => value)
       }.layoutWeight(1)
@@ -412,34 +421,34 @@ struct InputMethodPanel {
           Row({ space: 6 }) {
             ForEach(row, (value: string) => {
               Button(value, { type: ButtonType.Normal }).height(52).layoutWeight(1).fontSize(25)
-                .fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
+                .fontColor(INK).backgroundColor(KEY).keySurface().padding(0).focusable(false)
                 .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { this.insert(value); })
             }, (value: string) => value)
           }.width('100%').height(52)
         }, (row: string[], index: number) => index.toString())
         Row({ space: 6 }) {
           Button('返回', { type: ButtonType.Normal }).height(52).layoutWeight(1).fontSize(14)
-            .fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
+            .fontColor(INK).backgroundColor(FUNCTION_KEY).keySurface().padding(0).focusable(false)
             .onClick(() => { this.layer = 0; })
           Button('0', { type: ButtonType.Normal }).height(52).layoutWeight(1).fontSize(25)
-            .fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
+            .fontColor(INK).backgroundColor(KEY).keySurface().padding(0).focusable(false)
             .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { this.insert('0'); })
           Button('00', { type: ButtonType.Normal }).height(52).layoutWeight(1).fontSize(22)
-            .fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
+            .fontColor(INK).backgroundColor(KEY).keySurface().padding(0).focusable(false)
             .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { this.insert('00'); })
         }.height(52).width('100%')
       }.layoutWeight(3.6)
       Column({ space: 6 }) {
         Button('⌫', { type: ButtonType.Normal }).height(52).width('100%').fontSize(25)
-          .fontColor(INK).backgroundColor(FUNCTION_KEY).borderRadius(7).padding(0).focusable(false)
+          .fontColor(INK).backgroundColor(FUNCTION_KEY).keySurface().padding(0).focusable(false)
           .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).accessibilityText('删除光标前的文字')
           .onClick(() => { inputSession.backspace(); })
           .gesture(LongPressGesture({ repeat: true }).onAction(() => { inputSession.backspace(); }))
         Button('.', { type: ButtonType.Normal }).height(52).width('100%').fontSize(25)
-          .fontColor(INK).backgroundColor(KEY).borderRadius(7).padding(0).focusable(false)
+          .fontColor(INK).backgroundColor(KEY).keySurface().padding(0).focusable(false)
           .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { this.insert('.'); })
         Button(this.enterLabel, { type: ButtonType.Normal }).height(110).width('100%').fontSize(17)
-          .fontColor('#FFFFFF').backgroundColor(ACCENT).borderRadius(7).padding(0).focusable(false)
+          .fontColor(INK).backgroundColor(FUNCTION_KEY).keySurface().padding(0).focusable(false)
           .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).onClick(() => { inputSession.enter(); })
       }.layoutWeight(1.2)
     }.width('100%').layoutWeight(1).alignItems(VerticalAlign.Center)
@@ -452,7 +461,7 @@ struct InputMethodPanel {
         Flex({ wrap: FlexWrap.Wrap }) {
           ForEach(this.candidates, (candidate: string, index: number) => {
             Button(candidate, { type: ButtonType.Normal }).height(48).fontSize(22)
-              .fontColor(index === 0 ? ACCENT : INK).backgroundColor(KEY).borderRadius(7)
+              .fontColor(index === 0 ? ACCENT : INK).backgroundColor(KEY).keySurface()
               .padding({ left: 18, right: 18 }).margin({ right: 6, bottom: 6 }).focusable(false)
               .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
               .onClick(() => { inputSession.selectCandidate(index, candidate); this.expanded = false; this.utility = 0; })
@@ -565,7 +574,8 @@ struct InputMethodPanel {
         if (this.pendingCommit) { this.pendingBar() }
         else if (this.candidates.length > 0 && this.voicePhase === 'idle') { this.candidateBar() }
         else { this.keyboardToolbar() }
-      }.height(48).width('100%').justifyContent(FlexAlign.End)
+      }.height(48).width('100%').constraintSize({ maxWidth: this.keyboardLayout === 'standard' ? 760 : 10000 })
+        .justifyContent(FlexAlign.End)
       if (this.voicePhase !== 'idle') { this.voicePanel() }
       else if (this.utility === 1) { this.tools() }
       else if (this.utility === 2) { this.emoji() }
@@ -579,7 +589,8 @@ struct InputMethodPanel {
           this.keyRow(1)
           this.keyRow(2)
           this.bottomRow()
-        }.width('100%').layoutWeight(1).justifyContent(FlexAlign.End)
+        }.width('100%').constraintSize({ maxWidth: this.keyboardLayout === 'standard' ? 760 : 10000 })
+          .layoutWeight(1).justifyContent(FlexAlign.End)
       }
     }.width('100%').height('100%').padding({ left: 6, right: 6, top: 4, bottom: 8 }).backgroundColor(BACKGROUND)
       .borderRadius(this.keyboardLayout === 'floating' ? 12 : 0).clip(true)
