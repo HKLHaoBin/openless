@@ -205,6 +205,34 @@ await unchanged.drain();
 assert.equal(unchanged.acknowledgements(), 0, 'an existing identical word is not proof of a new insertion');
 assert.equal(unchanged.state.get('pendingCommit'), true);
 
+let dispatchedDeletes = 0, dispatchedWrites = 0;
+const continuous = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }), {
+  insertText: () => { dispatchedWrites++; return new Promise(() => {}); },
+  deleteForward: async () => { dispatchedDeletes++; return new Promise(() => {}); },
+});
+await continuous.drain();
+continuous.session.allowUnconfirmedContinuation = true;
+continuous.session.selectCandidate(0);
+await continuous.drain();
+assert.equal(continuous.state.get('pendingCommit'), true, 'first write still requires actual confirmation');
+continuous.session.acknowledgePendingCommit();
+await continuous.drain();
+for (let i = 0; i < 3; i++) continuous.session.selectCandidate(0);
+await continuous.drain();
+assert.equal(dispatchedWrites, 4, 'one and only one dispatch per selected word');
+assert.equal(continuous.state.get('pendingCommit'), false);
+for (let i = 0; i < 5; i++) continuous.session.backspace();
+await continuous.drain();
+assert.equal(dispatchedDeletes, 5, 'missing delete replies must not serialize repeat keys behind timeouts');
+continuous.session.attach({ filesDir: '/test', resourceManager: {} }, {}, {
+  getEditorAttribute: async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }),
+  insertText: () => new Promise(() => {}),
+});
+await continuous.drain();
+continuous.session.selectCandidate(0);
+await continuous.drain();
+assert.equal(continuous.state.get('pendingCommit'), true, 'each newly bound field needs its own confirmation');
+
 let releaseOldWrite, hangingAttempts = 0;
 const hanging = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {
   insertText: () => {

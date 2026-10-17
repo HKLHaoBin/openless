@@ -49,6 +49,8 @@ class InputSession {
   private expectedText?: string;
   private confirmWrite?: () => void;
   private compatibilityEditor: boolean = false;
+  private confirmedCompatibilityField: boolean = false;
+  private allowUnconfirmedContinuation: boolean = false;
   private queueEpoch: number = 0;
   private writeId: number = 0;
 
@@ -63,6 +65,7 @@ class InputSession {
     this.action = inputMethodEngine.ENTER_KEY_TYPE_UNSPECIFIED;
     this.resetObservation();
     this.compatibilityEditor = false;
+    this.confirmedCompatibilityField = false;
     imeStorage.setOrCreate('connected', true);
     imeStorage.setOrCreate('status', '可输入');
     imeStorage.setOrCreate('enterLabel', '换行');
@@ -229,6 +232,14 @@ class InputSession {
   }
 
   private async writeText(client: inputMethodEngine.InputClient, text: string): Promise<boolean> {
+    if (this.allowUnconfirmedContinuation && this.compatibilityEditor && this.confirmedCompatibilityField &&
+      imeStorage.get<boolean>('editorVerified') && !imeStorage.get<boolean>('password')) {
+      // This opt-in bridge policy is enabled only after the user confirms an
+      // actual insertion in this field. Dispatch once, never replay on timeout.
+      this.observeDispatched(client, client.insertText(text), 'write');
+      console.info('[OpenLess IME] compatibility write dispatched without acknowledgement');
+      return true;
+    }
     const writeId = ++this.writeId;
     const snapshot = await this.readSnapshot(client);
     if (this.client !== client || writeId !== this.writeId) return false;
@@ -271,10 +282,32 @@ class InputSession {
   }
 
   private async deleteText(client: inputMethodEngine.InputClient): Promise<boolean> {
+    if (this.compatibilityEditor && imeStorage.get<boolean>('editorVerified') &&
+      !imeStorage.get<boolean>('password')) {
+      this.observeDispatched(client, client.deleteForward(1), 'delete');
+      return true;
+    }
     let timer: number = -1;
     const deadline = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), 800); });
     try { return await Promise.race([Promise.resolve().then(() => client.deleteForward(1)), deadline]); }
     finally { clearTimeout(timer); }
+  }
+
+  private observeDispatched(client: inputMethodEngine.InputClient, operation: Promise<boolean>, kind: string): void {
+    const generation = this.generation;
+    const epoch = this.queueEpoch;
+    operation.then((ok: boolean) => {
+      if (!ok && this.client === client && generation === this.generation && epoch === this.queueEpoch) {
+        imeStorage.setOrCreate('status', '兼容编辑框未确认操作，请检查输入框');
+      }
+    }).catch((error: BusinessError) => {
+      // This bridge reports 12800003 even for edits the user confirmed were
+      // applied. Do not replay them or let a missing reply stall the queue.
+      console.warn('[OpenLess IME] compatibility ' + kind + ' reply unavailable code=' + error.code);
+      if (error.code !== 12800003 && this.client === client && generation === this.generation && epoch === this.queueEpoch) {
+        imeStorage.setOrCreate('status', '兼容编辑框操作失败，请检查输入框');
+      }
+    });
   }
 
   insert(text: string): void {
@@ -318,7 +351,7 @@ class InputSession {
       if (generation !== this.generation || client !== this.client || epoch !== this.queueEpoch) return;
       if (operation === 'backspace' && (!this.rimeSession || !this.encoding)) {
         const ok = await this.deleteText(client);
-        console.info('[OpenLess IME] backspace result=' + ok);
+        console.info('[OpenLess IME] backspace ' + (this.compatibilityEditor ? 'dispatched=' : 'result=') + ok);
         return;
       }
       if (operation === 'space' && !this.encoding) { await this.writeText(client, ' '); return; }
@@ -383,6 +416,7 @@ class InputSession {
     if (!imeStorage.get<boolean>('pendingCommit') || !this.client || !this.rimeSession) return;
     const generation = this.generation;
     const session = this.rimeSession;
+    if (operation === 'ack' && this.compatibilityEditor) this.confirmedCompatibilityField = true;
     const epoch = ++this.queueEpoch;
     this.writeId++;
     this.expectedText = undefined;
