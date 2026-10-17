@@ -400,22 +400,24 @@ struct InputMethodPanel {
 
   @Builder
   tools() {
-    Column({ space: 16 }) {
-      Text('键盘工具').fontSize(17).fontWeight(FontWeight.Medium).fontColor(INK)
-      Button('键盘布局').focusable(false).fontColor(INK).backgroundColor(KEY)
-        .onClick(() => { this.utility = 3; })
-      Button(this.cloudEnabled ? '云候选：开（Google）' : '云候选：关').focusable(false).fontColor(INK).backgroundColor(KEY)
-        .onClick(() => { inputSession.toggleCloudCandidates(); })
-      Text('开启后将当前拼音发送给 Google，密码框不查询').fontSize(12).fontColor(MUTED)
-      Row({ space: 12 }) {
-        Button('OpenLess 设置').focusable(false).fontColor(INK).backgroundColor(KEY)
-          .onClick(() => { inputSession.settings(); })
-        Button('切换输入法').focusable(false).fontColor(INK).backgroundColor(KEY)
-          .onClick(() => { this.inputMethods(); })
-      }
-      Button('返回键盘').focusable(false).fontColor(ACCENT).backgroundColor(KEY)
-        .onClick(() => { this.utility = 0; })
-    }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
+    Scroll() {
+      Column({ space: 8 }) {
+        Text('键盘工具').fontSize(17).fontWeight(FontWeight.Medium).fontColor(INK)
+        Button('键盘布局').focusable(false).fontColor(INK).backgroundColor(KEY)
+          .onClick(() => { this.utility = 3; })
+        Button(this.cloudEnabled ? '云候选：开（Google）' : '云候选：关').focusable(false).fontColor(INK).backgroundColor(KEY)
+          .onClick(() => { inputSession.toggleCloudCandidates(); })
+        Text('开启后将当前拼音发送给 Google，密码框不查询').fontSize(12).fontColor(MUTED)
+        Row({ space: 12 }) {
+          Button('OpenLess 设置').focusable(false).fontColor(INK).backgroundColor(KEY)
+            .onClick(() => { inputSession.settings(); })
+          Button('切换输入法').focusable(false).fontColor(INK).backgroundColor(KEY)
+            .onClick(() => { this.inputMethods(); })
+        }
+        Button('返回键盘').focusable(false).fontColor(ACCENT).backgroundColor(KEY)
+          .onClick(() => { this.utility = 0; })
+      }.width('100%').padding({ top: 8, bottom: 8 })
+    }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
   }
 
   @Builder
