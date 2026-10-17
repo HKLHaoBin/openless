@@ -163,6 +163,9 @@ class RimeEngineIntegrationTest {
 
     private fun withController(test: (RimePinyinController, StringBuilder) -> Unit) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        // Cold dictionary compilation is a one-time deployment, not input queue work.
+        // Complete it on the test thread before applying the queue's 30-second deadline.
+        OpenLessRime.initialize(instrumentation.targetContext)
         val controller = RimePinyinController(instrumentation.targetContext)
         val committed = StringBuilder()
         instrumentation.runOnMainSync { controller.bindCommit { committed.append(it); true } }
