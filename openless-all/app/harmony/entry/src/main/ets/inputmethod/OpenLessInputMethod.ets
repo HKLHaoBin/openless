@@ -5,6 +5,11 @@ import { imeStorage, inputSession } from './InputSession';
 
 export default class OpenLessInputMethod extends InputMethodExtensionAbility {
   private engine: inputMethodEngine.InputMethodAbility = inputMethodEngine.getInputMethodAbility();
+  private delegate: inputMethodEngine.KeyboardDelegate = inputMethodEngine.getKeyboardDelegate();
+  private onText = (text: string): void => { inputSession.observeText(text); };
+  private onSelection = (_oldBegin: number, _oldEnd: number, begin: number, end: number): void => {
+    inputSession.observeSelection(begin, end);
+  };
   private panel?: inputMethodEngine.Panel;
   private ready?: Promise<void>;
   private active: boolean = false;
@@ -43,6 +48,8 @@ export default class OpenLessInputMethod extends InputMethodExtensionAbility {
 
   onCreate(): void {
     this.active = true;
+    this.delegate.on('textChange', this.onText);
+    this.delegate.on('selectionChange', this.onSelection);
     this.engine.on('inputStart', this.onStart);
     this.engine.on('inputStop', this.onStop);
     this.engine.on('keyboardShow', this.onShow);
@@ -85,6 +92,8 @@ export default class OpenLessInputMethod extends InputMethodExtensionAbility {
 
   onDestroy(): void {
     this.active = false;
+    this.delegate.off('textChange', this.onText);
+    this.delegate.off('selectionChange', this.onSelection);
     this.visible = false;
     this.engine.off('inputStart', this.onStart);
     this.engine.off('inputStop', this.onStop);

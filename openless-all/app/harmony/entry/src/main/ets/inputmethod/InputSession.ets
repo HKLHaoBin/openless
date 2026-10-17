@@ -38,7 +38,11 @@ class InputSession {
   private candidateRevision: number = 0;
   private voice: VoiceClient = new VoiceClient();
   private voiceGeneration: number = 0;
-  private synchronousEditor: boolean = false;
+  private observedText?: string;
+  private selectionBegin: number = -1;
+  private selectionEnd: number = -1;
+  private expectedText?: string;
+  private confirmWrite?: () => void;
   private queueEpoch: number = 0;
   private writeId: number = 0;
 
@@ -51,7 +55,7 @@ class InputSession {
     this.keyboard = keyboard;
     this.client = client;
     this.action = inputMethodEngine.ENTER_KEY_TYPE_UNSPECIFIED;
-    this.synchronousEditor = false;
+    this.resetObservation();
     imeStorage.setOrCreate('connected', true);
     imeStorage.setOrCreate('status', '可输入');
     imeStorage.setOrCreate('enterLabel', '换行');
@@ -66,10 +70,7 @@ class InputSession {
       imeStorage.setOrCreate('chinese', !password);
       imeStorage.setOrCreate('password', password);
       imeStorage.setOrCreate('editorVerified', true);
-      // Use the public synchronous transport from the first write in this
-      // compatibility host. Never replay an uncertain asynchronous write.
-      this.synchronousEditor = !attribute.bundleName || attribute.bundleName === 'com.droi.tong';
-      console.info('[OpenLess IME] editor transport=' + (this.synchronousEditor ? 'sync' : 'async') +
+      console.info('[OpenLess IME] editor transport=async-observed' +
         ' bundle=' + (attribute.bundleName || 'unknown'));
       if (!password) this.prepareRime(context, generation, true);
       this.action = attribute.enterKeyType;
@@ -119,6 +120,7 @@ class InputSession {
 
   detach(): void {
     this.cancelVoice();
+    this.resetObservation();
     this.generation++;
     this.client = undefined;
     this.keyboard = undefined;
@@ -158,31 +160,70 @@ class InputSession {
     this.queue = task.catch(() => {});
   }
 
+  private resetObservation(): void {
+    this.observedText = undefined;
+    this.selectionBegin = -1;
+    this.selectionEnd = -1;
+    this.expectedText = undefined;
+    this.confirmWrite = undefined;
+  }
+
+  observeSelection(begin: number, end: number): void {
+    if (!this.client || !imeStorage.get<boolean>('editorVerified') || imeStorage.get<boolean>('password')) return;
+    this.selectionBegin = Math.min(begin, end);
+    this.selectionEnd = Math.max(begin, end);
+  }
+
+  observeText(text: string): void {
+    if (!this.client || !imeStorage.get<boolean>('editorVerified') || imeStorage.get<boolean>('password')) return;
+    // Only a bounded, transient copy of the active editor's notification is
+    // retained. Never log text or infer success from cursor movement alone.
+    if (this.expectedText !== undefined && text === this.expectedText) this.confirmWrite?.();
+    this.observedText = text.length <= 4096 ? text : undefined;
+  }
+
   private async writeText(client: inputMethodEngine.InputClient, text: string): Promise<boolean> {
-    const synchronous = this.synchronousEditor && typeof client.insertTextSync === 'function';
     const writeId = ++this.writeId;
+    const baseline = this.observedText;
+    const begin = this.selectionBegin;
+    const end = this.selectionEnd;
+    this.expectedText = baseline !== undefined && begin >= 0 && end <= baseline.length ?
+      baseline.slice(0, begin) + text + baseline.slice(end) : undefined;
+    if (this.expectedText === baseline) this.expectedText = undefined;
+    console.info('[OpenLess IME] write observation available=' + (this.expectedText !== undefined));
+    let timer: number = -1;
+    const observed = new Promise<boolean>((resolve) => { this.confirmWrite = () => resolve(true); });
+    const deadline = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), 800); });
     imeStorage.setOrCreate('writeInFlight', true);
     try {
-      let ok: boolean;
-      if (synchronous) { client.insertTextSync(text); ok = true; }
-      else { ok = await client.insertText(text); }
-      console.info('[OpenLess IME] write transport=' + (synchronous ? 'sync' : 'async') + ' result=' + ok);
+      // Send once. The bridge may apply the edit without returning its IPC
+      // acknowledgement. Exact text notifications can independently confirm it.
+      const sent = Promise.resolve().then(() => client.insertText(text)).then((ok: boolean) => {
+        if (ok) return true;
+        return observed;
+      }).catch(() => observed);
+      const ok = await Promise.race([sent, observed, deadline]);
+      console.info('[OpenLess IME] write transport=async-observed result=' + ok);
       return ok;
     } catch (error) {
-      console.error('[OpenLess IME] write transport=' + (synchronous ? 'sync' : 'async') +
+      console.error('[OpenLess IME] write transport=async-observed' +
         ' failed code=' + (error as BusinessError).code);
       throw new Error('文字提交未确认；若已出现在输入框，请点“已写入”');
     } finally {
-      if (writeId === this.writeId) imeStorage.setOrCreate('writeInFlight', false);
+      clearTimeout(timer);
+      if (writeId === this.writeId) {
+        this.expectedText = undefined;
+        this.confirmWrite = undefined;
+        imeStorage.setOrCreate('writeInFlight', false);
+      }
     }
   }
 
   private async deleteText(client: inputMethodEngine.InputClient): Promise<boolean> {
-    if (this.synchronousEditor && typeof client.deleteForwardSync === 'function') {
-      client.deleteForwardSync(1);
-      return true;
-    }
-    return client.deleteForward(1);
+    let timer: number = -1;
+    const deadline = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), 800); });
+    try { return await Promise.race([Promise.resolve().then(() => client.deleteForward(1)), deadline]); }
+    finally { clearTimeout(timer); }
   }
 
   insert(text: string): void {
@@ -293,6 +334,7 @@ class InputSession {
     const session = this.rimeSession;
     const epoch = ++this.queueEpoch;
     this.writeId++;
+    this.resetObservation();
     imeStorage.setOrCreate('writeInFlight', false);
     // Only these explicit user decisions can release an uncertain submission.
     // They never resend text, and late IPC results cannot ack a newer word.

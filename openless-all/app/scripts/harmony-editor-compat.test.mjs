@@ -26,7 +26,10 @@ function host(getEditorAttribute, clientOverrides = {}) {
   const exports = {};
   vm.runInNewContext(compiled, {
     exports, console, LocalStorage: Storage, VoiceClient: Voice,
-    setTimeout: (callback) => { timer = callback; return 1; }, clearTimeout: () => {},
+    setTimeout: (callback, delay) => {
+      if (delay === 800) return setTimeout(callback, 1);
+      timer = callback; return -1;
+    }, clearTimeout: (handle) => { if (handle !== -1) clearTimeout(handle); },
     initializeRime: async () => {}, testRime: async () => {},
     inputMethodEngine: {
       ENTER_KEY_TYPE_UNSPECIFIED: 0, ENTER_KEY_TYPE_SEND: 1, ENTER_KEY_TYPE_SEARCH: 2,
@@ -68,22 +71,22 @@ await normal.drain();
 assert.equal(normal.acknowledgements(), 1);
 assert.equal(normal.state.get('pendingCommit'), false);
 
-let asyncWrites = 0, syncWrites = 0, syncDeletes = 0;
+let asyncWrites = 0, syncWrites = 0, asyncDeletes = 0;
 const bridge = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'com.droi.tong' }), {
-  insertText: async () => { asyncWrites++; return false; },
+  insertText: async () => { asyncWrites++; return true; },
   insertTextSync: () => { syncWrites++; }, // Public sync API returns void on success.
-  deleteForwardSync: () => { syncDeletes++; },
+  deleteForward: async () => { asyncDeletes++; return true; },
 });
 await bridge.drain();
 bridge.session.selectCandidate(0);
 await bridge.drain();
-assert.equal(syncWrites, 1);
-assert.equal(asyncWrites, 0, 'compatibility transport must be selected before the first write');
+assert.equal(syncWrites, 0, 'never block the UI through synchronous IPC');
+assert.equal(asyncWrites, 1);
 assert.equal(bridge.acknowledgements(), 1);
 assert.equal(bridge.state.get('pendingCommit'), false);
 bridge.session.backspace();
 await bridge.drain();
-assert.equal(syncDeletes, 1);
+assert.equal(asyncDeletes, 1);
 
 let accidentalRetries = 0, asynchronousAttempts = 0;
 const failedWrite = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'com.huawei.hmos.settings' }), {
@@ -109,6 +112,7 @@ assert.equal(failedWrite.state.get('pendingCommit'), false);
 assert.equal(failedWrite.acknowledgements(), 1, 'cancel does not claim another failed write succeeded');
 
 const syncFailure = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'com.droi.tong' }), {
+  insertText: async () => { throw { code: 12800003 }; },
   insertTextSync: () => { throw { code: 12800003 }; },
 });
 await syncFailure.drain();
@@ -119,15 +123,46 @@ assert.equal(syncFailure.acknowledgements(), 0);
 
 let anonymousSyncWrites = 0;
 const anonymousBridge = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }), {
-  insertText: async () => { throw Error('empty-bundle bridge must not use async writes'); },
+  insertText: async () => true,
   insertTextSync: () => { anonymousSyncWrites++; },
 });
 await anonymousBridge.drain();
 anonymousBridge.session.selectCandidate(0);
 await anonymousBridge.drain();
-assert.equal(anonymousSyncWrites, 1);
+assert.equal(anonymousSyncWrites, 0);
 assert.equal(anonymousBridge.state.get('pendingCommit'), false);
 assert.equal(anonymousBridge.acknowledgements(), 1);
+
+let observedAttempts = 0;
+const observed = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }), {
+  insertText: () => { observedAttempts++; return new Promise(() => {}); },
+});
+await observed.drain();
+observed.session.observeText('原文字');
+observed.session.observeSelection(1, 2);
+observed.session.selectCandidate(0);
+await observed.pump();
+observed.session.observeText('原错误字');
+await observed.pump();
+assert.equal(observed.acknowledgements(), 0, 'unrelated text must not confirm a commit');
+observed.session.observeSelection(3, 3);
+observed.session.observeText('原测试字');
+await observed.drain();
+assert.equal(observed.acknowledgements(), 1, 'exact selected-range replacement confirms an applied edit');
+assert.equal(observedAttempts, 1, 'observation must not replay the insertion');
+assert.equal(observed.state.get('pendingCommit'), false);
+
+const noReceipt = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }), {
+  insertText: () => new Promise(() => {}),
+});
+await noReceipt.drain();
+noReceipt.session.selectCandidate(0);
+await noReceipt.drain();
+assert.equal(noReceipt.state.get('writeInFlight'), false, 'unresponsive IPC has a bounded UI wait');
+assert.equal(noReceipt.state.get('pendingCommit'), true);
+noReceipt.session.observeText('测试');
+await noReceipt.pump();
+assert.equal(noReceipt.acknowledgements(), 0, 'without a baseline, text alone is insufficient proof');
 
 let releaseOldWrite, hangingAttempts = 0;
 const hanging = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {
@@ -202,6 +237,10 @@ await password.drain();
 assert.equal(password.state.get('password'), true);
 assert.equal(password.state.get('chinese'), false);
 assert.deepEqual(password.schemas, []);
+password.session.observeText('private');
+password.session.observeSelection(7, 7);
+assert.equal(password.session.observedText, undefined);
+assert.equal(password.session.selectionBegin, -1);
 await password.session.startVoice();
 assert.equal(password.recordings(), 0);
 
