@@ -11,6 +11,11 @@ const displayAttribute = readFileSync(join(imeRoot, 'display_attribute.cpp'), 'u
 const registry = readFileSync(join(imeRoot, 'registry.cpp'), 'utf8');
 const protocol = readFileSync(join(appRoot, 'src-tauri', 'src', 'windows_ime_protocol.rs'), 'utf8');
 const ipc = readFileSync(join(appRoot, 'src-tauri', 'src', 'windows_ime_ipc.rs'), 'utf8');
+const tauriLib = readFileSync(join(appRoot, 'src-tauri', 'src', 'lib.rs'), 'utf8');
+const windowsSingleInstance = readFileSync(
+  join(appRoot, 'src-tauri', 'src', 'windows_single_instance.rs'),
+  'utf8',
+);
 
 // The IME runs inside every host process. It must not own threads or block the
 // host UI thread: joining a worker from Deactivate deadlocked hosts whenever
@@ -131,6 +136,33 @@ assert.match(
   /kCopyDataVersion[\s\S]*kStatusProtocolVersion/,
   'IME should answer the protocol probe so stale in-process DLLs are diagnosable',
 );
+
+assert.match(
+  tauriLib,
+  /#\[cfg\(target_os = "windows"\)\]\s*let builder = builder\.plugin\(windows_single_instance::init\(single_instance_callback\)\)/,
+  'Windows must use the path-scoped single-instance broker',
+);
+assert.match(
+  tauriLib,
+  /#\[cfg\(not\(target_os = "windows"\)\)\]\s*let builder = builder\.plugin\(tauri_plugin_single_instance::init\(single_instance_callback\)\)/,
+  'Non-Windows desktop platforms must retain the upstream single-instance broker',
+);
+assert.match(
+  windowsSingleInstance,
+  /current_exe\(\)[\s\S]*canonicalize\(\)[\s\S]*instance_key_for_path\(&executable\)/,
+  'Windows single-instance identity must be derived from the canonical executable path',
+);
+assert.match(
+  windowsSingleInstance,
+  /fn instance_key_for_path[\s\S]*Sha256/,
+  'Windows single-instance identity must use a bounded hash',
+);
+assert.match(
+  windowsSingleInstance,
+  /executable_instance_key\(\)[\s\S]*CreateMutexW[\s\S]*FindWindowW/,
+  'Windows single-instance broker must use the path-scoped identity for its mutex and window',
+);
+
 assert.match(
   ipc,
   /fn ordered_ime_windows[\s\S]*window\.process_id == target\.process_id[\s\S]*window\.thread_id == target\.thread_id[\s\S]*allow_same_process_fallback/,
