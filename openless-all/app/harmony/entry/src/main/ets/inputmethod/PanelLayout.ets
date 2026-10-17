@@ -19,9 +19,13 @@ class PanelLayout {
   private nextX: number = 0;
   private nextY: number = 0;
   private moving: boolean = false;
+  private geometry: string = '';
+  private flag: inputMethodEngine.PanelFlag = inputMethodEngine.PanelFlag.FLG_FIXED;
 
   async attach(panel: inputMethodEngine.Panel, context: InputMethodExtensionContext): Promise<void> {
     this.panel = panel;
+    this.geometry = '';
+    this.flag = inputMethodEngine.PanelFlag.FLG_FIXED;
     try {
       this.settings = await preferences.getPreferences(context, { name: 'ime_panel_layout' });
       const saved = await this.settings.get('mode', 'standard');
@@ -46,6 +50,11 @@ class PanelLayout {
     const screen = display.getDefaultDisplaySync();
     const density = screen.densityPixels;
     const floating = this.mode === 'floating';
+    const geometry = screen.width + ':' + screen.height + ':' + density + ':' + this.mode + ':' + this.scale;
+    // A resize can itself emit display/keyboard notifications. Do not resize
+    // again unless the screen or requested layout actually changed.
+    if (this.geometry === geometry) return;
+    this.geometry = '';
     // Keep all five rows visible in landscape as well as portrait.
     const requestedHeight = floating ? Math.round(324 * this.scale) : this.mode === 'split' ? 396 : 356;
     const panelVp = Math.min(requestedHeight, Math.floor(screen.height * 0.65 / density));
@@ -55,11 +64,13 @@ class PanelLayout {
       Math.floor((panelVp - 66 - (floating ? 26 : 0) - (rows - 1) * 6) / rows)));
     this.width = floating ? Math.round(Math.min(screen.width * 0.9, 400 * this.scale * density)) : screen.width;
     this.height = Math.round(panelVp * density);
-    panel.changeFlag(floating ? inputMethodEngine.PanelFlag.FLG_FLOATING : inputMethodEngine.PanelFlag.FLG_FIXED);
+    const flag = floating ? inputMethodEngine.PanelFlag.FLG_FLOATING : inputMethodEngine.PanelFlag.FLG_FIXED;
+    if (flag !== this.flag) { panel.changeFlag(flag); this.flag = flag; }
     await panel.resize(this.width, this.height);
     if (floating) await panel.moveTo(Math.round(this.x * (screen.width - this.width)),
       Math.round(this.y * (screen.height - this.height)));
     if (this.panel !== panel) return;
+    this.geometry = geometry;
     imeStorage.setOrCreate('keyboardLayout', this.mode);
     imeStorage.setOrCreate('keyHeight', keyHeight);
     imeStorage.setOrCreate('showNumberRow', showNumberRow);
@@ -75,11 +86,15 @@ class PanelLayout {
 
   select(mode: string): void {
     if (!['standard', 'split', 'floating'].includes(mode)) return;
+    console.info('[OpenLess IME] layout requested=' + mode + ' panel=' + !!this.panel);
     this.queue = this.queue.then(async (): Promise<void> => {
       const previous = this.mode;
       this.mode = mode;
       try { await this.apply(); }
-      catch (_) { this.mode = previous; await this.apply(); throw new Error('layout failed'); }
+      catch (error) {
+        console.error('[OpenLess IME] layout failed: ' + JSON.stringify(error));
+        this.mode = previous; await this.apply(); throw new Error('layout failed');
+      }
       await this.save();
     }).catch(() => { imeStorage.setOrCreate('status', '布局切换失败，请重试'); });
   }

@@ -13,9 +13,10 @@ async function host(saved = {}) {
   const values = new Map(Object.entries(saved));
   const screen = { width: 1600, height: 2560, densityPixels: 2.25 };
   const panel = {
-    flag: 0, width: 0, height: 0, x: 0, y: 0, failFloating: false,
+    flag: 0, width: 0, height: 0, x: 0, y: 0, failFloating: false, resizes: 0,
     changeFlag(flag) { if (flag === 1 && this.failFloating) throw Error('unsupported'); this.flag = flag; },
     async resize(width, height) {
+      this.resizes++;
       assert.ok(width > 0 && width <= screen.width);
       assert.ok(height > 0 && height <= screen.height * 0.7);
       this.width = width; this.height = height;
@@ -46,6 +47,9 @@ async function host(saved = {}) {
 const h = await host();
 assert.equal(h.state.get('keyboardLayout'), 'standard');
 assert.equal(h.state.get('showNumberRow'), true);
+const initialResizes = h.panel.resizes;
+await Promise.all([h.layout.refresh(), h.layout.refresh(), h.layout.refresh()]);
+assert.equal(h.panel.resizes, initialResizes, 'native resize notifications must not cause another resize');
 h.layout.select('split');
 await h.layout.queue;
 assert.equal(h.state.get('keyboardLayout'), 'split');
