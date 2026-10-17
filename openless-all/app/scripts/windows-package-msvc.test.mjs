@@ -380,8 +380,18 @@ assert.match(
 );
 assert.match(
   nsisHook,
-  /File \/oname=OpenLessIme-\$\{VERSION\}-\$\{OPENLESS_IME_BUILD_TAG\}\.dll "\$%\$\{ENV_VAR\}%"/,
-  "NSIS should embed the OpenLess IME DLL under a build-specific versioned path",
+  /!define OPENLESS_IME_FILENAME "OpenLessIme-\$\{VERSION\}-\$\{OPENLESS_IME_BUILD_TAG\}\.dll"/,
+  'NSIS should define the installed IME filename once for staging and registration',
+);
+assert.match(
+  nsisHook,
+  /File \/oname=\$\{OPENLESS_IME_FILENAME\} "\$%\$\{ENV_VAR\}%"/,
+  'NSIS should stage the exact filename used by registration',
+);
+assert.match(
+  nsisHook,
+  /windows-ime\\x64\\\$\{OPENLESS_IME_FILENAME\}/,
+  'NSIS should register the exact staged x64 filename',
 );
 assert.doesNotMatch(
   nsisHook,
@@ -400,13 +410,13 @@ assert.match(
 );
 assert.match(
   nsisHook,
-  /System32\\regsvr32\.exe[\s\S]*windows-ime\\x86\\OpenLessIme-\$\{VERSION\}-\$\{OPENLESS_IME_BUILD_TAG\}\.dll/,
+  /System32\\regsvr32\.exe[\s\S]*windows-ime\\x86\\\$\{OPENLESS_IME_FILENAME\}/,
   'NSIS should use System32 regsvr32 for the x86 IME on 32-bit Windows',
 );
 assert.match(
   nsisHook,
-  /OpenLessIme-\$\{VERSION\}-\$\{OPENLESS_IME_BUILD_TAG\}\.dll/,
-  'NSIS should register each release under a unique versioned IME DLL path',
+  /\$\{OPENLESS_IME_FILENAME\}/,
+  'NSIS should register each release under the shared versioned IME DLL path',
 );
 assert.doesNotMatch(
   nsisHook,

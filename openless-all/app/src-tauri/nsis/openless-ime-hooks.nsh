@@ -1,6 +1,7 @@
 !define OPENLESS_IME_BUILD_TAG "${__DATE__}_${__TIME__}"
 !searchreplace OPENLESS_IME_BUILD_TAG "${OPENLESS_IME_BUILD_TAG}" ":" "-"
 !searchreplace OPENLESS_IME_BUILD_TAG "${OPENLESS_IME_BUILD_TAG}" " " "_"
+!define OPENLESS_IME_FILENAME "OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"
 
 !define OPENLESS_IME_DIAGNOSTIC_FILE "$TEMP\openless-ime-install-diagnostic.ndjson"
 
@@ -29,10 +30,10 @@
 !macro OPENLESS_IME_REGISTER_X64
   ${If} ${RunningX64}
     DetailPrint "Registering OpenLess x64 TSF IME"
-    ExecWait '"$WINDIR\Sysnative\regsvr32.exe" /s "$INSTDIR\windows-ime\x64\OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"' $0
+    ExecWait '"$WINDIR\Sysnative\regsvr32.exe" /s "$INSTDIR\windows-ime\x64\${OPENLESS_IME_FILENAME}"' $0
     ${If} $0 != 0
       ${DisableX64FSRedirection}
-      ExecWait '"$WINDIR\System32\regsvr32.exe" /s "$INSTDIR\windows-ime\x64\OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"' $0
+      ExecWait '"$WINDIR\System32\regsvr32.exe" /s "$INSTDIR\windows-ime\x64\${OPENLESS_IME_FILENAME}"' $0
       ${EnableX64FSRedirection}
     ${EndIf}
     !insertmacro OPENLESS_IME_DIAGNOSTIC_EVENT register_x64_result
@@ -47,7 +48,7 @@
     StrCpy $R0 ""
     ReadRegStr $R0 HKLM "Software\Classes\CLSID\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\InprocServer32" ""
     ${If} $R0 == ""
-      StrCpy $R0 "$INSTDIR\windows-ime\x64\OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"
+      StrCpy $R0 "$INSTDIR\windows-ime\x64\${OPENLESS_IME_FILENAME}"
     ${EndIf}
     ExecWait '"$WINDIR\Sysnative\regsvr32.exe" /s /u "$R0"' $0
     ${If} $0 != 0
@@ -65,7 +66,7 @@
   StrCpy $R1 ""
   ReadRegStr $R1 HKLM "Software\Classes\CLSID\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\InprocServer32" ""
   ${If} $R1 == ""
-    StrCpy $R1 "$INSTDIR\windows-ime\x86\OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"
+    StrCpy $R1 "$INSTDIR\windows-ime\x86\${OPENLESS_IME_FILENAME}"
   ${EndIf}
   ${If} ${RunningX64}
     ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s /u "$R1"' $0
@@ -78,9 +79,9 @@
 !macro OPENLESS_IME_REGISTER_X86
   DetailPrint "Registering OpenLess x86 TSF IME"
   ${If} ${RunningX64}
-    ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s "$INSTDIR\windows-ime\x86\OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"' $0
+    ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s "$INSTDIR\windows-ime\x86\${OPENLESS_IME_FILENAME}"' $0
   ${Else}
-    ExecWait '"$WINDIR\System32\regsvr32.exe" /s "$INSTDIR\windows-ime\x86\OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"' $0
+    ExecWait '"$WINDIR\System32\regsvr32.exe" /s "$INSTDIR\windows-ime\x86\${OPENLESS_IME_FILENAME}"' $0
   ${EndIf}
   ${If} $0 != 0
     StrCpy $1 $0
@@ -96,7 +97,7 @@
   ; DLL mapped for their whole lifetime, so reusing a release path can leave the
   ; installer unable to replace the file or the registry pointing at old code.
   SetOutPath "$INSTDIR\windows-ime\${PLATFORM_DIR}"
-  File /oname=OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll "$%${ENV_VAR}%"
+  File /oname=${OPENLESS_IME_FILENAME} "$%${ENV_VAR}%"
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL
