@@ -159,9 +159,14 @@ const positionCapture = windowsHost.match(
 )?.[0];
 assert.ok(positionCapture, 'the pre-copy UIA position capture helper must exist');
 assert.match(
+  windowsHost,
+  /fn focused_selection_candidates[\s\S]*?RawViewWalker\(\)[\s\S]*?GetParentElement[\s\S]*?GetCurrentPatternAs::<IUIAutomationTextPattern>/,
+  'Windows selection capture must inspect a bounded UIA ancestor chain when the focused provider reports only a caret',
+);
+assert.match(
   positionCapture,
-  /selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_Start[\s\S]*?selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_End[\s\S]*?start_offset == end_offset[\s\S]*?start_offset > end_offset/,
-  'a collapsed or inverted UIA range must fail closed after exact endpoint capture',
+  /focused_selection_candidates\([\s\S]*?selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_Start[\s\S]*?selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_End[\s\S]*?start_offset == end_offset[\s\S]*?start_offset > end_offset/,
+  'pre-copy position capture must use the exact range from a focused UIA ancestor and still fail closed for collapsed or inverted ranges',
 );
 assert.match(
   windowsHost,
@@ -184,7 +189,7 @@ assert.match(
 );
 assert.match(
   anchorCapture,
-  /selected_text\.trim\(\)\.is_empty\(\)[\s\S]*?return Err\("empty_selection"\.to_string\(\)\)[\s\S]*?selection_observation\(expected, Some\(&selected_text\)\)/,
+  /selected_text\.trim\(\)\.is_empty\(\)[\s\S]*?(?:fallback = "empty_selection"|return Err\("empty_selection"\.to_string\(\)\))[\s\S]*?selection_observation\(expected, Some\(&selected_text\)\)/,
   'an empty post-copy UIA text result must enter the bounded empty-selection retry path before expected-text matching',
 );
 assert.match(
