@@ -207,6 +207,18 @@ dispatchedReplies[1](false);
 await continuous.pump();
 assert.equal(continuous.state.get('status'), 'Rime 拼音', 'old editor failures must not affect the new field');
 
+let actionCalls = 0, postActionWrites = 0;
+const actions = host(async () => ({ inputPattern: 0, enterKeyType: 2, bundleName: '' }), {
+  sendKeyFunction: () => { actionCalls++; return new Promise(() => {}); },
+  insertText: () => { postActionWrites++; return new Promise(() => {}); },
+});
+await actions.drain();
+actions.session.enter();
+actions.session.selectCandidate(0);
+await actions.drain();
+assert.equal(actionCalls, 1, 'editor action must be dispatched once');
+assert.equal(postActionWrites, 1, 'a missing action reply must not block further input');
+
 let releaseOldWrite, hangingAttempts = 0;
 const hanging = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {
   insertText: () => {

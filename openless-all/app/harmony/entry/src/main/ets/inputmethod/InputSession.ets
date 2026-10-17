@@ -260,6 +260,15 @@ class InputSession {
     });
   }
 
+  private async sendAction(client: inputMethodEngine.InputClient, action: number): Promise<boolean> {
+    if (this.compatibilityEditor && imeStorage.get<boolean>('editorVerified') &&
+      !imeStorage.get<boolean>('password')) {
+      this.observeDispatched(client, client.sendKeyFunction(action), 'action');
+      return true;
+    }
+    return client.sendKeyFunction(action);
+  }
+
   insert(text: string): void {
     if (imeStorage.get<boolean>('chinese') && /^[a-z]$/i.test(text)) {
       this.rimeOperation('key', text.toLowerCase().charCodeAt(0).toString());
@@ -354,7 +363,7 @@ class InputSession {
         return true;
       }
       return action === inputMethodEngine.ENTER_KEY_TYPE_UNSPECIFIED || action === inputMethodEngine.ENTER_KEY_TYPE_NEWLINE ?
-        await this.writeText(client, '\n') : await client.sendKeyFunction(action);
+        await this.writeText(client, '\n') : await this.sendAction(client, action);
     });
   }
 
