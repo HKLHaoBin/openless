@@ -36,7 +36,7 @@ function host(getEditorAttribute, clientOverrides = {}) {
       PATTERN_PASSWORD_SCREEN_LOCK: 12, PATTERN_NEW_PASSWORD: 13,
     },
     rimeRequest: async (operation, session, argument) => {
-      if (operation === 'create') schemas.push(argument);
+      if (operation === 'create') { schemas.push(argument); pending = ''; }
       if (operation === 'select') pending = '测试';
       if (operation === 'ack') { acknowledgements++; pending = ''; }
       if (operation === 'clear') pending = '';
@@ -46,15 +46,18 @@ function host(getEditorAttribute, clientOverrides = {}) {
   const client = { getEditorAttribute, insertText: async (text) => { inserted.push(text); return true; }, ...clientOverrides };
   const session = exports.inputSession, state = exports.imeStorage;
   session.attach({ filesDir: '/test', resourceManager: {} }, {}, client);
-  const drain = async () => {
+  const pump = async () => {
     for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+  const drain = async () => {
+    await pump();
     await session.queue;
   };
-  return { session, state, schemas, inserted, drain, timeout: () => timer(), recordings: () => recordings,
+  return { session, state, schemas, inserted, drain, pump, timeout: () => timer(), recordings: () => recordings,
     acknowledgements: () => acknowledgements };
 }
 
-const normal = host(async () => ({ inputPattern: 0, enterKeyType: 2 }));
+const normal = host(async () => ({ inputPattern: 0, enterKeyType: 2, bundleName: 'com.huawei.hmos.settings' }));
 await normal.drain();
 assert.deepEqual(normal.schemas, ['learning']);
 assert.equal(normal.state.get('rimeReady'), true);
@@ -83,7 +86,7 @@ await bridge.drain();
 assert.equal(syncDeletes, 1);
 
 let accidentalRetries = 0, asynchronousAttempts = 0;
-const failedWrite = host(async () => ({ inputPattern: 0, enterKeyType: 0 }), {
+const failedWrite = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'com.huawei.hmos.settings' }), {
   insertText: async () => { asynchronousAttempts++; return false; },
   insertTextSync: () => { accidentalRetries++; },
 });
@@ -113,6 +116,62 @@ syncFailure.session.selectCandidate(0);
 await syncFailure.drain();
 assert.equal(syncFailure.state.get('pendingCommit'), true);
 assert.equal(syncFailure.acknowledgements(), 0);
+
+let anonymousSyncWrites = 0;
+const anonymousBridge = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }), {
+  insertText: async () => { throw Error('empty-bundle bridge must not use async writes'); },
+  insertTextSync: () => { anonymousSyncWrites++; },
+});
+await anonymousBridge.drain();
+anonymousBridge.session.selectCandidate(0);
+await anonymousBridge.drain();
+assert.equal(anonymousSyncWrites, 1);
+assert.equal(anonymousBridge.state.get('pendingCommit'), false);
+assert.equal(anonymousBridge.acknowledgements(), 1);
+
+let releaseOldWrite, hangingAttempts = 0;
+const hanging = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {
+  insertText: () => {
+    hangingAttempts++;
+    return hangingAttempts === 1 ? new Promise((resolve) => { releaseOldWrite = resolve; }) : Promise.resolve(true);
+  },
+});
+await hanging.drain();
+hanging.session.selectCandidate(0);
+await hanging.pump();
+assert.equal(hanging.state.get('pendingCommit'), true);
+assert.equal(hanging.state.get('writeInFlight'), true);
+// Recovery must work while the original insertion promise is still unresolved.
+hanging.session.acknowledgePendingCommit();
+await hanging.drain();
+assert.equal(hanging.state.get('pendingCommit'), false);
+hanging.session.selectCandidate(0);
+await hanging.drain();
+assert.equal(hangingAttempts, 2);
+assert.equal(hanging.acknowledgements(), 2);
+releaseOldWrite(false);
+await hanging.pump();
+assert.equal(hanging.state.get('status'), 'Rime 拼音', 'late failure must not replace recovered state');
+assert.equal(hanging.acknowledgements(), 2);
+
+let lateFieldWrite;
+const rebound = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {
+  insertText: () => new Promise((resolve) => { lateFieldWrite = resolve; }),
+});
+await rebound.drain();
+rebound.session.selectCandidate(0);
+await rebound.pump();
+rebound.session.attach({ filesDir: '/test', resourceManager: {} }, {}, {
+  getEditorAttribute: async () => ({ inputPattern: 0, enterKeyType: 2, bundleName: 'native.other' }),
+  insertText: async () => true,
+});
+await rebound.drain();
+assert.equal(rebound.state.get('rimeReady'), true, 'new field initialization must not wait for old IPC');
+assert.equal(rebound.state.get('enterLabel'), '搜索');
+assert.equal(rebound.state.get('pendingCommit'), false);
+lateFieldWrite(true);
+await rebound.pump();
+assert.equal(rebound.acknowledgements(), 0, 'late old-field success must not acknowledge the new session');
 
 const rejected = host(async () => { throw { code: 43 }; });
 await rejected.drain();

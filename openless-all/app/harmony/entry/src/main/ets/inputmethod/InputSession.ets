@@ -19,6 +19,7 @@ class InputPanelState {
   voiceText: string = '';
   voiceLevel: number = 0;
   pendingCommit: boolean = false;
+  writeInFlight: boolean = false;
 }
 
 export const imeStorage: LocalStorage = new LocalStorage(new InputPanelState());
@@ -38,6 +39,8 @@ class InputSession {
   private voice: VoiceClient = new VoiceClient();
   private voiceGeneration: number = 0;
   private synchronousEditor: boolean = false;
+  private queueEpoch: number = 0;
+  private writeId: number = 0;
 
   attach(context: InputMethodExtensionContext, keyboard: inputMethodEngine.KeyboardController,
     client: inputMethodEngine.InputClient): void {
@@ -65,7 +68,7 @@ class InputSession {
       imeStorage.setOrCreate('editorVerified', true);
       // Use the public synchronous transport from the first write in this
       // compatibility host. Never replay an uncertain asynchronous write.
-      this.synchronousEditor = attribute.bundleName === 'com.droi.tong';
+      this.synchronousEditor = !attribute.bundleName || attribute.bundleName === 'com.droi.tong';
       console.info('[OpenLess IME] editor transport=' + (this.synchronousEditor ? 'sync' : 'async') +
         ' bundle=' + (attribute.bundleName || 'unknown'));
       if (!password) this.prepareRime(context, generation, true);
@@ -99,18 +102,19 @@ class InputSession {
   }
 
   private prepareRime(context: InputMethodExtensionContext, generation: number, learning: boolean): void {
+    const epoch = this.queueEpoch;
     this.queue = this.queue.then(async (): Promise<void> => {
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || epoch !== this.queueEpoch) return;
       await initializeRime(context.filesDir, context.resourceManager);
       await testRime(context.filesDir, context.resourceManager);
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || epoch !== this.queueEpoch) return;
       const state = await rimeRequest('create', '', learning ? 'learning' : 'private');
-      if (generation !== this.generation) { await rimeRequest('destroy', state.session); return; }
+      if (generation !== this.generation || epoch !== this.queueEpoch) { await rimeRequest('destroy', state.session); return; }
       this.rimeSession = state.session;
       imeStorage.setOrCreate('rimeReady', true);
       this.publish(state);
       console.info('[OpenLess IME] editor ready learning=' + learning);
-    }).catch(() => { if (generation === this.generation) imeStorage.setOrCreate('status', '中文引擎加载失败，可切换英文'); });
+    }).catch(() => { if (generation === this.generation && epoch === this.queueEpoch) imeStorage.setOrCreate('status', '中文引擎加载失败，可切换英文'); });
   }
 
   detach(): void {
@@ -121,7 +125,12 @@ class InputSession {
     this.context = undefined;
     const session = this.rimeSession;
     this.rimeSession = '';
-    if (session) this.queue = this.queue.then(async (): Promise<void> => { await rimeRequest('destroy', session); }).catch(() => {});
+    // A compatibility client's unfinished IPC must not block the next field.
+    this.queueEpoch++;
+    this.writeId++;
+    this.queue = Promise.resolve();
+    imeStorage.setOrCreate('writeInFlight', false);
+    if (session) rimeRequest('destroy', session).catch(() => {});
     this.resetCandidates();
     imeStorage.setOrCreate('connected', false);
     imeStorage.setOrCreate('editorVerified', false);
@@ -131,17 +140,18 @@ class InputSession {
   private perform(kind: string, operation: (client: inputMethodEngine.InputClient) => Promise<boolean>): void {
     const client = this.client;
     const generation = this.generation;
+    const epoch = this.queueEpoch;
     if (!client) return;
     const task = this.queue.then(async (): Promise<void> => {
-      if (this.client !== client || this.generation !== generation) return;
+      if (this.client !== client || this.generation !== generation || epoch !== this.queueEpoch) return;
       try {
         const ok = await operation(client);
         console.info('[OpenLess IME] ' + kind + ' result=' + ok);
-        if (this.client === client && this.generation === generation) {
+        if (this.client === client && this.generation === generation && epoch === this.queueEpoch) {
           imeStorage.setOrCreate('status', ok ? '可输入' : '输入未成功，请重新选择输入框');
         }
       } catch (error) {
-        if (this.client === client && this.generation === generation) imeStorage.setOrCreate('status', '输入未成功，请重新选择输入框');
+        if (this.client === client && this.generation === generation && epoch === this.queueEpoch) imeStorage.setOrCreate('status', '输入未成功，请重新选择输入框');
         console.error('[OpenLess IME] ' + kind + ' failed code=' + (error as BusinessError).code);
       }
     });
@@ -150,6 +160,8 @@ class InputSession {
 
   private async writeText(client: inputMethodEngine.InputClient, text: string): Promise<boolean> {
     const synchronous = this.synchronousEditor && typeof client.insertTextSync === 'function';
+    const writeId = ++this.writeId;
+    imeStorage.setOrCreate('writeInFlight', true);
     try {
       let ok: boolean;
       if (synchronous) { client.insertTextSync(text); ok = true; }
@@ -160,6 +172,8 @@ class InputSession {
       console.error('[OpenLess IME] write transport=' + (synchronous ? 'sync' : 'async') +
         ' failed code=' + (error as BusinessError).code);
       throw new Error('文字提交未确认；若已出现在输入框，请点“已写入”');
+    } finally {
+      if (writeId === this.writeId) imeStorage.setOrCreate('writeInFlight', false);
     }
   }
 
@@ -205,10 +219,11 @@ class InputSession {
 
   private rimeOperation(operation: string, argument: string): void {
     const generation = this.generation;
+    const epoch = this.queueEpoch;
     const client = this.client;
     if (!client) return;
     this.queue = this.queue.then(async (): Promise<void> => {
-      if (generation !== this.generation || client !== this.client) return;
+      if (generation !== this.generation || client !== this.client || epoch !== this.queueEpoch) return;
       if (operation === 'backspace' && (!this.rimeSession || !this.encoding)) {
         const ok = await this.deleteText(client);
         console.info('[OpenLess IME] backspace result=' + ok);
@@ -219,20 +234,21 @@ class InputSession {
       const delimiter = operation === 'literal' && argument === "'" && this.encoding.length > 0;
       const key = delimiter ? '39' : operation === 'backspace' ? '65288' : operation === 'space' ? '32' : argument;
       let state = await rimeRequest(operation === 'backspace' || operation === 'space' ? 'key' : delimiter ? 'key' : operation === 'literal' ? 'confirm' : operation, this.rimeSession, key);
-      if (generation !== this.generation || client !== this.client) return;
+      if (generation !== this.generation || client !== this.client || epoch !== this.queueEpoch) return;
       if (state.commit) {
         this.publish(state);
         if (!await this.writeText(client, state.commit)) throw new Error('文字写入未确认，请重试或取消待提交');
-        if (generation !== this.generation) return;
+        if (generation !== this.generation || epoch !== this.queueEpoch) return;
         state = await rimeRequest('ack', this.rimeSession);
+        if (generation !== this.generation || epoch !== this.queueEpoch) return;
       }
       if (operation === 'literal' && !delimiter && argument && !await this.writeText(client, argument)) {
         throw new Error('标点写入失败，请重新选择输入框');
       }
-      this.publish(state);
+      if (generation === this.generation && client === this.client && epoch === this.queueEpoch) this.publish(state);
     }).catch((error: Error) => {
       console.error('[OpenLess IME] operation=' + operation + ' failed code=' + (error as BusinessError).code);
-      if (generation === this.generation) imeStorage.setOrCreate('status', error.message);
+      if (generation === this.generation && epoch === this.queueEpoch) imeStorage.setOrCreate('status', error.message);
     });
   }
 
@@ -248,15 +264,17 @@ class InputSession {
   enter(): void {
     const action = this.action;
     const generation = this.generation;
+    const epoch = this.queueEpoch;
     this.perform('enter', async (client: inputMethodEngine.InputClient): Promise<boolean> => {
       if (this.encoding && this.rimeSession) {
         const state = await rimeRequest('key', this.rimeSession, '65293');
-        if (generation !== this.generation || client !== this.client) return false;
+        if (generation !== this.generation || client !== this.client || epoch !== this.queueEpoch) return false;
         this.publish(state);
         if (state.commit) {
           if (!await this.writeText(client, state.commit)) return false;
-          if (generation !== this.generation || client !== this.client) return false;
-          this.publish(await rimeRequest('ack', this.rimeSession));
+          if (generation !== this.generation || client !== this.client || epoch !== this.queueEpoch) return false;
+          const acknowledged = await rimeRequest('ack', this.rimeSession);
+          if (generation === this.generation && client === this.client && epoch === this.queueEpoch) this.publish(acknowledged);
         }
         return true;
       }
@@ -266,8 +284,24 @@ class InputSession {
   }
 
   retryCommit(): void { this.rimeOperation('state', ''); }
-  cancelPendingCommit(): void { this.rimeOperation('clear', ''); }
-  acknowledgePendingCommit(): void { this.rimeOperation('ack', ''); }
+  cancelPendingCommit(): void { this.recoverPending('clear'); }
+  acknowledgePendingCommit(): void { this.recoverPending('ack'); }
+
+  private recoverPending(operation: string): void {
+    if (!imeStorage.get<boolean>('pendingCommit') || !this.client || !this.rimeSession) return;
+    const generation = this.generation;
+    const session = this.rimeSession;
+    const epoch = ++this.queueEpoch;
+    this.writeId++;
+    imeStorage.setOrCreate('writeInFlight', false);
+    // Only these explicit user decisions can release an uncertain submission.
+    // They never resend text, and late IPC results cannot ack a newer word.
+    this.queue = rimeRequest(operation, session).then((state: RimeState): void => {
+      if (generation === this.generation && session === this.rimeSession && epoch === this.queueEpoch) this.publish(state);
+    }).catch(() => {
+      if (generation === this.generation && epoch === this.queueEpoch) imeStorage.setOrCreate('status', '恢复失败，请重新选择输入框');
+    });
+  }
 
   async startVoice(): Promise<void> {
     const context = this.context;

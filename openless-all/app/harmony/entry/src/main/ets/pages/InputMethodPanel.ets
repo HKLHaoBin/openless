@@ -27,6 +27,7 @@ struct InputMethodPanel {
   @LocalStorageLink('voiceText') voiceText: string = '';
   @LocalStorageLink('voiceLevel') voiceLevel: number = 0;
   @LocalStorageLink('pendingCommit') pendingCommit: boolean = false;
+  @LocalStorageLink('writeInFlight') writeInFlight: boolean = false;
   @LocalStorageLink('keyboardLayout') keyboardLayout: string = 'standard';
   @LocalStorageLink('keyHeight') keyHeight: number = 52;
   @LocalStorageLink('showNumberRow') showNumberRow: boolean = true;
@@ -130,6 +131,7 @@ struct InputMethodPanel {
         .onClick(() => { inputSession.acknowledgePendingCommit(); })
       Button('重试写入', { type: ButtonType.Normal }).height(32).layoutWeight(1).fontSize(14)
         .fontColor(INK).backgroundColor(KEY).padding(0).focusable(false)
+        .enabled(!this.writeInFlight)
         .onClick(() => { inputSession.retryCommit(); })
       Button('取消待提交', { type: ButtonType.Normal }).height(32).layoutWeight(1).fontSize(14)
         .fontColor(INK).backgroundColor(KEY).padding(0).focusable(false)
