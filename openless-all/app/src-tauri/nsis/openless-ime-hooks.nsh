@@ -93,6 +93,15 @@
   !insertmacro OPENLESS_IME_ABORT_IF_FAILED $0 "x86 registration"
 !macroend
 
+!macro OPENLESS_IME_DELETE_LEGACY PLATFORM_DIR
+  Delete /REBOOTOK "$INSTDIR\windows-ime\${PLATFORM_DIR}\OpenLessIme.dll"
+  ${If} ${FileExists} "$INSTDIR\windows-ime\${PLATFORM_DIR}\OpenLessIme.dll"
+    !insertmacro OPENLESS_IME_DIAGNOSTIC_EVENT legacy_${PLATFORM_DIR}_pending_reboot
+    DetailPrint "OpenLess TSF IME ${PLATFORM_DIR} legacy DLL deletion deferred until reboot"
+    SetRebootFlag true
+  ${EndIf}
+!macroend
+
 !macro OPENLESS_IME_STAGE_AND_REPLACE PLATFORM_DIR ENV_VAR
   ; Install each build under a new name. TSF client processes can keep an old
   ; DLL mapped for their whole lifetime, so reusing a release path can leave the
@@ -117,18 +126,10 @@
   !insertmacro OPENLESS_IME_DIAGNOSTIC_EVENT preinstall_unregistration_complete
 
   ; Do not leave the legacy basename available for a new TSF client to load.
-  Delete "$INSTDIR\windows-ime\x64\OpenLessIme.dll"
-  ${If} ${FileExists} "$INSTDIR\windows-ime\x64\OpenLessIme.dll"
-    !insertmacro OPENLESS_IME_DIAGNOSTIC_EVENT legacy_x64_present
-    DetailPrint "OpenLess TSF IME x64 legacy DLL could not be removed"
-    Abort
-  ${EndIf}
-  Delete "$INSTDIR\windows-ime\x86\OpenLessIme.dll"
-  ${If} ${FileExists} "$INSTDIR\windows-ime\x86\OpenLessIme.dll"
-    !insertmacro OPENLESS_IME_DIAGNOSTIC_EVENT legacy_x86_present
-    DetailPrint "OpenLess TSF IME x86 legacy DLL could not be removed"
-    Abort
-  ${EndIf}
+  ; A running TSF client can keep the file mapped, so NSIS schedules deletion
+  ; at reboot and continues with the versioned registration.
+  !insertmacro OPENLESS_IME_DELETE_LEGACY "x64"
+  !insertmacro OPENLESS_IME_DELETE_LEGACY "x86"
 
   !insertmacro OPENLESS_IME_DIAGNOSTIC_EVENT stage_x64_begin
   !insertmacro OPENLESS_IME_STAGE_AND_REPLACE "x64" "OPENLESS_IME_DLL_X64"

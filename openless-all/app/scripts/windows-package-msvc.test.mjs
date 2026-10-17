@@ -423,10 +423,15 @@ assert.match(
   /\$\{OPENLESS_IME_FILENAME\}/,
   'NSIS should register each release under the shared versioned IME DLL path',
 );
-assert.doesNotMatch(
+assert.match(
   nsisHook,
-  /REBOOTOK/,
-  'NSIS must not silently defer a locked IME DLL replacement while registering the old protocol',
+  /!macro OPENLESS_IME_DELETE_LEGACY PLATFORM_DIR[\s\S]*?Delete \/REBOOTOK "\$INSTDIR\\windows-ime\\\$\{PLATFORM_DIR\}\\OpenLessIme\.dll"[\s\S]*?legacy_\$\{PLATFORM_DIR\}_pending_reboot[\s\S]*?SetRebootFlag true/,
+  'NSIS should schedule a locked legacy IME DLL for deletion at reboot',
+);
+assert.match(
+  nsisHook,
+  /SetRebootFlag true/,
+  'NSIS should request a reboot when legacy IME deletion is deferred',
 );
 assert.match(
   wixFragment,
@@ -548,8 +553,8 @@ assert.match(
 );
 assert.match(
   nsisHook,
-  /!macro NSIS_HOOK_PREINSTALL[\s\S]*?Delete "\$INSTDIR\\windows-ime\\x64\\OpenLessIme\.dll"[\s\S]*?Delete "\$INSTDIR\\windows-ime\\x86\\OpenLessIme\.dll"[\s\S]*?stage_x64_begin/,
-  'NSIS upgrade should remove legacy TSF DLL basenames before staging the versioned DLLs',
+  /!macro NSIS_HOOK_PREINSTALL[\s\S]*?OPENLESS_IME_DELETE_LEGACY "x64"[\s\S]*?OPENLESS_IME_DELETE_LEGACY "x86"[\s\S]*?stage_x64_begin/,
+  'NSIS upgrade should remove or defer legacy TSF DLL basenames before staging the versioned DLLs',
 );
 
 assert.match(
