@@ -27,7 +27,8 @@ function host(getEditorAttribute, clientOverrides = {}) {
   vm.runInNewContext(compiled, {
     exports, console, LocalStorage: Storage, VoiceClient: Voice,
     setTimeout: (callback, delay) => {
-      if (delay === 800) return setTimeout(callback, 1);
+      if (delay === 800) return setTimeout(callback, 20);
+      if (delay === 150 || delay === 60) return setTimeout(callback, 1);
       timer = callback; return -1;
     }, clearTimeout: (handle) => { if (handle !== -1) clearTimeout(handle); },
     initializeRime: async () => {}, testRime: async () => {},
@@ -172,6 +173,37 @@ noReceipt.session.observeText('测试测试');
 noReceipt.session.observeSelection(4, 4);
 await noReceipt.drain();
 assert.equal(noReceipt.acknowledgements(), 2, 'manual recovery preserves the active-field baseline for the next word');
+
+let fieldText = '原文', fieldCursor = 2, readbackWrites = 0;
+const readback = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }), {
+  getTextIndexAtCursor: async () => fieldCursor,
+  getForward: async (length) => fieldText.slice(0, fieldCursor).slice(-length),
+  insertText: (text) => {
+    readbackWrites++;
+    fieldText += text;
+    fieldCursor += text.length;
+    return new Promise(() => {});
+  },
+});
+await readback.drain();
+readback.session.selectCandidate(0);
+await readback.drain();
+readback.session.selectCandidate(0);
+await readback.drain();
+assert.equal(readbackWrites, 2);
+assert.equal(readback.acknowledgements(), 2, 'readback permits repeated words without native write replies');
+assert.equal(fieldText, '原文测试测试');
+
+const unchanged = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: '' }), {
+  getTextIndexAtCursor: async () => 2,
+  getForward: async () => '测试',
+  insertText: async () => false,
+});
+await unchanged.drain();
+unchanged.session.selectCandidate(0);
+await unchanged.drain();
+assert.equal(unchanged.acknowledgements(), 0, 'an existing identical word is not proof of a new insertion');
+assert.equal(unchanged.state.get('pendingCommit'), true);
 
 let releaseOldWrite, hangingAttempts = 0;
 const hanging = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {
