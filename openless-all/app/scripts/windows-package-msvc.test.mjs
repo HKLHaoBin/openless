@@ -546,6 +546,11 @@ assert.match(
   /OpenLess x86 TSF IME unregister exit code \$0/,
   'NSIS uninstall should log x86 TSF unregistration failures',
 );
+assert.match(
+  nsisHook,
+  /!macro NSIS_HOOK_PREINSTALL[\s\S]*?Delete "\$INSTDIR\\windows-ime\\x64\\OpenLessIme\.dll"[\s\S]*?Delete "\$INSTDIR\\windows-ime\\x86\\OpenLessIme\.dll"[\s\S]*?stage_x64_begin/,
+  'NSIS upgrade should remove legacy TSF DLL basenames before staging the versioned DLLs',
+);
 
 assert.match(
   imeInstallSmoke,

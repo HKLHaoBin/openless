@@ -116,6 +116,20 @@
   !insertmacro OPENLESS_IME_UNREGISTER_X64
   !insertmacro OPENLESS_IME_DIAGNOSTIC_EVENT preinstall_unregistration_complete
 
+  ; Do not leave the legacy basename available for a new TSF client to load.
+  Delete "$INSTDIR\windows-ime\x64\OpenLessIme.dll"
+  ${If} ${FileExists} "$INSTDIR\windows-ime\x64\OpenLessIme.dll"
+    !insertmacro OPENLESS_IME_DIAGNOSTIC_EVENT legacy_x64_present
+    DetailPrint "OpenLess TSF IME x64 legacy DLL could not be removed"
+    Abort
+  ${EndIf}
+  Delete "$INSTDIR\windows-ime\x86\OpenLessIme.dll"
+  ${If} ${FileExists} "$INSTDIR\windows-ime\x86\OpenLessIme.dll"
+    !insertmacro OPENLESS_IME_DIAGNOSTIC_EVENT legacy_x86_present
+    DetailPrint "OpenLess TSF IME x86 legacy DLL could not be removed"
+    Abort
+  ${EndIf}
+
   !insertmacro OPENLESS_IME_DIAGNOSTIC_EVENT stage_x64_begin
   !insertmacro OPENLESS_IME_STAGE_AND_REPLACE "x64" "OPENLESS_IME_DLL_X64"
   !insertmacro OPENLESS_IME_DIAGNOSTIC_EVENT stage_x64_complete
