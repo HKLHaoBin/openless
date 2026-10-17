@@ -165,8 +165,8 @@ assert.match(
 );
 assert.match(
   positionCapture,
-  /focused_selection_candidates\([\s\S]*?selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_Start[\s\S]*?selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_End[\s\S]*?start_offset == end_offset[\s\S]*?start_offset > end_offset/,
-  'pre-copy position capture must use the exact range from a focused UIA ancestor and still fail closed for collapsed or inverted ranges',
+  /focused_selection_candidates\([\s\S]*?CompareEndpoints[\s\S]*?selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_Start[\s\S]*?selection_endpoint_offset[\s\S]*?TextPatternRangeEndpoint_End[\s\S]*?endpoint_offsets_inconsistent[\s\S]*?start_offset == end_offset[\s\S]*?start_offset > end_offset/,
+  'pre-copy position capture must compare the exact range endpoints before deriving document offsets and still fail closed for inconsistent, collapsed, or inverted ranges',
 );
 assert.match(
   windowsHost,

@@ -86,6 +86,8 @@ pub(crate) enum FocusedSelectionCaptureStage {
     SelectedTextUnavailable,
     EmptySelection,
     CollapsedSelection,
+    EndpointComparisonUnavailable,
+    EndpointOffsetsInconsistent,
     RuntimeIdUnavailable,
     ProcessIdUnavailable,
     StartOffsetUnavailable,
@@ -110,6 +112,8 @@ impl FocusedSelectionCaptureStage {
             Self::SelectedTextUnavailable => "selected_text_unavailable",
             Self::EmptySelection => "empty_selection",
             Self::CollapsedSelection => "collapsed_selection",
+            Self::EndpointComparisonUnavailable => "endpoint_comparison_unavailable",
+            Self::EndpointOffsetsInconsistent => "endpoint_offsets_inconsistent",
             Self::RuntimeIdUnavailable => "runtime_id_unavailable",
             Self::ProcessIdUnavailable => "process_id_unavailable",
             Self::StartOffsetUnavailable => "start_offset_unavailable",
@@ -137,6 +141,10 @@ fn capture_stage(error: &str) -> FocusedSelectionCaptureStage {
         "selected_text" => FocusedSelectionCaptureStage::SelectedTextUnavailable,
         "empty_selection" => FocusedSelectionCaptureStage::EmptySelection,
         "collapsed_selection" => FocusedSelectionCaptureStage::CollapsedSelection,
+        "endpoint_comparison" => FocusedSelectionCaptureStage::EndpointComparisonUnavailable,
+        "endpoint_offsets_inconsistent" => {
+            FocusedSelectionCaptureStage::EndpointOffsetsInconsistent
+        }
         "runtime_id" => FocusedSelectionCaptureStage::RuntimeIdUnavailable,
         "process_id" => FocusedSelectionCaptureStage::ProcessIdUnavailable,
         "start_offset" => FocusedSelectionCaptureStage::StartOffsetUnavailable,
@@ -455,6 +463,17 @@ fn capture_focused_selection_position_once() -> (
                         continue;
                     }
                 };
+            let endpoint_comparison = match selected.CompareEndpoints(
+                TextPatternRangeEndpoint_Start,
+                &selected,
+                TextPatternRangeEndpoint_End,
+            ) {
+                Ok(comparison) => comparison,
+                Err(_) => {
+                    fallback = "endpoint_comparison";
+                    continue;
+                }
+            };
             let start_offset = match selection_endpoint_offset(
                 &_pattern,
                 &selected,
@@ -475,6 +494,10 @@ fn capture_focused_selection_position_once() -> (
                         continue;
                     }
                 };
+            if (endpoint_comparison == 0) != (start_offset == end_offset) {
+                fallback = "endpoint_offsets_inconsistent";
+                continue;
+            }
             if start_offset == end_offset {
                 fallback = "collapsed_selection";
                 continue;
@@ -626,6 +649,17 @@ pub(crate) fn capture_focused_selection_anchor_with_stage(
                         continue;
                     }
                 };
+                let endpoint_comparison = match selected.CompareEndpoints(
+                    TextPatternRangeEndpoint_Start,
+                    &selected,
+                    TextPatternRangeEndpoint_End,
+                ) {
+                    Ok(comparison) => comparison,
+                    Err(_) => {
+                        fallback = "endpoint_comparison";
+                        continue;
+                    }
+                };
                 let start_offset = match selection_endpoint_offset(
                     &pattern,
                     &selected,
@@ -648,6 +682,10 @@ pub(crate) fn capture_focused_selection_anchor_with_stage(
                         continue;
                     }
                 };
+                if (endpoint_comparison == 0) != (start_offset == end_offset) {
+                    fallback = "endpoint_offsets_inconsistent";
+                    continue;
+                }
                 if start_offset == end_offset {
                     fallback = "collapsed_selection";
                     continue;
