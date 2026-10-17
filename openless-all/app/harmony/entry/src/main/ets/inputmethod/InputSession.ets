@@ -37,6 +37,7 @@ class InputSession {
   private candidateRevision: number = 0;
   private voice: VoiceClient = new VoiceClient();
   private voiceGeneration: number = 0;
+  private synchronousEditor: boolean = false;
 
   attach(context: InputMethodExtensionContext, keyboard: inputMethodEngine.KeyboardController,
     client: inputMethodEngine.InputClient): void {
@@ -47,6 +48,7 @@ class InputSession {
     this.keyboard = keyboard;
     this.client = client;
     this.action = inputMethodEngine.ENTER_KEY_TYPE_UNSPECIFIED;
+    this.synchronousEditor = false;
     imeStorage.setOrCreate('connected', true);
     imeStorage.setOrCreate('status', '可输入');
     imeStorage.setOrCreate('enterLabel', '换行');
@@ -61,6 +63,11 @@ class InputSession {
       imeStorage.setOrCreate('chinese', !password);
       imeStorage.setOrCreate('password', password);
       imeStorage.setOrCreate('editorVerified', true);
+      // Use the public synchronous transport from the first write in this
+      // compatibility host. Never replay an uncertain asynchronous write.
+      this.synchronousEditor = attribute.bundleName === 'com.droi.tong';
+      console.info('[OpenLess IME] editor transport=' + (this.synchronousEditor ? 'sync' : 'async') +
+        ' bundle=' + (attribute.bundleName || 'unknown'));
       if (!password) this.prepareRime(context, generation, true);
       this.action = attribute.enterKeyType;
       let label = '换行';
@@ -141,13 +148,36 @@ class InputSession {
     this.queue = task.catch(() => {});
   }
 
+  private async writeText(client: inputMethodEngine.InputClient, text: string): Promise<boolean> {
+    const synchronous = this.synchronousEditor && typeof client.insertTextSync === 'function';
+    try {
+      let ok: boolean;
+      if (synchronous) { client.insertTextSync(text); ok = true; }
+      else { ok = await client.insertText(text); }
+      console.info('[OpenLess IME] write transport=' + (synchronous ? 'sync' : 'async') + ' result=' + ok);
+      return ok;
+    } catch (error) {
+      console.error('[OpenLess IME] write transport=' + (synchronous ? 'sync' : 'async') +
+        ' failed code=' + (error as BusinessError).code);
+      throw new Error('文字提交未确认；若已出现在输入框，请点“已写入”');
+    }
+  }
+
+  private async deleteText(client: inputMethodEngine.InputClient): Promise<boolean> {
+    if (this.synchronousEditor && typeof client.deleteForwardSync === 'function') {
+      client.deleteForwardSync(1);
+      return true;
+    }
+    return client.deleteForward(1);
+  }
+
   insert(text: string): void {
     if (imeStorage.get<boolean>('chinese') && /^[a-z]$/i.test(text)) {
       this.rimeOperation('key', text.toLowerCase().charCodeAt(0).toString());
       return;
     }
     if (imeStorage.get<boolean>('chinese')) { this.rimeOperation('literal', text); return; }
-    if (text.length) this.perform('insert', (client: inputMethodEngine.InputClient) => client.insertText(text));
+    if (text.length) this.perform('insert', (client: inputMethodEngine.InputClient) => this.writeText(client, text));
   }
 
   backspace(): void {
@@ -180,11 +210,11 @@ class InputSession {
     this.queue = this.queue.then(async (): Promise<void> => {
       if (generation !== this.generation || client !== this.client) return;
       if (operation === 'backspace' && (!this.rimeSession || !this.encoding)) {
-        const ok = await client.deleteForward(1);
+        const ok = await this.deleteText(client);
         console.info('[OpenLess IME] backspace result=' + ok);
         return;
       }
-      if (operation === 'space' && !this.encoding) { await client.insertText(' '); return; }
+      if (operation === 'space' && !this.encoding) { await this.writeText(client, ' '); return; }
       if (!this.rimeSession) throw new Error('中文引擎未就绪');
       const delimiter = operation === 'literal' && argument === "'" && this.encoding.length > 0;
       const key = delimiter ? '39' : operation === 'backspace' ? '65288' : operation === 'space' ? '32' : argument;
@@ -192,13 +222,18 @@ class InputSession {
       if (generation !== this.generation || client !== this.client) return;
       if (state.commit) {
         this.publish(state);
-        if (!await client.insertText(state.commit)) throw new Error('文字写入失败，请重新确认');
+        if (!await this.writeText(client, state.commit)) throw new Error('文字写入未确认，请重试或取消待提交');
         if (generation !== this.generation) return;
         state = await rimeRequest('ack', this.rimeSession);
       }
-      if (operation === 'literal' && !delimiter && argument) await client.insertText(argument);
+      if (operation === 'literal' && !delimiter && argument && !await this.writeText(client, argument)) {
+        throw new Error('标点写入失败，请重新选择输入框');
+      }
       this.publish(state);
-    }).catch((error: Error) => { if (generation === this.generation) imeStorage.setOrCreate('status', error.message); });
+    }).catch((error: Error) => {
+      console.error('[OpenLess IME] operation=' + operation + ' failed code=' + (error as BusinessError).code);
+      if (generation === this.generation) imeStorage.setOrCreate('status', error.message);
+    });
   }
 
   selectCandidate(index: number): void { this.rimeOperation('select', index.toString() + '@' + this.candidateRevision.toString()); }
@@ -219,18 +254,20 @@ class InputSession {
         if (generation !== this.generation || client !== this.client) return false;
         this.publish(state);
         if (state.commit) {
-          if (!await client.insertText(state.commit)) return false;
+          if (!await this.writeText(client, state.commit)) return false;
           if (generation !== this.generation || client !== this.client) return false;
           this.publish(await rimeRequest('ack', this.rimeSession));
         }
         return true;
       }
       return action === inputMethodEngine.ENTER_KEY_TYPE_UNSPECIFIED || action === inputMethodEngine.ENTER_KEY_TYPE_NEWLINE ?
-        await client.insertText('\n') : await client.sendKeyFunction(action);
+        await this.writeText(client, '\n') : await client.sendKeyFunction(action);
     });
   }
 
   retryCommit(): void { this.rimeOperation('state', ''); }
+  cancelPendingCommit(): void { this.rimeOperation('clear', ''); }
+  acknowledgePendingCommit(): void { this.rimeOperation('ack', ''); }
 
   async startVoice(): Promise<void> {
     const context = this.context;
@@ -301,7 +338,7 @@ class InputSession {
     imeStorage.setOrCreate('voicePhase', 'inserting');
     this.perform('voice insert', async (client: inputMethodEngine.InputClient): Promise<boolean> => {
       let ok = false;
-      try { ok = await client.insertText(text); return ok; } finally {
+      try { ok = await this.writeText(client, text); return ok; } finally {
         if (generation === this.generation && voiceGeneration === this.voiceGeneration) {
           imeStorage.setOrCreate('voicePhase', ok ? 'idle' : 'review');
           if (ok) imeStorage.setOrCreate('voiceText', '');

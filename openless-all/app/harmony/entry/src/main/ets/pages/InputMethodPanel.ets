@@ -122,6 +122,22 @@ struct InputMethodPanel {
   }
 
   @Builder
+  pendingBar() {
+    Row({ space: 8 }) {
+      Button('已写入', { type: ButtonType.Normal }).height(32).layoutWeight(1).fontSize(14)
+        .fontColor(ACCENT).backgroundColor(KEY).padding(0).focusable(false)
+        .accessibilityText('文字已出现在输入框，确认并继续输入，不重复写入')
+        .onClick(() => { inputSession.acknowledgePendingCommit(); })
+      Button('重试写入', { type: ButtonType.Normal }).height(32).layoutWeight(1).fontSize(14)
+        .fontColor(INK).backgroundColor(KEY).padding(0).focusable(false)
+        .onClick(() => { inputSession.retryCommit(); })
+      Button('取消待提交', { type: ButtonType.Normal }).height(32).layoutWeight(1).fontSize(14)
+        .fontColor(INK).backgroundColor(KEY).padding(0).focusable(false)
+        .onClick(() => { inputSession.cancelPendingCommit(); })
+    }.height(34).width('100%')
+  }
+
+  @Builder
   candidateBar() {
     Row({ space: 4 }) {
       Button('☰', { type: ButtonType.Normal }).width(38).height(32).padding(0).fontSize(20)
@@ -453,13 +469,10 @@ struct InputMethodPanel {
               '正在准备中文输入…' : this.status))
               .fontSize(12).fontColor(MUTED).maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-            if (this.pendingCommit) {
-              Button('重新确认').height(14).fontSize(12).fontColor(ACCENT).backgroundColor(Color.Transparent)
-                .focusable(false).onClick(() => { inputSession.retryCommit(); })
-            }
           }.height(14).width('100%').padding({ left: 8, right: 8 })
         }
-        if (this.candidates.length > 0 && this.voicePhase === 'idle') { this.candidateBar() }
+        if (this.pendingCommit) { this.pendingBar() }
+        else if (this.candidates.length > 0 && this.voicePhase === 'idle') { this.candidateBar() }
         else { this.keyboardToolbar() }
       }.height(48).width('100%').justifyContent(FlexAlign.End)
       if (this.voicePhase !== 'idle') { this.voicePanel() }
