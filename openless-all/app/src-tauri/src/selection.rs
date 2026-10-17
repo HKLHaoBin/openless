@@ -314,13 +314,14 @@ fn refresh_selection_insertion_target_anchor(
                     ),
                 );
                 if let Some(expected_caret) = target.windows_selection_caret.as_ref() {
-                    if let Some((recovered_position, anchor)) = crate::host_document
+                    let (recovered, recovery_stage) = crate::host_document
                         ::capture_focused_selection_from_collapsed_caret_with_stage(
                             &selection.text,
                             expected_caret,
-                        )
-                        .0
-                    {
+                        );
+                    stage = recovery_stage;
+                    target.windows_selection_position_stage = stage.as_str();
+                    if let Some((recovered_position, anchor)) = recovered {
                         position = Some(recovered_position);
                         recovered_anchor = Some(anchor);
                         stage = crate::host_document::FocusedSelectionCaptureStage::CaretReconstructed;

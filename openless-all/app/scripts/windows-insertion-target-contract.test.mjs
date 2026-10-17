@@ -208,6 +208,11 @@ assert.match(
   'PreviewConfirm must use collapsed-caret recovery only after normal position capture fails',
 );
 assert.match(
+  selectionAnchorRefresh,
+  /let \(recovered, recovery_stage\) = [\s\S]*?capture_focused_selection_from_collapsed_caret_with_stage[\s\S]*?stage = recovery_stage[\s\S]*?if let Some\(\(recovered_position, anchor\)\) = recovered/,
+  'P1 must preserve the collapsed-caret recovery stage when recovery fails instead of reporting only collapsed_selection',
+);
+assert.match(
   windowsHost,
   /focused_selection_observation[\s\S]*?let mut read_error = false[\s\S]*?GetText[\s\S]*?read_error = true[\s\S]*?continue[\s\S]*?if let Some\(observation\) = changed/,
   'selection observation must continue to later ancestor providers when an earlier candidate cannot return text',
