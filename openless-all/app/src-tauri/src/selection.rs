@@ -94,6 +94,8 @@ pub(crate) struct SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     windows_selection_caret: Option<crate::host_document::FocusedSelectionCaret>,
     #[cfg(target_os = "windows")]
+    windows_selection_caret_stage: &'static str,
+    #[cfg(target_os = "windows")]
     windows_selection_position_stage: &'static str,
     #[cfg(target_os = "windows")]
     windows_selection_position_initial_stage: &'static str,
@@ -399,11 +401,13 @@ pub(crate) fn prefetch_selection_workspace_capture() {
         "capture_result",
         if anchor_captured { "matched" } else { "unavailable" },
         &format!(
-            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"position_initial_stage\":\"{}\",\"anchor_stage\":\"{}\"",
+            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"caret_captured\":{},\"caret_stage\":\"{}\",\"position_initial_stage\":\"{}\",\"anchor_stage\":\"{}\"",
             target_captured,
             target_current,
             anchor_captured,
             position_captured,
+            selection_insertion_target_caret_is_captured(&insertion_target),
+            selection_insertion_target_caret_stage(&insertion_target),
             selection_insertion_target_position_initial_stage(&insertion_target),
             anchor_stage,
         ),
@@ -507,11 +511,13 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
             "capture_result",
             if anchor_captured { "matched" } else { "unavailable" },
             &format!(
-                "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"position_initial_stage\":\"{}\",\"anchor_stage\":\"{}\"",
+                "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"caret_captured\":{},\"caret_stage\":\"{}\",\"position_initial_stage\":\"{}\",\"anchor_stage\":\"{}\"",
                 target_captured,
                 target_current,
                 anchor_captured,
                 position_captured,
+                selection_insertion_target_caret_is_captured(&insertion_target),
+                selection_insertion_target_caret_stage(&insertion_target),
                 selection_insertion_target_position_initial_stage(&insertion_target),
                 anchor_stage,
             ),
@@ -552,11 +558,13 @@ pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
         "capture_result",
         if anchor_captured { "matched" } else { "unavailable" },
         &format!(
-            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"position_initial_stage\":\"{}\",\"anchor_stage\":\"{}\"",
+            "\"target_captured\":{},\"target_current\":{},\"anchor_captured\":{},\"position_captured\":{},\"caret_captured\":{},\"caret_stage\":\"{}\",\"position_initial_stage\":\"{}\",\"anchor_stage\":\"{}\"",
             target_captured,
             target_current,
             anchor_captured,
             position_captured,
+            selection_insertion_target_caret_is_captured(&insertion_target),
+            selection_insertion_target_caret_stage(&insertion_target),
             selection_insertion_target_position_initial_stage(&insertion_target),
             anchor_stage,
         ),
@@ -671,10 +679,13 @@ fn capture_selection_insertion_target_impl(capture_position: bool) -> SelectionI
         } else {
             (None, "not_requested")
         };
-        let windows_selection_caret = if capture_position && windows_selection_position.is_none() {
-            crate::host_document::capture_focused_selection_caret_with_stage().0
+        let (windows_selection_caret, windows_selection_caret_stage) = if capture_position
+            && windows_selection_position.is_none()
+        {
+            let (caret, stage) = crate::host_document::capture_focused_selection_caret_with_stage();
+            (caret, stage.as_str())
         } else {
-            None
+            (None, "not_requested")
         };
         return SelectionInsertionTarget {
             capture_id: next_selection_capture_id(),
@@ -682,6 +693,7 @@ fn capture_selection_insertion_target_impl(capture_position: bool) -> SelectionI
             windows_selection_anchor: None,
             windows_selection_position,
             windows_selection_caret,
+            windows_selection_caret_stage,
             windows_selection_position_stage,
             windows_selection_position_initial_stage: windows_selection_position_stage,
         };
@@ -754,6 +766,34 @@ pub(crate) fn selection_insertion_target_position_is_captured(
     }
 }
 
+pub(crate) fn selection_insertion_target_caret_is_captured(
+    target: &SelectionInsertionTarget,
+) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        target.windows_selection_caret.is_some()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = target;
+        true
+    }
+}
+
+fn selection_insertion_target_caret_stage(target: &SelectionInsertionTarget) -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        target.windows_selection_caret_stage
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = target;
+        "not_applicable"
+    }
+}
+
 fn selection_insertion_target_position_initial_stage(
     target: &SelectionInsertionTarget,
 ) -> &'static str {
@@ -800,6 +840,7 @@ pub(crate) fn test_preview_target_with_anchor() -> SelectionInsertionTarget {
         windows_selection_anchor: Some(crate::host_document::FocusedSelectionAnchor::for_test()),
         windows_selection_position: None,
         windows_selection_caret: None,
+        windows_selection_caret_stage: "not_requested",
         windows_selection_position_stage: "matched",
         windows_selection_position_initial_stage: "matched",
     }
