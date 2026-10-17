@@ -380,6 +380,11 @@ assert.match(
 );
 assert.match(
   nsisHook,
+  /!searchreplace OPENLESS_IME_BUILD_TAG "\$\{OPENLESS_IME_BUILD_TAG\}" "\/" "-"/,
+  'NSIS must sanitize locale date separators before using the build tag as a filename',
+);
+assert.match(
+  nsisHook,
   /!define OPENLESS_IME_FILENAME "OpenLessIme-\$\{VERSION\}-\$\{OPENLESS_IME_BUILD_TAG\}\.dll"/,
   'NSIS should define the installed IME filename once for staging and registration',
 );

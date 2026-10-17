@@ -1,5 +1,6 @@
 !define OPENLESS_IME_BUILD_TAG "${__DATE__}_${__TIME__}"
 !searchreplace OPENLESS_IME_BUILD_TAG "${OPENLESS_IME_BUILD_TAG}" ":" "-"
+!searchreplace OPENLESS_IME_BUILD_TAG "${OPENLESS_IME_BUILD_TAG}" "/" "-"
 !searchreplace OPENLESS_IME_BUILD_TAG "${OPENLESS_IME_BUILD_TAG}" " " "_"
 !define OPENLESS_IME_FILENAME "OpenLessIme-${VERSION}-${OPENLESS_IME_BUILD_TAG}.dll"
 
