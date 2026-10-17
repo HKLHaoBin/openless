@@ -925,6 +925,10 @@ pub(crate) fn capture_focused_selection_from_collapsed_caret_with_stage(
         return (None, FocusedSelectionCaptureStage::EmptySelection);
     }
     let requested_units = requested_units as i32;
+    let utf16_units = expected
+        .encode_utf16()
+        .count()
+        .min(i32::MAX as usize) as i32;
     let normalized_expected = normalize_line_endings(expected);
     let line_break_units = normalized_expected
         .chars()
@@ -933,25 +937,19 @@ pub(crate) fn capture_focused_selection_from_collapsed_caret_with_stage(
         .min(i32::MAX as usize) as i32;
     let common_unit_counts = [
         requested_units,
+        utf16_units,
         requested_units.saturating_sub(line_break_units),
         requested_units.saturating_add(line_break_units),
+        utf16_units.saturating_sub(line_break_units),
+        utf16_units.saturating_add(line_break_units),
         requested_units.saturating_sub(1),
         requested_units.saturating_add(1),
+        utf16_units.saturating_sub(1),
+        utf16_units.saturating_add(1),
     ];
-    let max_recovery_units = expected
-        .encode_utf16()
-        .count()
-        .saturating_add(line_break_units as usize)
-        .saturating_add(2)
-        .min(ObservedInsertion::MAX_DOCUMENT_UTF16) as i32;
-    let mut unit_counts = Vec::with_capacity(max_recovery_units as usize);
+    let mut unit_counts = Vec::with_capacity(common_unit_counts.len());
     for count in common_unit_counts {
         if count > 0 && !unit_counts.contains(&count) {
-            unit_counts.push(count);
-        }
-    }
-    for count in 1..=max_recovery_units {
-        if !common_unit_counts.contains(&count) {
             unit_counts.push(count);
         }
     }

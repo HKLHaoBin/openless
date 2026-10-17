@@ -192,6 +192,16 @@ assert.match(
   /line_break_units[\s\S]*?unit_counts[\s\S]*?MoveEndpointByUnit/,
   'collapsed-caret recovery must account for provider-specific newline character units',
 );
+assert.doesNotMatch(
+  caretRecovery,
+  /for count in 1\.\.=max_recovery_units/,
+  'collapsed-caret recovery must not linearly scan every document unit after bounded common-unit attempts',
+);
+assert.match(
+  caretRecovery,
+  /let utf16_units = expected[\s\S]*?encode_utf16\(\)[\s\S]*?common_unit_counts[\s\S]*?utf16_units/,
+  'collapsed-caret recovery must retain a bounded UTF-16 unit candidate for surrogate pairs',
+);
 assert.match(
   selectionAnchorRefresh,
   /position\.is_none\(\)[\s\S]*?capture_focused_selection_from_collapsed_caret_with_stage[\s\S]*?CaretReconstructed/,
