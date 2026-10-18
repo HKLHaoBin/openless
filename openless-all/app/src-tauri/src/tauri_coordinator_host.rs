@@ -2129,23 +2129,27 @@ mod tests {
             {
                 *state.mirror_fingerprint.lock() = Some(123);
             }
+            let previous_mode = state.cached_display_mode();
             state.cache_display_mode(mode);
             #[cfg(target_os = "windows")]
             assert_eq!(state.cached_display_mode(), mode);
             #[cfg(not(target_os = "windows"))]
-            assert_eq!(
-                state.cached_display_mode(),
-                if matches!(
-                    mode,
-                    CapsuleDisplayMode::PrimaryScreen | CapsuleDisplayMode::ForegroundWindowScreen
-                ) {
-                    CapsuleDisplayMode::CursorScreen
-                } else {
-                    mode
-                }
-            );
+            let expected_mode = if matches!(
+                mode,
+                CapsuleDisplayMode::PrimaryScreen | CapsuleDisplayMode::ForegroundWindowScreen
+            ) {
+                CapsuleDisplayMode::CursorScreen
+            } else {
+                mode
+            };
+            #[cfg(not(target_os = "windows"))]
+            assert_eq!(state.cached_display_mode(), expected_mode);
             #[cfg(any(target_os = "macos", target_os = "windows"))]
-            assert!(state.mirror_fingerprint.lock().is_none());
+            if state.cached_display_mode() != previous_mode {
+                assert!(state.mirror_fingerprint.lock().is_none());
+            } else {
+                assert_eq!(*state.mirror_fingerprint.lock(), Some(123));
+            }
             assert_eq!(state.cached_style(), CapsuleStyle::Siri);
         }
     }
