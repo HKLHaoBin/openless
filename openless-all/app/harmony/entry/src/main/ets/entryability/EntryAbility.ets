@@ -18,6 +18,7 @@ export default class EntryAbility extends UIAbility {
 
   private requestClipboard(): void {
     this.clipboardRequested = false;
+    if (!this.context.resourceManager.getBooleanByName('ime_clipboard_auto_read')) return;
     abilityAccessCtrl.createAtManager().requestPermissionsFromUser(this.context, ['ohos.permission.READ_PASTEBOARD'])
       .then((result) => { console.info('[OpenLess] clipboard permission result=' + result.authResults.join(',')); })
       .catch(() => { console.warn('[OpenLess] clipboard permission request unavailable'); });

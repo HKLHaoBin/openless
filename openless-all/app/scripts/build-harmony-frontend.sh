@@ -11,6 +11,16 @@ export HVIGOR_USER_HOME="$CACHE_ROOT/harmony/hvigor"
 export npm_config_cache="$CACHE_ROOT/npm"
 export VITE_OPENLESS_PLATFORM=harmony
 SIGNING_DIR="${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/local-test}"
+export OPENLESS_HARMONY_CLIPBOARD_ACCESS="${OPENLESS_HARMONY_CLIPBOARD_ACCESS:-0}"
+export OPENLESS_HARMONY_STARTUP_PROBES="${OPENLESS_HARMONY_STARTUP_PROBES:-0}"
+case "$OPENLESS_HARMONY_CLIPBOARD_ACCESS" in
+  0|1) ;;
+  *) echo 'OPENLESS_HARMONY_CLIPBOARD_ACCESS must be 0 or 1' >&2; exit 1 ;;
+esac
+case "$OPENLESS_HARMONY_STARTUP_PROBES" in
+  0|1) ;;
+  *) echo 'OPENLESS_HARMONY_STARTUP_PROBES must be 0 or 1' >&2; exit 1 ;;
+esac
 BUILD_PROJECT="$CACHE_ROOT/harmony/openless-project"
 WEB_DIST="$CACHE_ROOT/harmony/web-dist"
 export OPENLESS_RIME_PREFIX="$CACHE_ROOT/mobile-rime/harmony/install"
@@ -24,9 +34,20 @@ npm run build -- --base=./ --outDir="$WEB_DIST"
 # Build a disposable copy so every Hvigor intermediate stays in the shared cache.
 python3 - "$APP_ROOT/harmony" "$BUILD_PROJECT" "$WEB_DIST" "$SIGNING_DIR" <<'PY'
 from pathlib import Path
-import shutil, sys
+import json, os, shutil, sys
 source, target, web, signing = map(Path, sys.argv[1:])
 shutil.copytree(source, target, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.hvigor', 'build', 'oh_modules', 'local.properties'))
+if os.environ['OPENLESS_HARMONY_CLIPBOARD_ACCESS'] == '1':
+    manifest = target / 'entry/src/main/module.json5'
+    module = json.loads(manifest.read_text())
+    module['module']['requestPermissions'].append({
+        'name': 'ohos.permission.READ_PASTEBOARD',
+        'reason': '$string:clipboard_reason',
+        'usedScene': {'abilities': ['EntryAbility', 'OpenLessInputMethod'], 'when': 'inuse'},
+    })
+    manifest.write_text(json.dumps(module, ensure_ascii=False, indent=2))
+    flags = target / 'entry/src/main/resources/base/element/boolean.json'
+    flags.write_text(json.dumps({'boolean': [{'name': 'ime_clipboard_auto_read', 'value': True}]}))
 shutil.copytree(source.parent / 'mobile-ime', target / 'mobile-ime', dirs_exist_ok=True)
 shutil.copytree(target.parents[1] / 'mobile-rime/data', target / 'entry/src/main/resources/rawfile/rime', dirs_exist_ok=True)
 resources = target / 'entry/src/main/resources/rawfile/web'
@@ -39,7 +60,8 @@ index = resources / 'index.html'
 html = index.read_text().replace('type="module" ', '').replace(' crossorigin', '')
 # Keep execution after the root element is parsed, matching module-script timing.
 html = html.replace('<script ', '<script defer ')
-html = html.replace('</body>', '''<script>
+if os.environ['OPENLESS_HARMONY_STARTUP_PROBES'] == '1':
+    html = html.replace('</body>', '''<script>
 window.addEventListener('error', function(e) { console.error('[OpenLess Boot] ' + e.message); });
 window.addEventListener('unhandledrejection', function(e) { console.error('[OpenLess Boot] ' + String(e.reason)); });
 window.addEventListener('load', function() {

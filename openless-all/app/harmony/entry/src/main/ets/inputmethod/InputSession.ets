@@ -21,6 +21,7 @@ class InputPanelState {
   keySound: boolean = false;
   clipboardItems: ClipboardEntry[] = [];
   clipboardStatus: string = '';
+  clipboardAutoRead: boolean = false;
   rimeReady: boolean = false;
   page: number = 0;
   hasNext: boolean = false;
@@ -92,6 +93,10 @@ class InputSession {
     this.client = client;
     this.cloudSettings = undefined;
     this.clipboard = undefined;
+    let clipboardAutoRead = false;
+    try { clipboardAutoRead = context.resourceManager.getBooleanByName('ime_clipboard_auto_read'); } catch (_) {}
+    imeStorage.setOrCreate('clipboardAutoRead', clipboardAutoRead);
+    imeStorage.setOrCreate('clipboardStatus', clipboardAutoRead ? '' : '自动读取待权限开放；当前可主动粘贴并保存本地记录');
     imeStorage.setOrCreate('cloudEnabled', false);
     preferences.getPreferences(context, { name: 'ime_cloud_candidates' }).then(async (settings: preferences.Preferences) => {
       if (generation !== this.generation) return;
@@ -548,6 +553,7 @@ class InputSession {
   }
 
   private watchClipboard(): void {
+    if (!imeStorage.get<boolean>('clipboardAutoRead')) return;
     if (!this.clipboardBoard) {
       try {
         this.clipboardBoard = pasteboard.getSystemPasteboard();
@@ -558,7 +564,7 @@ class InputSession {
   }
 
   refreshClipboard(): void {
-    if (!this.client || !this.clipboard || !imeStorage.get<boolean>('editorVerified') ||
+    if (!imeStorage.get<boolean>('clipboardAutoRead') || !this.client || !this.clipboard || !imeStorage.get<boolean>('editorVerified') ||
       imeStorage.get<boolean>('password')) return;
     const generation = this.generation;
     const read = ++this.clipboardRead;
@@ -576,6 +582,7 @@ class InputSession {
   }
 
   authorizeClipboard(): void {
+    if (!imeStorage.get<boolean>('clipboardAutoRead')) return;
     this.context?.startAbility({ bundleName: 'openless.hm.com', abilityName: 'EntryAbility',
       parameters: { requestClipboardPermission: true } }).catch(() => {
       imeStorage.setOrCreate('clipboardStatus', '无法打开授权页面，请打开 OpenLess 应用重试');

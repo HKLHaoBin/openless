@@ -47,14 +47,6 @@
     ],
     "requestPermissions": [
       {
-        "name": "ohos.permission.READ_PASTEBOARD",
-        "reason": "$string:clipboard_reason",
-        "usedScene": {
-          "abilities": ["EntryAbility", "OpenLessInputMethod"],
-          "when": "inuse"
-        }
-      },
-      {
         "name": "ohos.permission.INTERNET"
       },
       {

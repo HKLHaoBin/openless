@@ -85,7 +85,7 @@ function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () =>
   });
   const client = { getEditorAttribute, insertText: async (text) => { inserted.push(text); return true; }, ...clientOverrides };
   const session = exports.inputSession, state = exports.imeStorage;
-  session.attach({ filesDir: '/test', resourceManager: {} }, {}, client);
+  session.attach({ filesDir: '/test', resourceManager: { getBooleanByName: () => autoClipboard } }, {}, client);
   const pump = async () => {
     for (let i = 0; i < 20; i++) await Promise.resolve();
   };
@@ -108,6 +108,9 @@ assert.deepEqual(normal.schemas, ['learning']);
 assert.equal(normal.state.get('rimeReady'), true);
 assert.equal(normal.state.get('editorVerified'), true);
 assert.equal(normal.state.get('enterLabel'), '搜索');
+assert.equal(normal.watching(), false, 'the default build must not subscribe to clipboard updates');
+normal.session.refreshClipboard();
+assert.equal(normal.state.get('clipboardAutoRead'), false);
 normal.session.selectCandidate(0);
 await normal.drain();
 assert.equal(normal.acknowledgements(), 1);
