@@ -85,6 +85,34 @@ pub fn strip_phrase_suffix(text: &str, phrase: &str) -> Option<String> {
     Some(text[..cut_at].trim_end().to_string())
 }
 
+/// Remove a recognized command from the beginning of a transcript while preserving
+/// the spoken body. Only a true prefix match is accepted.
+pub fn strip_phrase_prefix(text: &str, phrase: &str) -> Option<String> {
+    let normalized_phrase = validate_phrase(phrase).ok()?;
+    let mut cursor = 0;
+    for expected in normalized_phrase.chars() {
+        loop {
+            let (_, character) = text[cursor..].char_indices().next()?;
+            cursor += character.len_utf8();
+            if character.is_whitespace() || is_terminal_punctuation(character) {
+                continue;
+            }
+            if normalize_phrase(&character.to_string()) != expected.to_string() {
+                return None;
+            }
+            break;
+        }
+    }
+    while cursor < text.len() {
+        let character = text[cursor..].chars().next()?;
+        if !character.is_whitespace() && !is_terminal_punctuation(character) {
+            break;
+        }
+        cursor += character.len_utf8();
+    }
+    Some(text[cursor..].to_string())
+}
+
 fn is_terminal_punctuation(character: char) -> bool {
     character.to_string().nfkc().any(|normalized| {
         normalized.is_ascii_punctuation()
@@ -364,6 +392,7 @@ pub struct VoiceActivationSession {
     pub session_id: SessionId,
     pub started_at: Instant,
     pub timeout: Option<Duration>,
+    pub wake_phrase: String,
     pub finish_enabled: bool,
     pub finish_phrase: String,
 }
@@ -398,6 +427,27 @@ mod tests {
         assert_eq!(normalize_phrase("完成，语音录入。"), DEFAULT_FINISH_PHRASE);
     }
 
+    #[test]
+    fn strip_phrase_prefix_preserves_body_and_requires_prefix() {
+        assert_eq!(
+            strip_phrase_prefix("开始语音录入，你好，世界", DEFAULT_WAKE_PHRASE),
+            Some("你好，世界".into())
+        );
+        assert_eq!(
+            strip_phrase_prefix("开始，语音录入 hello", DEFAULT_WAKE_PHRASE),
+            Some("hello".into())
+        );
+        assert!(strip_phrase_prefix("你好，开始语音录入", DEFAULT_WAKE_PHRASE).is_none());
+    }
+
+    #[test]
+    fn strip_phrase_prefix_handles_nfkc_and_empty_body() {
+        assert_eq!(strip_phrase_prefix("開始語音錄入。", "开始语音录入"), None);
+        assert_eq!(
+            strip_phrase_prefix("开始语音录入。", DEFAULT_WAKE_PHRASE),
+            Some(String::new())
+        );
+    }
     #[test]
     fn strip_phrase_suffix_preserves_spoken_body() {
         assert_eq!(
@@ -471,6 +521,7 @@ mod tests {
             session_id,
             started_at: Instant::now(),
             timeout: Some(Duration::from_secs(1)),
+            wake_phrase: DEFAULT_WAKE_PHRASE.into(),
             finish_enabled: true,
             finish_phrase: DEFAULT_FINISH_PHRASE.into(),
         };
@@ -494,6 +545,7 @@ mod tests {
             session_id: SessionId::new(),
             started_at: Instant::now(),
             timeout: Some(Duration::from_secs(1)),
+            wake_phrase: DEFAULT_WAKE_PHRASE.into(),
             finish_enabled: true,
             finish_phrase: DEFAULT_FINISH_PHRASE.into(),
         };

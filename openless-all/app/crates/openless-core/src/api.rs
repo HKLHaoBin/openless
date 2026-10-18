@@ -2262,13 +2262,20 @@ impl EngineProgressSink for BackendEngineProgress {
                 }
             }
             EngineProgress::TranscriptDelta(mut delta) => {
-                let finish_phrase = self
+                let activation_phrases = self
                     .voice_activation_session
                     .lock()
                     .expect("voice activation session lock poisoned")
                     .as_ref()
-                    .filter(|session| session.finish_enabled && session.session_id == session_id)
-                    .map(|session| session.finish_phrase.clone());
+                    .filter(|session| session.session_id == session_id)
+                    .map(|session| {
+                        (
+                            session.wake_phrase.clone(),
+                            session
+                                .finish_enabled
+                                .then(|| session.finish_phrase.clone()),
+                        )
+                    });
                 let mut state = self.state.write().expect("backend state lock poisoned");
                 ensure_active_session(&state, session_id)?;
                 if !matches!(
@@ -2282,7 +2289,7 @@ impl EngineProgressSink for BackendEngineProgress {
                         "transcript delta arrived after transcription completed",
                     ));
                 }
-                if let Some(finish_phrase) = finish_phrase {
+                if let Some((wake_phrase, finish_phrase)) = activation_phrases {
                     let mut raw_transcripts = self
                         .raw_transcripts
                         .lock()
@@ -2300,12 +2307,21 @@ impl EngineProgressSink for BackendEngineProgress {
                         transcript
                     });
                     raw_transcript.apply(&delta)?;
+                    let mut cleaned = raw_transcript.text().to_string();
+                    if let Some(stripped) =
+                        crate::voice_activation::strip_phrase_prefix(&cleaned, &wake_phrase)
+                    {
+                        cleaned = stripped;
+                    }
+                    if let Some(finish_phrase) = finish_phrase {
+                        if let Some(stripped) =
+                            crate::voice_activation::strip_phrase_suffix(&cleaned, &finish_phrase)
+                        {
+                            cleaned = stripped;
+                        }
+                    }
                     delta = crate::types::TranscriptDelta {
-                        text: crate::voice_activation::strip_phrase_suffix(
-                            raw_transcript.text(),
-                            &finish_phrase,
-                        )
-                        .unwrap_or_else(|| raw_transcript.text().to_string()),
+                        text: cleaned,
                         offset: 0,
                         is_final: delta.is_final,
                     };
@@ -3536,6 +3552,7 @@ impl OpenLessBackend {
                                 session_id,
                                 started_at: std::time::Instant::now(),
                                 timeout,
+                                wake_phrase: preferences.voice_activation_wake_phrase.clone(),
                                 finish_enabled: preferences.voice_activation_finish_enabled,
                                 finish_phrase: preferences.voice_activation_finish_phrase,
                             };
@@ -3689,6 +3706,7 @@ impl OpenLessBackend {
         let session_id = reservation.session_id;
         let preferences = self.get_preferences();
         let activation_config = crate::voice_activation::VoiceActivationConfig {
+            wake_phrase: preferences.voice_activation_wake_phrase.clone(),
             finish_enabled: preferences.voice_activation_finish_enabled,
             finish_phrase: preferences.voice_activation_finish_phrase.clone(),
             timeout_enabled: preferences.voice_activation_timeout_enabled,
@@ -3719,6 +3737,7 @@ impl OpenLessBackend {
                     session_id,
                     started_at: std::time::Instant::now(),
                     timeout: activation_config.timeout(),
+                    wake_phrase: activation_config.wake_phrase.clone(),
                     finish_enabled: activation_config.finish_enabled,
                     finish_phrase: activation_config.finish_phrase.clone(),
                 },
@@ -7480,31 +7499,50 @@ impl OpenLessBackend {
             }
         };
 
-        let finish_phrase = self
+        let activation_phrases = self
             .voice_activation_session
             .lock()
             .expect("voice activation session lock poisoned")
             .as_ref()
-            .filter(|session| session.finish_enabled && session.session_id == session_id)
-            .map(|session| session.finish_phrase.clone());
-        if let Some(finish_phrase) = finish_phrase {
-            if let Some(stripped) = crate::voice_activation::strip_phrase_suffix(
-                &engine_result.raw_text,
-                &finish_phrase,
-            ) {
-                engine_result.raw_text = stripped;
-            }
-            if let Some(stripped) = crate::voice_activation::strip_phrase_suffix(
-                &engine_result.polished_text,
-                &finish_phrase,
-            ) {
-                engine_result.polished_text = stripped;
+            .filter(|session| session.session_id == session_id)
+            .map(|session| {
+                (
+                    session.wake_phrase.clone(),
+                    session
+                        .finish_enabled
+                        .then(|| session.finish_phrase.clone()),
+                )
+            });
+        if let Some((wake_phrase, finish_phrase)) = activation_phrases {
+            for text in [
+                &mut engine_result.raw_text,
+                &mut engine_result.polished_text,
+            ] {
+                if let Some(stripped) =
+                    crate::voice_activation::strip_phrase_prefix(text, &wake_phrase)
+                {
+                    *text = stripped;
+                }
+                if let Some(finish_phrase) = finish_phrase.as_ref() {
+                    if let Some(stripped) =
+                        crate::voice_activation::strip_phrase_suffix(text, finish_phrase)
+                    {
+                        *text = stripped;
+                    }
+                }
             }
             if let Some(asr_transcript) = engine_result.asr_transcript.as_mut() {
                 if let Some(stripped) =
-                    crate::voice_activation::strip_phrase_suffix(asr_transcript, &finish_phrase)
+                    crate::voice_activation::strip_phrase_prefix(asr_transcript, &wake_phrase)
                 {
                     *asr_transcript = stripped;
+                }
+                if let Some(finish_phrase) = finish_phrase.as_ref() {
+                    if let Some(stripped) =
+                        crate::voice_activation::strip_phrase_suffix(asr_transcript, finish_phrase)
+                    {
+                        *asr_transcript = stripped;
+                    }
                 }
             }
         }

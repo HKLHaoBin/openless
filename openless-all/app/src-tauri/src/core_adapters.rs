@@ -1917,7 +1917,7 @@ impl openless_core::VoiceActivationHandle for TauriVoiceActivationHandle {
                 ));
             }
             let staged = warm_hub
-                .arm_without_preroll(
+                .arm_with_preroll(
                     config.activation_generation,
                     config.microphone_device_name.clone(),
                 )

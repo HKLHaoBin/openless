@@ -682,6 +682,15 @@ impl SherpaOnlineSession {
         self.finish_inner(on_token)
     }
 
+    /// Flush the current VAD segment while keeping this online session alive for
+    /// the next speech segment.
+    pub fn flush_segment<F>(&mut self, on_token: &F) -> Result<()>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        self.flush_segment_inner(on_token)
+    }
+
     #[cfg(target_os = "windows")]
     fn accept_samples<F>(&mut self, samples: &[f32], on_token: &F) -> Result<()>
     where
@@ -720,6 +729,32 @@ impl SherpaOnlineSession {
     }
 
     #[cfg(target_os = "windows")]
+    fn flush_segment_inner<F>(&mut self, on_token: &F) -> Result<()>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        self.stream.input_finished();
+        self.drain_ready_without_endpoint_reset(on_token);
+        self.capture_result(on_token, false);
+        if !self.last_partial_text.is_empty() {
+            append_segment(&mut self.committed_text, &self.last_partial_text);
+        }
+        self.last_partial_text.clear();
+        self.last_emitted_text.clear();
+        self.pending_new_segment = true;
+        self.recognizer.reset(&self.stream);
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn flush_segment_inner<F>(&mut self, _on_token: &F) -> Result<()>
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
     fn drain_ready<F>(&mut self, on_token: &F)
     where
         F: Fn(&SherpaTokenEmission),
@@ -727,6 +762,17 @@ impl SherpaOnlineSession {
         while self.recognizer.is_ready(&self.stream) {
             self.recognizer.decode(&self.stream);
             self.capture_result(on_token, true);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn drain_ready_without_endpoint_reset<F>(&mut self, on_token: &F)
+    where
+        F: Fn(&SherpaTokenEmission),
+    {
+        while self.recognizer.is_ready(&self.stream) {
+            self.recognizer.decode(&self.stream);
+            self.capture_result(on_token, false);
         }
     }
 

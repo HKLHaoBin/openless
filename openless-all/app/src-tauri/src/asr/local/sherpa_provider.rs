@@ -50,6 +50,7 @@ struct OnlineWorker {
 
 enum OnlineWorkerMessage {
     Pcm(Vec<u8>),
+    FlushSegment,
     Finish,
     Cancel,
 }
@@ -252,6 +253,14 @@ impl crate::recorder::AudioConsumer for SherpaOnnxAsr {
             }
         }
     }
+
+    fn finish_segment(&self) {
+        if let SherpaProviderMode::Online { worker } = &self.mode {
+            if let Some(worker) = worker.lock().as_ref() {
+                worker.flush_segment();
+            }
+        }
+    }
 }
 
 fn pcm_duration_ms(pcm: &[u8]) -> u64 {
@@ -302,6 +311,14 @@ impl OnlineWorker {
                                 break Err(anyhow::anyhow!("sherpa-onnx streaming cancelled"));
                             }
                         }
+                        Ok(OnlineWorkerMessage::FlushSegment) => {
+                            if worker_cancelled.load(Ordering::SeqCst) {
+                                break Err(anyhow::anyhow!("sherpa-onnx streaming cancelled"));
+                            }
+                            if let Err(error) = session.flush_segment(&emit) {
+                                break Err(error);
+                            }
+                        }
                         Ok(OnlineWorkerMessage::Finish) => {
                             if worker_cancelled.load(Ordering::SeqCst) {
                                 break Err(anyhow::anyhow!("sherpa-onnx streaming cancelled"));
@@ -339,6 +356,15 @@ impl OnlineWorker {
             .is_err()
         {
             log::warn!("[sherpa-asr] online worker is not accepting PCM");
+        }
+    }
+
+    fn flush_segment(&self) {
+        if self.cancelled.load(Ordering::SeqCst) {
+            return;
+        }
+        if self.tx.send(OnlineWorkerMessage::FlushSegment).is_err() {
+            log::warn!("[sherpa-asr] online worker is not accepting segment flush");
         }
     }
 

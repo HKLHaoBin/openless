@@ -59,6 +59,10 @@ pub trait AudioConsumer: Send + Sync {
     /// Each delivery is a little-endian byte sequence of Int16 samples;
     /// the length is always a multiple of 2.
     fn consume_pcm_chunk(&self, pcm: &[u8]);
+
+    /// Mark the end of the current VAD-gated segment without stopping the consumer.
+    /// Consumers that do not maintain streaming endpoint state can ignore this boundary.
+    fn finish_segment(&self) {}
 }
 
 pub(crate) struct AudioConsumerFanout {
@@ -75,6 +79,12 @@ impl AudioConsumer for AudioConsumerFanout {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
         for consumer in &self.consumers {
             consumer.consume_pcm_chunk(pcm);
+        }
+    }
+
+    fn finish_segment(&self) {
+        for consumer in &self.consumers {
+            consumer.finish_segment();
         }
     }
 }
@@ -337,6 +347,11 @@ struct WarmCaptureSink {
     max_bytes: usize,
 }
 
+struct ActivationVadOutput {
+    pcm: Option<Vec<u8>>,
+    end_of_speech: bool,
+}
+
 struct ActivationVad {
     pre_roll: VecDeque<u8>,
     speech_active: bool,
@@ -360,11 +375,14 @@ impl ActivationVad {
         self.hangover_chunks = 0;
     }
 
-    /// Return PCM for the activation recognizer, or `None` for sustained silence.
+    /// Return gated PCM and report a single speech-to-silence boundary.
     /// This deliberately uses one RMS pass and a bounded queue rather than a second model.
-    fn gate(&mut self, pcm: &[u8]) -> Option<Vec<u8>> {
+    fn gate(&mut self, pcm: &[u8]) -> ActivationVadOutput {
         if pcm.is_empty() {
-            return None;
+            return ActivationVadOutput {
+                pcm: None,
+                end_of_speech: false,
+            };
         }
         WarmCaptureSink::append_bounded(
             &mut self.pre_roll,
@@ -383,14 +401,24 @@ impl ActivationVad {
             }
             self.speech_active = true;
             self.hangover_chunks = ACTIVATION_VAD_HANGOVER_CHUNKS;
-            return Some(output);
+            return ActivationVadOutput {
+                pcm: Some(output),
+                end_of_speech: false,
+            };
         }
         if self.speech_active && self.hangover_chunks > 0 {
             self.hangover_chunks -= 1;
-            return Some(pcm.to_vec());
+            return ActivationVadOutput {
+                pcm: Some(pcm.to_vec()),
+                end_of_speech: false,
+            };
         }
+        let end_of_speech = self.speech_active;
         self.speech_active = false;
-        None
+        ActivationVadOutput {
+            pcm: None,
+            end_of_speech,
+        }
     }
 }
 
@@ -451,10 +479,13 @@ impl WarmCaptureSink {
     }
 
     fn deliver_activation(&self, consumer: &Arc<dyn AudioConsumer>, pcm: &[u8]) {
-        let Some(gated) = self.activation_vad.lock().gate(pcm) else {
-            return;
-        };
-        consumer.consume_pcm_chunk(&gated);
+        let gated = self.activation_vad.lock().gate(pcm);
+        if let Some(pcm) = gated.pcm {
+            consumer.consume_pcm_chunk(&pcm);
+        }
+        if gated.end_of_speech {
+            consumer.finish_segment();
+        }
     }
 
     fn append_bounded(buffer: &mut VecDeque<u8>, pcm: &[u8], max_bytes: usize) {
@@ -1155,6 +1186,20 @@ impl WarmCaptureHub {
             true,
             STAGED_CAPTURE_MAX_BYTES,
             Some(processing),
+        )
+    }
+
+    pub(crate) fn arm_with_preroll(
+        self: &Arc<Self>,
+        press_id: u64,
+        device_name: Option<String>,
+    ) -> Result<WarmStagedRecorder, RecorderError> {
+        self.arm_internal(
+            voice_capture_key(press_id),
+            device_name,
+            true,
+            VOICE_STAGED_CAPTURE_MAX_BYTES,
+            None,
         )
     }
 
@@ -2569,11 +2614,16 @@ mod tests {
     #[derive(Default)]
     struct RecordingConsumer {
         chunks: StdMutex<Vec<Vec<u8>>>,
+        segment_flushes: StdMutex<usize>,
     }
 
     impl AudioConsumer for RecordingConsumer {
         fn consume_pcm_chunk(&self, pcm: &[u8]) {
             self.chunks.lock().unwrap().push(pcm.to_vec());
+        }
+
+        fn finish_segment(&self) {
+            *self.segment_flushes.lock().unwrap() += 1;
         }
     }
 
@@ -2679,6 +2729,30 @@ mod tests {
     }
 
     #[test]
+    fn warm_promotion_replays_bounded_preroll_to_formal_consumer() {
+        let sink = WarmCaptureSink::new(STAGED_CAPTURE_MAX_BYTES);
+        let formal = Arc::new(RecordingConsumer::default());
+        let prefix = vec![1, 2, 3, 4];
+        let speech = vec![0x00, 0x40, 0x00, 0x40];
+        sink.consume_pcm_chunk(&prefix);
+        sink.arm_with_limit(8, true, STAGED_CAPTURE_MAX_BYTES)
+            .unwrap();
+        sink.consume_pcm_chunk(&speech);
+
+        sink.promote(
+            8,
+            Arc::clone(&formal) as Arc<dyn AudioConsumer>,
+            Arc::new(|_| {}),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            formal.chunks.lock().unwrap().as_slice(),
+            &[vec![1, 2, 3, 4, 0x00, 0x40, 0x00, 0x40]]
+        );
+    }
+    #[test]
     fn activation_vad_skips_silence_and_preserves_speech_onset() {
         let sink = WarmCaptureSink::new(STAGED_CAPTURE_MAX_BYTES);
         let activation = Arc::new(RecordingConsumer::default());
@@ -2698,11 +2772,34 @@ mod tests {
     fn activation_vad_hangover_is_bounded() {
         let mut vad = ActivationVad::default();
         let speech = vec![0x00, 0x40, 0x00, 0x40];
-        assert!(vad.gate(&speech).is_some());
+        assert!(vad.gate(&speech).pcm.is_some());
         for _ in 0..ACTIVATION_VAD_HANGOVER_CHUNKS {
-            assert!(vad.gate(&[0, 0, 0, 0]).is_some());
+            let output = vad.gate(&[0, 0, 0, 0]);
+            assert!(output.pcm.is_some());
+            assert!(!output.end_of_speech);
         }
-        assert!(vad.gate(&[0, 0, 0, 0]).is_none());
+        let output = vad.gate(&[0, 0, 0, 0]);
+        assert!(output.pcm.is_none());
+        assert!(output.end_of_speech);
+        let output = vad.gate(&[0, 0, 0, 0]);
+        assert!(output.pcm.is_none());
+        assert!(!output.end_of_speech);
+    }
+
+    #[test]
+    fn activation_vad_flushes_after_hangover_without_flushing_sustained_silence() {
+        let sink = WarmCaptureSink::new(STAGED_CAPTURE_MAX_BYTES);
+        let activation = Arc::new(RecordingConsumer::default());
+        sink.set_activation_consumer(Some(Arc::clone(&activation) as Arc<dyn AudioConsumer>));
+        let speech = vec![0x00, 0x40, 0x00, 0x40];
+        sink.consume_pcm_chunk(&speech);
+        for _ in 0..=ACTIVATION_VAD_HANGOVER_CHUNKS {
+            sink.consume_pcm_chunk(&[0, 0, 0, 0]);
+        }
+        sink.consume_pcm_chunk(&[0, 0, 0, 0]);
+
+        assert_eq!(*activation.segment_flushes.lock().unwrap(), 1);
+        assert!(activation.chunks.lock().unwrap().len() >= 1);
     }
     #[test]
     fn activation_fault_handler_uses_voice_generation_not_stream_generation() {
