@@ -8,7 +8,7 @@ const exports = {};
 vm.runInNewContext(ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText, { exports });
-const { SymbolGesture, letterSymbol, digitSymbol } = exports;
+const { SymbolGesture, letterSymbol, digitSymbol, symbolRows } = exports;
 const gesture = new SymbolGesture();
 const field = 'editor1:zh:standard';
 gesture.begin('a', field);
@@ -64,4 +64,12 @@ assert.equal(letterSymbol(2, 0, false, false), ',');
 assert.equal(letterSymbol(2, 0, false, true), '，');
 assert.equal(digitSymbol('6', true), '……', 'multi-character punctuation must not be truncated');
 assert.equal(digitSymbol('6', false), '^');
+assert.equal(symbolRows(0, true)[0].join(''), '，。？！：；、…—·');
+assert.equal(symbolRows(0, false)[0].join(''), ',.?!:;\'"-_');
+assert.equal(symbolRows(1, true)[0][0], '￥');
+assert.equal(symbolRows(1, false)[0][0], '$');
+assert.equal(symbolRows(1, true)[1].slice(0, 6).join(''), '【】｛｝《》');
+assert.equal(symbolRows(1, false)[1].slice(0, 6).join(''), '[]{}<>');
+assert.equal(symbolRows(1, true)[2][0], '……');
+assert.equal(symbolRows(1, false)[2][0], '...');
 console.log('Harmony symbol gestures: one-shot release, arbitration, cancellation, editor/language changes and split mapping passed');

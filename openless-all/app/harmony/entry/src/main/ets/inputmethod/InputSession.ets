@@ -23,6 +23,7 @@ class InputPanelState {
   writeInFlight: boolean = false;
   cloudEnabled: boolean = false;
   symbolFeedback: string = '';
+  keyboardWidth: number = 574;
 }
 
 export const imeStorage: LocalStorage = new LocalStorage(new InputPanelState());

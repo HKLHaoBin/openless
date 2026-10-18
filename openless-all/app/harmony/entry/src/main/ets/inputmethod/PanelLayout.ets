@@ -60,10 +60,20 @@ class PanelLayout {
     const panelVp = Math.min(requestedHeight, Math.floor(screen.height * 0.65 / density));
     const showNumberRow = !floating && panelVp >= 300;
     const rows = showNumberRow ? 5 : 4;
-    const keyHeight = Math.max(20, Math.min(floating ? Math.round(52 * this.scale) : this.mode === 'split' ? 60 : 52,
-      Math.floor((panelVp - 66 - (floating ? 26 : 0) - (rows - 1) * 6) / rows)));
     this.width = floating ? Math.round(Math.min(screen.width * 0.9, 400 * this.scale * density)) : screen.width;
-    this.height = Math.round(panelVp * density);
+    const split = this.mode === 'split';
+    const gap = this.mode === 'standard' ? 6 : 5;
+    const columns = split ? 12 : 10;
+    const gaps = split ? 10 : 9;
+    // Each character has a fixed square face. Fit both dimensions before
+    // laying out rows, rather than stretching keys across the panel width.
+    const keyHeight = Math.max(12, Math.floor(Math.min(
+      floating ? 52 * this.scale : split ? 60 : 52,
+      (panelVp - 66 - (floating ? 26 : 0) - (rows - 1) * 6) / rows,
+      (this.width / density - 12 - gaps * gap) / columns)));
+    const keyboardWidth = columns * keyHeight + gaps * gap;
+    const fittedHeight = rows * keyHeight + (rows - 1) * 6 + 66 + (floating ? 26 : 0);
+    this.height = Math.round(Math.min(panelVp, fittedHeight) * density);
     const flag = floating ? inputMethodEngine.PanelFlag.FLG_FLOATING : inputMethodEngine.PanelFlag.FLG_FIXED;
     if (flag !== this.flag) { panel.changeFlag(flag); this.flag = flag; }
     await panel.resize(this.width, this.height);
@@ -73,6 +83,7 @@ class PanelLayout {
     this.geometry = geometry;
     imeStorage.setOrCreate('keyboardLayout', this.mode);
     imeStorage.setOrCreate('keyHeight', keyHeight);
+    imeStorage.setOrCreate('keyboardWidth', keyboardWidth);
     imeStorage.setOrCreate('showNumberRow', showNumberRow);
     console.info('[OpenLess IME] layout=' + this.mode + ' width=' + this.width + ' height=' + this.height);
   }
