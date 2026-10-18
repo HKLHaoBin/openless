@@ -612,8 +612,8 @@ class InputSession {
   }
 
   pinClipboardItem(id: string): void { this.clipboard?.pin(id); this.saveClipboard(); }
-  deleteClipboardItem(id: string): void { this.clipboard?.remove(id); this.saveClipboard(); }
-  clearClipboardHistory(): void { this.clipboard?.clear(); this.saveClipboard(); }
+  deleteClipboardItem(id: string): void { this.clipboardRead++; this.clipboard?.remove(id); this.saveClipboard(); }
+  clearClipboardHistory(): void { this.clipboardRead++; this.clipboard?.clear(); this.saveClipboard(); }
 
   setPolishMode(mode: string): void {
     if (!this.context || !['raw', 'light', 'structured', 'formal'].includes(mode)) return;
