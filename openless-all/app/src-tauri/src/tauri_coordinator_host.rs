@@ -32,6 +32,30 @@ const CAPSULE_DIAG_SESSION_ID: &str = "capsule-display-1224-20261018";
 static CAPSULE_DIAG_RUN_ID: OnceLock<String> = OnceLock::new();
 #[cfg(target_os = "windows")]
 static CAPSULE_DIAG_SYNC_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "windows")]
+static CAPSULE_DIAG_LAST_PAYLOAD_SESSION: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+#[cfg(target_os = "windows")]
+fn capsule_diag_payload_session_transition(session_id: Option<&str>) -> &'static str {
+    let previous = CAPSULE_DIAG_LAST_PAYLOAD_SESSION.get_or_init(|| Mutex::new(None));
+    let mut previous = previous.lock();
+    match (previous.as_deref(), session_id) {
+        (None, None) => "absent",
+        (Some(_), None) => {
+            *previous = None;
+            "cleared"
+        }
+        (None, Some(next)) => {
+            *previous = Some(next.to_string());
+            "initial"
+        }
+        (Some(previous), Some(next)) if previous == next => "same",
+        (Some(_), Some(next)) => {
+            *previous = Some(next.to_string());
+            "changed"
+        }
+    }
+}
 
 #[cfg(target_os = "windows")]
 fn capsule_diag_run_id() -> &'static str {
@@ -2045,7 +2069,7 @@ impl TauriCapsuleWindow {
             #[cfg(target_os = "windows")]
             capsule_diag_record(
                 "P5",
-                &["H1", "H2", "H4", "H5"],
+                &["H1", "H2", "H4", "H5", "H7"],
                 "capsule_payload_apply",
                 match action {
                     CapsuleWindowAction::PreserveFallbackCard => "preserve_fallback",
@@ -2058,6 +2082,9 @@ impl TauriCapsuleWindow {
                     "fallback_card_active": fallback_card_active,
                     "window_visible_before": window.is_visible().unwrap_or(false),
                     "session_present": payload.session_id.is_some(),
+                    "session_transition": capsule_diag_payload_session_transition(
+                        payload.session_id.as_deref(),
+                    ),
                     "message_present": payload.message.is_some(),
                     "warming": payload.warming,
                     "selection_polish": payload.selection_polish,
