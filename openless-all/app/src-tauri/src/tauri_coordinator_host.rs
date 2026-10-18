@@ -99,6 +99,19 @@ fn capsule_diag_mode_name(mode: CapsuleDisplayMode) -> &'static str {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn capsule_diag_state_name(state: CapsuleState) -> &'static str {
+    match state {
+        CapsuleState::Idle => "idle",
+        CapsuleState::Recording => "recording",
+        CapsuleState::Transcribing => "transcribing",
+        CapsuleState::Polishing => "polishing",
+        CapsuleState::Done => "done",
+        CapsuleState::Cancelled => "cancelled",
+        CapsuleState::Error => "error",
+    }
+}
+
 const HIT_TEST_MODE_CAPSULE: u8 = 0;
 const HIT_TEST_MODE_CARD: u8 = 1;
 
@@ -2029,6 +2042,27 @@ impl TauriCapsuleWindow {
 
         {
             let action = capsule_window_action(fallback_card_active, show_capsule, payload.state);
+            #[cfg(target_os = "windows")]
+            capsule_diag_record(
+                "P5",
+                &["H1", "H2", "H4", "H5"],
+                "capsule_payload_apply",
+                match action {
+                    CapsuleWindowAction::PreserveFallbackCard => "preserve_fallback",
+                    CapsuleWindowAction::ShowCapsule => "show",
+                    CapsuleWindowAction::HideCapsule => "hide",
+                },
+                serde_json::json!({
+                    "state": capsule_diag_state_name(payload.state),
+                    "show_capsule": show_capsule,
+                    "fallback_card_active": fallback_card_active,
+                    "window_visible_before": window.is_visible().unwrap_or(false),
+                    "session_present": payload.session_id.is_some(),
+                    "message_present": payload.message.is_some(),
+                    "warming": payload.warming,
+                    "selection_polish": payload.selection_polish,
+                }),
+            );
             if action == CapsuleWindowAction::PreserveFallbackCard {
                 log::debug!(
                     "[capsule] native window update deferred: insert fallback card owns the window"
@@ -2342,8 +2376,32 @@ impl TauriCoordinatorHost {
 
     pub(crate) fn emit_capsule_state_to_capsule(&self, payload: &crate::types::CapsulePayload) {
         if let Some(app) = self.app() {
-            let _ = app.emit_to("capsule", "capsule:state", payload);
-            let _ = app.emit_to("capsule-rail", "capsule:state", payload);
+            let capsule_emit_ok = app.emit_to("capsule", "capsule:state", payload).is_ok();
+            let rail_emit_ok = app
+                .emit_to("capsule-rail", "capsule:state", payload)
+                .is_ok();
+            #[cfg(target_os = "windows")]
+            capsule_diag_record(
+                "P6",
+                &["H3", "H4"],
+                "capsule_state_emit",
+                if capsule_emit_ok && rail_emit_ok {
+                    "emitted"
+                } else {
+                    "emit_failed"
+                },
+                serde_json::json!({
+                    "state": capsule_diag_state_name(payload.state),
+                    "capsule_emit_ok": capsule_emit_ok,
+                    "rail_emit_ok": rail_emit_ok,
+                    "session_present": payload.session_id.is_some(),
+                    "message_present": payload.message.is_some(),
+                    "warming": payload.warming,
+                    "selection_polish": payload.selection_polish,
+                }),
+            );
+            #[cfg(not(target_os = "windows"))]
+            let _ = (capsule_emit_ok, rail_emit_ok);
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             for prefix in [
                 crate::capsule_mirrors::CAPSULE_MIRROR_PREFIX,
