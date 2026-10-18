@@ -96,8 +96,8 @@ await scrolling.drain();
 scrolling.session.loadMoreCandidates();
 scrolling.session.loadMoreCandidates();
 await scrolling.drain();
-assert.deepEqual(Array.from(scrolling.state.get('candidates')), ['甲', '乙', '丙', '丁']);
-assert.equal(scrolling.operations.filter(([op, arg]) => op === 'key' && arg === '65366').length, 1);
+assert.deepEqual(Array.from(scrolling.state.get('candidates')), ['甲', '乙', '丙', '丁', '戊']);
+assert.equal(scrolling.operations.filter(([op, arg]) => op === 'key' && arg === '65366').length, 2);
 scrolling.session.loadMoreCandidates();
 await scrolling.drain();
 assert.deepEqual(Array.from(scrolling.state.get('candidates')), ['甲', '乙', '丙', '丁', '戊']);
@@ -109,6 +109,18 @@ scrolling.session.selectCandidate(3, '丁');
 await scrolling.drain();
 assert(scrolling.operations.some(([op, arg]) => op === 'select_absolute' && arg === '3@3'));
 assert.deepEqual(scrolling.inserted, ['丁']);
+
+const batchPages = Array.from({ length: 20 }, (_, page) => ['词' + page * 2, '词' + (page * 2 + 1)]);
+const batch = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {}, async () => [], batchPages);
+await batch.drain();
+batch.session.loadMoreCandidates();
+await batch.drain();
+assert.equal(batch.state.get('candidates').length, 32, 'one batch must fill the initial candidate pool');
+assert.equal(batch.state.get('hasNext'), true);
+batch.session.loadMoreCandidates();
+await batch.drain();
+assert.equal(batch.state.get('candidates').length, 40);
+assert.equal(batch.state.get('hasNext'), false);
 
 const oldCandidate = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {}, async () => [],
   [['甲', '乙'], ['丙', '丁']]);

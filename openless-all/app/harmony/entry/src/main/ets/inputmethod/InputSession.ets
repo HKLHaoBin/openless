@@ -64,6 +64,7 @@ class InputSession {
   private candidatePageSize: number = 0;
   private candidateBase: number = 0;
   private candidatesAppended: boolean = false;
+  private candidateTimer: number = -1;
   private cloudChoices: string[] = [];
   private cloudSettings?: preferences.Preferences;
 
@@ -356,6 +357,7 @@ class InputSession {
   }
 
   private resetCandidates(): void {
+    clearTimeout(this.candidateTimer);
     this.cloudEpoch++;
     clearTimeout(this.cloudTimer);
     this.cloudChoices = [];
@@ -372,6 +374,7 @@ class InputSession {
   }
 
   private publish(state: RimeState): void {
+    clearTimeout(this.candidateTimer);
     this.cloudEpoch++;
     clearTimeout(this.cloudTimer);
     this.cloudChoices = [];
@@ -390,6 +393,9 @@ class InputSession {
     imeStorage.setOrCreate('commitNeedsConfirmation', false);
     imeStorage.setOrCreate('status', 'Rime 拼音');
     this.scheduleCloud();
+    if (state.input && !state.commit && state.hasNext && state.page === 0) {
+      this.candidateTimer = setTimeout(() => { this.loadMoreCandidates(); }, 60);
+    }
   }
 
   private scheduleCloud(): void {
@@ -398,7 +404,7 @@ class InputSession {
     const generation = this.generation;
     const epoch = this.cloudEpoch;
     const input = this.encoding;
-    if (context && input.length >= 2 && imeStorage.get<number>('page') === 0 && !imeStorage.get<boolean>('pendingCommit') &&
+    if (context && input.length >= 2 && this.candidateBase === 0 && !imeStorage.get<boolean>('pendingCommit') &&
       imeStorage.get<boolean>('chinese') &&
       imeStorage.get<boolean>('cloudEnabled') && imeStorage.get<boolean>('editorVerified') &&
       !imeStorage.get<boolean>('password') && /^[a-z']{2,64}$/.test(input)) {
@@ -531,22 +537,26 @@ class InputSession {
     imeStorage.setOrCreate('candidatesLoading', true);
     this.queue = this.queue.then(async (): Promise<void> => {
       if (generation !== this.generation || epoch !== this.queueEpoch || revision !== this.candidateRevision) return;
-      const oldPage = imeStorage.get<number>('page') ?? 0;
-      const state = await rimeRequest('key', session, '65366');
-      if (generation !== this.generation || epoch !== this.queueEpoch || session !== this.rimeSession) return;
-      if (state.input !== input || state.commit || state.page !== oldPage + 1) {
-        this.publish(state);
-        return;
-      }
+      const target = this.localCandidates.length < 32 ? 32 : this.localCandidates.length + 32;
       this.cloudEpoch++;
       clearTimeout(this.cloudTimer);
-      this.candidateRevision = state.revision;
-      this.localCandidates = this.localCandidates.concat(state.candidates);
-      this.candidatesAppended = true;
-      this.cloudChoices = this.cloudChoices.filter((text: string) => !this.localCandidates.includes(text));
-      imeStorage.setOrCreate('candidates', this.localCandidates.slice(0, 1).concat(this.cloudChoices).concat(this.localCandidates.slice(1)));
-      imeStorage.setOrCreate('page', state.page);
-      imeStorage.setOrCreate('hasNext', state.hasNext);
+      while (this.localCandidates.length < target && imeStorage.get<boolean>('hasNext')) {
+        const oldPage = imeStorage.get<number>('page') ?? 0;
+        const state = await rimeRequest('key', session, '65366');
+        if (generation !== this.generation || epoch !== this.queueEpoch || session !== this.rimeSession) return;
+        if (state.input !== input || state.commit || state.page !== oldPage + 1) {
+          this.publish(state);
+          return;
+        }
+        this.candidateRevision = state.revision;
+        this.localCandidates = this.localCandidates.concat(state.candidates);
+        this.candidatesAppended = true;
+        this.cloudChoices = this.cloudChoices.filter((text: string) => !this.localCandidates.includes(text));
+        imeStorage.setOrCreate('candidates', this.localCandidates.slice(0, 1).concat(this.cloudChoices).concat(this.localCandidates.slice(1)));
+        imeStorage.setOrCreate('page', state.page);
+        imeStorage.setOrCreate('hasNext', state.hasNext && state.candidates.length > 0);
+      }
+      this.scheduleCloud();
     }).catch(() => {
       if (generation === this.generation && epoch === this.queueEpoch) imeStorage.setOrCreate('status', '候选加载失败，可再次滑动重试');
     }).finally(() => {
