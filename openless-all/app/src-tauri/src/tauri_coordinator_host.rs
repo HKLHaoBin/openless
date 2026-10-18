@@ -26,116 +26,6 @@ static CAPSULE_FIRST_SHOW_LOGGED: AtomicBool = AtomicBool::new(false);
 static CAPSULE_NO_ACTIVATE_FALLBACK_WARNED: AtomicBool = AtomicBool::new(false);
 static CAPSULE_WINDOW_MISSING_LOGGED: AtomicBool = AtomicBool::new(false);
 
-#[cfg(target_os = "windows")]
-const CAPSULE_DIAG_SESSION_ID: &str = "capsule-display-1224-20261018";
-#[cfg(target_os = "windows")]
-static CAPSULE_DIAG_RUN_ID: OnceLock<String> = OnceLock::new();
-#[cfg(target_os = "windows")]
-static CAPSULE_DIAG_SYNC_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-#[cfg(target_os = "windows")]
-static CAPSULE_DIAG_LAST_PAYLOAD_SESSION: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-
-#[cfg(target_os = "windows")]
-fn capsule_diag_payload_session_transition(session_id: Option<&str>) -> &'static str {
-    let previous = CAPSULE_DIAG_LAST_PAYLOAD_SESSION.get_or_init(|| Mutex::new(None));
-    let mut previous = previous.lock();
-    match (previous.as_deref(), session_id) {
-        (None, None) => "absent",
-        (Some(_), None) => {
-            *previous = None;
-            "cleared"
-        }
-        (None, Some(next)) => {
-            *previous = Some(next.to_string());
-            "initial"
-        }
-        (Some(previous), Some(next)) if previous == next => "same",
-        (Some(_), Some(next)) => {
-            *previous = Some(next.to_string());
-            "changed"
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn capsule_diag_run_id() -> &'static str {
-    CAPSULE_DIAG_RUN_ID
-        .get_or_init(|| uuid::Uuid::new_v4().simple().to_string())
-        .as_str()
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn capsule_diag_record(
-    probe_id: &'static str,
-    hypothesis_ids: &[&'static str],
-    event: &'static str,
-    outcome: &'static str,
-    safe: serde_json::Value,
-) {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis().to_string())
-        .unwrap_or_else(|_| "0".to_string());
-    let record = serde_json::json!({
-        "schema": "diagnosing-bugs.v1",
-        "session_id": CAPSULE_DIAG_SESSION_ID,
-        "run_id": capsule_diag_run_id(),
-        "probe_id": probe_id,
-        "hypothesis_ids": hypothesis_ids,
-        "event": event,
-        "outcome": outcome,
-        "safe": safe,
-        "ts": ts,
-    });
-    log::info!("[DEBUG-CAPSULE-DIAG-1224] {record}");
-}
-
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn capsule_diag_record(
-    _probe_id: &'static str,
-    _hypothesis_ids: &[&'static str],
-    _event: &'static str,
-    _outcome: &'static str,
-    _safe: serde_json::Value,
-) {
-}
-
-#[cfg(target_os = "windows")]
-fn capsule_diag_monitor_key(monitor: Option<crate::capsule_mirrors::MonitorRect>) -> u64 {
-    monitor
-        .map(|monitor| {
-            if monitor.identity != 0 {
-                monitor.identity
-            } else {
-                crate::capsule_mirrors::topology_signature(&[monitor])
-            }
-        })
-        .unwrap_or(0)
-}
-
-#[cfg(target_os = "windows")]
-fn capsule_diag_mode_name(mode: CapsuleDisplayMode) -> &'static str {
-    match mode {
-        CapsuleDisplayMode::CursorScreen => "cursorScreen",
-        CapsuleDisplayMode::PrimaryScreen => "primaryScreen",
-        CapsuleDisplayMode::ForegroundWindowScreen => "foregroundWindowScreen",
-        CapsuleDisplayMode::AllScreens => "allScreens",
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn capsule_diag_state_name(state: CapsuleState) -> &'static str {
-    match state {
-        CapsuleState::Idle => "idle",
-        CapsuleState::Recording => "recording",
-        CapsuleState::Transcribing => "transcribing",
-        CapsuleState::Polishing => "polishing",
-        CapsuleState::Done => "done",
-        CapsuleState::Cancelled => "cancelled",
-        CapsuleState::Error => "error",
-    }
-}
-
 const HIT_TEST_MODE_CAPSULE: u8 = 0;
 const HIT_TEST_MODE_CARD: u8 = 1;
 
@@ -1027,54 +917,19 @@ impl CapsuleWindowState {
         monitor: Option<crate::capsule_mirrors::MonitorRect>,
     ) {
         if self.foreground_target_matches_session(session_id) {
-            capsule_diag_record(
-                "P4",
-                &["H4"],
-                "target_capture",
-                "skipped_existing",
-                serde_json::json!({
-                    "monitor_present": self.foreground_monitor.lock().is_some(),
-                }),
-            );
             return;
         }
-        let replaced_existing = self.foreground_session_id.lock().is_some();
-        let monitor_present = monitor.is_some();
         *self.foreground_session_id.lock() = Some(session_id.to_string());
         self.foreground_target_captured
             .store(true, Ordering::SeqCst);
         *self.foreground_monitor.lock() = monitor;
-        capsule_diag_record(
-            "P4",
-            &["H4"],
-            "target_capture",
-            "captured",
-            serde_json::json!({
-                "monitor_present": monitor_present,
-                "replaced_existing": replaced_existing,
-            }),
-        );
     }
 
     fn clear_foreground_target(&self) {
-        let was_captured = self.foreground_target_captured.load(Ordering::SeqCst);
-        let monitor_present = self.foreground_monitor.lock().is_some();
         self.foreground_target_captured
             .store(false, Ordering::SeqCst);
         *self.foreground_session_id.lock() = None;
         *self.foreground_monitor.lock() = None;
-        if was_captured || monitor_present {
-            capsule_diag_record(
-                "P4",
-                &["H4"],
-                "target_clear",
-                "cleared",
-                serde_json::json!({
-                    "was_captured": was_captured,
-                    "monitor_present": monitor_present,
-                }),
-            );
-        }
     }
 
     fn foreground_monitor(&self) -> Option<crate::capsule_mirrors::MonitorRect> {
@@ -1386,19 +1241,14 @@ impl TauriCapsuleWindow {
     /// Apply the user's display-target choice on the native main thread.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(crate) fn sync_capsule_mirrors(&self) {
-        #[cfg(target_os = "windows")]
-        let sync_sequence = CAPSULE_DIAG_SYNC_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
-        #[cfg(not(target_os = "windows"))]
-        let sync_sequence = 0;
-        let _ =
-            self.run_on_main_thread(move |capsule| capsule.apply_capsule_mirrors(sync_sequence));
+        let _ = self.run_on_main_thread(|capsule| capsule.apply_capsule_mirrors());
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     pub(crate) fn sync_capsule_mirrors(&self) {}
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    fn apply_capsule_mirrors(&self, sync_sequence: u64) {
+    fn apply_capsule_mirrors(&self) {
         use crate::capsule_mirrors::{
             capsule_placement, ensure_capsule_mirror, mirror_label, mirror_targets,
             CAPSULE_MIRROR_PREFIX, MAX_CAPSULE_MIRRORS, RAIL_MIRROR_PREFIX,
@@ -1433,12 +1283,6 @@ impl TauriCapsuleWindow {
             CapsuleStyle::Classic => 1,
             CapsuleStyle::Typeless => 2,
         };
-        let app = self.app.clone();
-        let targets = if visible {
-            mirror_targets(mode, &monitors, primary_rect)
-        } else {
-            Vec::new()
-        };
         let fingerprint = crate::capsule_mirrors::mirror_fingerprint(
             visible,
             passthrough,
@@ -1448,34 +1292,16 @@ impl TauriCapsuleWindow {
             primary_rect,
             &monitors,
         );
-        let fingerprint_same = *self.state.mirror_fingerprint.lock() == Some(fingerprint);
-        #[cfg(target_os = "windows")]
-        capsule_diag_record(
-            "P1",
-            &["H1", "H3", "H5"],
-            "mirror_sync_snapshot",
-            if fingerprint_same {
-                "skipped"
-            } else {
-                "applied"
-            },
-            serde_json::json!({
-                "sync_sequence": sync_sequence,
-                "mode": capsule_diag_mode_name(mode),
-                "visible": visible,
-                "monitor_count": monitors.len(),
-                "primary_key": capsule_diag_monitor_key(Some(primary_rect)),
-                "target_count": targets.len(),
-                "target_keys": targets
-                    .iter()
-                    .map(|monitor| capsule_diag_monitor_key(Some(*monitor)))
-                    .collect::<Vec<_>>(),
-                "fingerprint_same": fingerprint_same,
-            }),
-        );
-        if fingerprint_same {
+        if *self.state.mirror_fingerprint.lock() == Some(fingerprint) {
             return;
         }
+
+        let app = self.app.clone();
+        let targets = if visible {
+            mirror_targets(mode, &monitors, primary_rect)
+        } else {
+            Vec::new()
+        };
 
         // Reuse a bounded set of webviews. Recreating WKWebViews on every
         // recording/mode switch accumulates native resources on macOS.
@@ -1498,27 +1324,10 @@ impl TauriCapsuleWindow {
                     } else {
                         window.hide().map_err(|error| error.to_string())
                     };
-                    let hide_failed = if let Err(error) = hide_result {
+                    if let Err(error) = hide_result {
                         log::warn!("[capsule] mirror hide failed: {error}");
                         complete = false;
-                        true
-                    } else {
-                        false
-                    };
-                    #[cfg(target_os = "windows")]
-                    capsule_diag_record(
-                        "P3",
-                        &["H2", "H3", "H6"],
-                        "mirror_window",
-                        if hide_failed { "hide_failed" } else { "hidden" },
-                        serde_json::json!({
-                            "action": "hide",
-                            "kind": if prefix == CAPSULE_MIRROR_PREFIX { "capsule" } else { "rail" },
-                            "index": index,
-                            "visible_after": window.is_visible().unwrap_or(false),
-                            "sync_sequence": sync_sequence,
-                        }),
-                    );
+                    }
                     // Stop hidden shader/exit animations; future live frames are
                     // routed only to visible mirror windows.
                     if let Some(payload) = &hidden_payload {
@@ -1538,25 +1347,10 @@ impl TauriCapsuleWindow {
         // Only a fully applied sync may be cached; failed operations are retried.
         for (index, monitor) in targets.iter().enumerate() {
             let capsule_label = mirror_label(CAPSULE_MIRROR_PREFIX, index);
-            let existed = app.get_webview_window(&capsule_label).is_some();
             let mirror = match ensure_capsule_mirror(&app, &capsule_label) {
                 Ok(window) => window,
                 Err(error) => {
                     log::warn!("[capsule] mirror {capsule_label} create failed: {error}");
-                    #[cfg(target_os = "windows")]
-                    capsule_diag_record(
-                        "P3",
-                        &["H2", "H3"],
-                        "mirror_window",
-                        "create_failed",
-                        serde_json::json!({
-                            "action": "show",
-                            "kind": "capsule",
-                            "index": index,
-                            "existed": existed,
-                            "sync_sequence": sync_sequence,
-                        }),
-                    );
                     complete = false;
                     continue;
                 }
@@ -1604,28 +1398,7 @@ impl TauriCapsuleWindow {
                 complete = false;
             }
             show_capsule_window_for_recording(&app, &mirror, false);
-            let visible_after_show = mirror.is_visible().unwrap_or(false);
-            #[cfg(target_os = "windows")]
-            capsule_diag_record(
-                "P3",
-                &["H2", "H3"],
-                "mirror_window",
-                if visible_after_show {
-                    "shown"
-                } else {
-                    "show_failed"
-                },
-                serde_json::json!({
-                    "action": "show",
-                    "kind": "capsule",
-                    "index": index,
-                    "existed": existed,
-                    "monitor_key": capsule_diag_monitor_key(Some(*monitor)),
-                    "visible_after": visible_after_show,
-                    "sync_sequence": sync_sequence,
-                }),
-            );
-            if !visible_after_show {
+            if !mirror.is_visible().unwrap_or(false) {
                 log::warn!("[capsule] mirror {capsule_label} remained hidden after show");
                 complete = false;
             }
@@ -1633,10 +1406,9 @@ impl TauriCapsuleWindow {
             #[cfg(target_os = "windows")]
             {
                 let rail_label = mirror_label(RAIL_MIRROR_PREFIX, index);
-                let rail_existed = app.get_webview_window(&rail_label).is_some();
                 match crate::capsule_mirrors::ensure_rail_mirror(&app, &rail_label) {
                     Ok(rail) => {
-                        let position_result = position_rail_for_capsule(
+                        if let Err(error) = position_rail_for_capsule(
                             &app,
                             &rail,
                             tauri::PhysicalPosition::new(x, y),
@@ -1644,48 +1416,13 @@ impl TauriCapsuleWindow {
                             style,
                             translation_active,
                             transcript_visible,
-                        );
-                        let position_failed = position_result.is_err();
-                        if let Err(error) = position_result {
+                        ) {
                             log::warn!("[capsule] mirror {rail_label} positioning failed: {error}");
                             complete = false;
                         }
-                        capsule_diag_record(
-                            "P3",
-                            &["H2", "H3"],
-                            "mirror_window",
-                            if position_failed {
-                                "position_failed"
-                            } else {
-                                "positioned"
-                            },
-                            serde_json::json!({
-                                "action": "position",
-                                "kind": "rail",
-                                "index": index,
-                                "existed": rail_existed,
-                                "monitor_key": capsule_diag_monitor_key(Some(*monitor)),
-                                "visible_after": rail.is_visible().unwrap_or(false),
-                                "transcript_visible": transcript_visible,
-                                "sync_sequence": sync_sequence,
-                            }),
-                        );
                     }
                     Err(error) => {
                         log::warn!("[capsule] mirror {rail_label} create failed: {error}");
-                        capsule_diag_record(
-                            "P3",
-                            &["H2", "H3"],
-                            "mirror_window",
-                            "create_failed",
-                            serde_json::json!({
-                                "action": "position",
-                                "kind": "rail",
-                                "index": index,
-                                "existed": rail_existed,
-                                "sync_sequence": sync_sequence,
-                            }),
-                        );
                         complete = false;
                     }
                 }
@@ -1904,49 +1641,10 @@ impl TauriCapsuleWindow {
             return;
         };
         let layout_changed = self.state.layout.lock().as_ref() != Some(&next);
-        #[cfg(target_os = "windows")]
-        let placement_monitor = if layout_changed {
-            self.target_monitor_for_layout(window)
-        } else {
-            None
-        };
-        #[cfg(target_os = "windows")]
-        if layout_changed {
-            let target_matches_snapshot = placement_monitor.is_some_and(|monitor| {
-                monitor.left == next.monitor_x
-                    && monitor.top == next.monitor_y
-                    && monitor.right - monitor.left == next.monitor_width as i32
-                    && monitor.bottom - monitor.top == next.monitor_height as i32
-                    && monitor.work_left == next.work_x
-                    && monitor.work_top == next.work_y
-                    && monitor.work_right - monitor.work_left == next.work_width as i32
-                    && monitor.work_bottom - monitor.work_top == next.work_height as i32
-                    && monitor.scale.to_bits() == next.scale_bits
-            });
-            capsule_diag_record(
-                "P2",
-                &["H1", "H4", "H5"],
-                "layout_target_pair",
-                if target_matches_snapshot {
-                    "matched"
-                } else {
-                    "diverged"
-                },
-                serde_json::json!({
-                    "mode": capsule_diag_mode_name(self.state.cached_display_mode()),
-                    "snapshot_left": next.monitor_x,
-                    "snapshot_top": next.monitor_y,
-                    "snapshot_width": next.monitor_width,
-                    "snapshot_height": next.monitor_height,
-                    "placement_key": capsule_diag_monitor_key(placement_monitor),
-                    "target_matches_snapshot": target_matches_snapshot,
-                    "foreground_target_captured": self.state.foreground_target_captured.load(Ordering::SeqCst),
-                }),
-            );
-        }
         if layout_changed {
             #[cfg(target_os = "windows")]
-            let position_result = placement_monitor
+            let position_result = self
+                .target_monitor_for_layout(window)
                 .map(|monitor| {
                     crate::position_capsule_on_monitor(window, translation_active, style, monitor)
                 })
@@ -2102,32 +1800,6 @@ impl TauriCapsuleWindow {
 
         {
             let action = capsule_window_action(fallback_card_active, show_capsule, payload.state);
-            #[cfg(target_os = "windows")]
-            capsule_diag_record(
-                "P5",
-                &["H1", "H2", "H4", "H5", "H7"],
-                "capsule_payload_apply",
-                match action {
-                    CapsuleWindowAction::PreserveFallbackCard => "preserve_fallback",
-                    CapsuleWindowAction::ShowCapsule => "show",
-                    CapsuleWindowAction::HideCapsule => "hide",
-                },
-                serde_json::json!({
-                    "state": capsule_diag_state_name(payload.state),
-                    "show_capsule": show_capsule,
-                    "fallback_card_active": fallback_card_active,
-                    "window_visible_before": window_visible_before,
-                    "native_presentation": action == CapsuleWindowAction::ShowCapsule
-                        && should_present_capsule_window(window_visible_before),
-                    "session_present": payload.session_id.is_some(),
-                    "session_transition": capsule_diag_payload_session_transition(
-                        payload.session_id.as_deref(),
-                    ),
-                    "message_present": payload.message.is_some(),
-                    "warming": payload.warming,
-                    "selection_polish": payload.selection_polish,
-                }),
-            );
             if action == CapsuleWindowAction::PreserveFallbackCard {
                 log::debug!(
                     "[capsule] native window update deferred: insert fallback card owns the window"
