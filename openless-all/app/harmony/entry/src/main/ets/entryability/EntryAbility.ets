@@ -4,12 +4,12 @@ import { window } from '@kit.ArkUI';
 export default class EntryAbility extends UIAbility {
   private clipboardRequested: boolean = false;
 
-  onCreate(want: Want): void {
-    this.clipboardRequested = want.parameters?.requestClipboardPermission === true;
+  onCreate(want?: Want): void {
+    this.clipboardRequested = want?.parameters?.requestClipboardPermission === true;
   }
 
-  onNewWant(want: Want): void {
-    this.clipboardRequested = want.parameters?.requestClipboardPermission === true;
+  onNewWant(want?: Want): void {
+    this.clipboardRequested = want?.parameters?.requestClipboardPermission === true;
   }
 
   onForeground(): void {
