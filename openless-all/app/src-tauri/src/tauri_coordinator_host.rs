@@ -720,13 +720,13 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
     false
 }
 
-/// Hide a mirror window through both Tauri and Win32 on Windows.
+/// Hide a capsule mirror through both Tauri and Win32 on Windows.
 ///
 /// Mirrors are shown with a native `SetWindowPos(..., SWP_SHOWWINDOW)` path.
 /// Use the matching native hide path so a successful Tauri hide cannot leave
 /// the topmost mirror HWND visible after the target set becomes empty.
 #[cfg(target_os = "windows")]
-fn hide_mirror_window<R: tauri::Runtime>(
+fn hide_capsule_mirror<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> Result<(), &'static str> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -765,7 +765,7 @@ fn hide_mirror_window<R: tauri::Runtime>(
 }
 
 #[cfg(not(target_os = "windows"))]
-fn hide_mirror_window<R: tauri::Runtime>(
+fn hide_capsule_mirror<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> Result<(), &'static str> {
     window.hide().map_err(|_| "tauri_hide_failed")
@@ -1434,8 +1434,11 @@ impl TauriCapsuleWindow {
         for index in targets.len()..MAX_CAPSULE_MIRRORS {
             for prefix in [CAPSULE_MIRROR_PREFIX, RAIL_MIRROR_PREFIX] {
                 if let Some(window) = app.get_webview_window(&mirror_label(prefix, index)) {
-                    let hide_result =
-                        hide_mirror_window(&window).map_err(|error| error.to_string());
+                    let hide_result = if prefix == CAPSULE_MIRROR_PREFIX {
+                        hide_capsule_mirror(&window).map_err(|error| error.to_string())
+                    } else {
+                        window.hide().map_err(|error| error.to_string())
+                    };
                     let hide_failed = if let Err(error) = hide_result {
                         log::warn!("[capsule] mirror hide failed: {error}");
                         complete = false;
