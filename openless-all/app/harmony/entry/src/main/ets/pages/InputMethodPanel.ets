@@ -388,17 +388,35 @@ struct InputMethodPanel {
   @Builder
   layoutOptions() {
     Column({ space: 14 }) {
-      Row({ space: 10 }) {
-        ForEach(['standard', 'split', 'floating'], (mode: string, index: number) => {
-          Button(['标准键盘', '分离键盘', '悬浮键盘'][index], { type: ButtonType.Normal })
-            .height(48).layoutWeight(1).fontSize(15).borderRadius(999).padding(0).pressMotion().focusable(false)
-            .fontColor(this.keyboardLayout === mode ? '#FFFFFF' : INK)
-            .backgroundColor(this.keyboardLayout === mode ? ACCENT : KEY)
-            .onClick(() => { this.layer = 0; this.expanded = false; this.utility = 0; panelLayout.select(mode); })
-        }, (mode: string) => mode)
+      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
+        this.menuTile($r('app.media.ime_standard'), '标准键盘', () => { this.selectLayout('standard'); })
+        this.menuTile($r('app.media.ime_split'), '分离键盘', () => { this.selectLayout('split'); })
+        this.menuTile($r('app.media.ime_floating'), '悬浮键盘', () => { this.selectLayout('floating'); })
       }.width('100%')
+      Text('当前：' + (this.keyboardLayout === 'split' ? '分离键盘' : this.keyboardLayout === 'floating' ? '悬浮键盘' : '标准键盘'))
+        .fontSize(13).fontColor(INK)
       Text('悬浮键盘可拖动顶部横条，使用 − / + 调整大小').fontSize(13).fontColor(MUTED)
     }.width('100%').padding({ top: 8, bottom: 8 })
+  }
+
+  private selectLayout(mode: string): void {
+    this.layer = 0; this.expanded = false; this.utility = 0; panelLayout.select(mode);
+  }
+
+  private menuTileSize(): number {
+    return Math.min(92, Math.max(64, (this.keyboardWidth - 72) / 4));
+  }
+
+  @Builder
+  menuTile(icon: Resource, label: string, action: () => void, available: boolean = true) {
+    Button({ type: ButtonType.Normal }) {
+      Column({ space: 9 }) {
+        Image(icon).width(28).height(28).objectFit(ImageFit.Contain)
+        Text(label).fontSize(13).fontColor(INK).maxLines(1)
+      }.width('100%').height('100%').justifyContent(FlexAlign.Center)
+    }.width(this.menuTileSize()).height(this.menuTileSize()).margin(5).padding(4)
+      .backgroundColor(KEY).borderRadius(12).pressMotion().focusable(false).enabled(available)
+      .accessibilityText(label).onClick(() => { action(); })
   }
 
   @Builder
@@ -528,41 +546,30 @@ struct InputMethodPanel {
       Scroll() {
         Column({ space: 10 }) {
           if (this.toolTab === 0) {
-            Row({ space: 10 }) {
-              Button('语音输入').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
-                .enabled(this.connected && this.editorVerified && !this.password && !this.pendingCommit && this.voicePhase === 'idle')
-                .onClick(() => { this.voice(); })
-              Button('表情').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
-                .onClick(() => { this.utility = 2; })
-            }.width('100%')
-            Row({ space: 10 }) {
-              Button('应用设置').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
-                .onClick(() => { inputSession.settings(); })
-              Button('收起键盘').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
-                .onClick(() => { inputSession.hide(); })
-            }.width('100%')
+            Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
+              this.menuTile($r('app.media.ime_microphone'), '语音输入', () => { this.voice(); },
+                this.connected && this.editorVerified && !this.password && !this.pendingCommit && this.voicePhase === 'idle')
+              this.menuTile($r('app.media.ime_emoji'), '表情', () => { this.utility = 2; })
+              this.menuTile($r('app.media.ime_settings'), '应用设置', () => { inputSession.settings(); })
+              this.menuTile($r('app.media.ime_chevron_down'), '收起键盘', () => { inputSession.hide(); })
+            }.width('100%').padding(12).backgroundColor(FUNCTION_KEY).borderRadius(20)
           } else if (this.toolTab === 1) {
-            Row({ space: 10 }) {
-              Button('中文拼音').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
-                .enabled(this.connected && !this.password && !this.pendingCommit).onClick(() => { this.inputMode(true); })
-              Button('英文输入').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
-                .enabled(this.connected && !this.pendingCommit).onClick(() => { this.inputMode(false); })
+            Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
+              this.menuTile($r('app.media.ime_language'), '中文拼音', () => { this.inputMode(true); },
+                this.connected && !this.password && !this.pendingCommit)
+              this.menuTile($r('app.media.ime_language'), '英文输入', () => { this.inputMode(false); },
+                this.connected && !this.pendingCommit)
+              this.menuTile($r('app.media.ime_number'), '数字键盘', () => { this.layer = 1; this.utility = 0; })
+              this.menuTile($r('app.media.ime_symbols'), '符号键盘', () => { this.layer = 2; this.symbolPage = 0; this.utility = 0; })
+              this.menuTile($r('app.media.ime_switch'), '切换输入法', () => { this.inputMethods(); })
+              this.menuTile($r('app.media.ime_cloud'), '云候选', () => { inputSession.toggleCloudCandidates(); })
+              this.menuTile($r('app.media.ime_dictionary'), '自动更新', () => { inputSession.togglePublicDictionaryUpdates(); })
+              this.menuTile($r('app.media.ime_refresh'), '检查词库', () => { inputSession.checkPublicDictionary(); })
             }.width('100%')
-            Row({ space: 10 }) {
-              Button('数字键盘').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
-                .onClick(() => { this.layer = 1; this.utility = 0; })
-              Button('符号键盘').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
-                .onClick(() => { this.layer = 2; this.symbolPage = 0; this.utility = 0; })
-            }.width('100%')
-            Button('切换系统输入法').width('100%').height(40).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
-              .onClick(() => { this.inputMethods(); })
-            Button(this.cloudEnabled ? '云候选：开（Google）' : '云候选：关').width('100%').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
-              .onClick(() => { inputSession.toggleCloudCandidates(); })
+            Text(this.cloudEnabled ? '云候选：开（Google）' : '云候选：关').fontSize(13).fontColor(INK).width('100%')
             Text('开启后将当前拼音发送给 Google，密码框不查询').fontSize(12).fontColor(MUTED).width('100%')
-            Button(this.dictionaryAuto ? '公共词库自动更新：开' : '公共词库自动更新：关').width('100%').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
-              .onClick(() => { inputSession.togglePublicDictionaryUpdates(); })
-            Button(this.dictionaryStatus).width('100%').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
-              .onClick(() => { inputSession.checkPublicDictionary(); })
+            Text(this.dictionaryAuto ? '公共词库自动更新：开' : '公共词库自动更新：关').fontSize(13).fontColor(INK).width('100%')
+            Text(this.dictionaryStatus).fontSize(12).fontColor(MUTED).width('100%')
             Text('公共词库每周检查更新；学习词仅保存在本机').fontSize(12).fontColor(MUTED).width('100%')
           } else {
             this.layoutOptions()
@@ -570,6 +577,11 @@ struct InputMethodPanel {
         }.width('100%').padding({ top: 4, bottom: 8 })
       }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
     }.width('100%').layoutWeight(1)
+      .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 48 })
+        .onActionEnd((event: GestureEvent) => {
+          if (Math.abs(event.offsetX) < 48 || Math.abs(event.offsetX) <= Math.abs(event.offsetY) * 1.3) return;
+          this.toolTab = Math.max(0, Math.min(2, this.toolTab + (event.offsetX < 0 ? 1 : -1)));
+        }))
   }
 
   @Builder
