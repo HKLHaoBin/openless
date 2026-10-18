@@ -703,11 +703,6 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
     set_capsule_window_topmost_no_activate(window, true)
 }
 
-#[cfg(target_os = "windows")]
-fn reassert_capsule_window_topmost<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
-    set_capsule_window_topmost_no_activate(window, false)
-}
-
 #[cfg(target_os = "macos")]
 fn show_capsule_window_no_activate<R: tauri::Runtime>(
     app: &AppHandle<R>,
@@ -2169,10 +2164,10 @@ impl TauriCapsuleWindow {
                     if should_present_capsule_window(window_visible_before) {
                         show_capsule_window_for_recording(&self.app, &window, reassert_spaces);
                     } else {
-                        #[cfg(target_os = "windows")]
-                        {
-                            reassert_capsule_window_topmost(&window);
-                        }
+                        // On Windows, leave an already visible WebView untouched. Reasserting
+                        // HWND_TOPMOST for every streaming update can make the compositor replay
+                        // its entrance animation, which users perceive as the capsule reopening
+                        // for each character.
                         #[cfg(not(target_os = "windows"))]
                         {
                             show_capsule_window_for_recording(&self.app, &window, reassert_spaces);
