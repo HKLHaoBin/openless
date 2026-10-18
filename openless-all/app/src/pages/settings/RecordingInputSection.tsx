@@ -31,7 +31,7 @@ import { SelectLite } from '../../components/ui/SelectLite';
 import { Card, Collapsible } from '../_atoms';
 import { SectionTitle, SettingRow, Toggle, inputStyle, segmentedTrackStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
-import { detectOS } from '../../components/WindowChrome';
+import { detectOS, type OS } from '../../components/WindowChrome';
 
 /** Selectable silence durations (seconds) for "auto-stop after silence"; see issue #860. */
 const silenceAutoStopOptions = [1, 1.5, 2, 3, 4, 5];
@@ -51,9 +51,9 @@ async function autostartDisable(): Promise<void> {
   await invoke('plugin:autostart|disable');
 }
 
-export function RecordingInputSection() {
+export function RecordingInputSection({ forcedOs }: { forcedOs?: OS } = {}) {
   const { t } = useTranslation();
-  const os = detectOS();
+  const os = forcedOs ?? detectOS();
   const { prefs, capability, updatePrefs: savePrefs, refresh } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(
     getCachedPlatformCapabilities,
@@ -181,6 +181,12 @@ export function RecordingInputSection() {
   const showDesktopStartup = showDesktopHotkey;
   const effectivePasteShortcut =
     os === 'win' && prefs.pasteShortcut === 'shiftInsert' ? 'ctrlV' : prefs.pasteShortcut;
+  const effectiveCapsuleDisplayMode =
+    os === 'win' ||
+    prefs.capsuleDisplayMode === 'cursorScreen' ||
+    prefs.capsuleDisplayMode === 'allScreens'
+      ? (prefs.capsuleDisplayMode ?? 'cursorScreen')
+      : 'cursorScreen';
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
@@ -464,10 +470,31 @@ export function RecordingInputSection() {
             desc={t('settings.recording.capsuleDisplayModeDesc')}
           >
             <SelectLite
-              value={prefs.capsuleDisplayMode ?? 'cursorScreen'}
-              onChange={(next) => savePrefs({ ...prefs, capsuleDisplayMode: next as 'cursorScreen' | 'allScreens' })}
+              value={effectiveCapsuleDisplayMode}
+              onChange={(next) =>
+                savePrefs({
+                  ...prefs,
+                  capsuleDisplayMode: next as
+                    'cursorScreen' | 'primaryScreen' | 'foregroundWindowScreen' | 'allScreens',
+                })
+              }
               options={[
-                { value: 'cursorScreen', label: t('settings.recording.capsuleDisplayCursorScreen') },
+                {
+                  value: 'cursorScreen',
+                  label: t('settings.recording.capsuleDisplayCursorScreen'),
+                },
+                ...(os === 'win'
+                  ? [
+                      {
+                        value: 'primaryScreen',
+                        label: t('settings.recording.capsuleDisplayPrimaryScreen'),
+                      },
+                      {
+                        value: 'foregroundWindowScreen',
+                        label: t('settings.recording.capsuleDisplayForegroundWindowScreen'),
+                      },
+                    ]
+                  : []),
                 { value: 'allScreens', label: t('settings.recording.capsuleDisplayAllScreens') },
               ]}
               ariaLabel={t('settings.recording.capsuleDisplayModeLabel')}

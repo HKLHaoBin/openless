@@ -4,6 +4,7 @@
 //! credentials, provider connections, device permissions and local paths stay on the device.
 
 use crate::shared_types::{
+    CapsuleDisplayMode as SyncCapsuleDisplayMode,
     ChineseScriptPreference as SyncChineseScriptPreference,
     OutputLanguagePreference as SyncOutputLanguagePreference, ThemeMode as SyncThemeMode,
 };
@@ -118,6 +119,8 @@ pub struct SyncPreferences {
     pub theme_mode: Option<SyncThemeMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capsule_style: Option<SyncCapsuleStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capsule_display_mode: Option<SyncCapsuleDisplayMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_mode: Option<PolishMode>,
     #[serde(skip_serializing_if = "Option::is_none")]

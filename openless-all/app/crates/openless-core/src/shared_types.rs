@@ -2630,12 +2630,15 @@ pub enum CapsuleState {
 }
 
 /// Which attached displays show the recording capsule. Old preferences default
-/// to one display, so upgrading never opts users into extra windows/renderers.
+/// to the cursor display, so upgrading never changes existing placement or opts users
+/// into extra windows/renderers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum CapsuleDisplayMode {
     #[default]
     CursorScreen,
+    PrimaryScreen,
+    ForegroundWindowScreen,
     AllScreens,
 }
 

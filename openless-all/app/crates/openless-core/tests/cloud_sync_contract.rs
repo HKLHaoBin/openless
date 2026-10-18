@@ -1,4 +1,6 @@
-use openless_core::{BackendConfig, BackendDependencies, BackendErrorCode, OpenLessBackend};
+use openless_core::{
+    BackendConfig, BackendDependencies, BackendErrorCode, CapsuleDisplayMode, OpenLessBackend,
+};
 use openless_core::{
     CloudSyncUiPreferences, CredentialKey, CredentialNamespace, CredentialStore,
     InMemoryCredentialStore, MarketplaceConfig, SecretValue, StylePackKind, SyncFontScale,
@@ -244,6 +246,7 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
     preferences.remote_input_pin = "never-sync-device-pin".into();
     preferences.active_asr_provider = "source-only-asr".into();
     preferences.theme_mode = openless_core::shared_types::ThemeMode::Dark;
+    preferences.capsule_display_mode = CapsuleDisplayMode::ForegroundWindowScreen;
     preferences.stable_transcription_enabled = true;
     source
         .backend
@@ -270,6 +273,10 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
     let uploaded = server.state.lock().unwrap().payload.clone().unwrap();
     let serialized = uploaded.to_string();
     assert_eq!(uploaded["preferences"]["stableTranscriptionEnabled"], true);
+    assert_eq!(
+        uploaded["preferences"]["capsuleDisplayMode"],
+        "foregroundWindowScreen"
+    );
     for private in [
         "cloud-fixture-token",
         "never-sync-asr-secret",
@@ -324,6 +331,10 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
         preferences.theme_mode,
         openless_core::shared_types::ThemeMode::Dark
     );
+    assert_eq!(
+        preferences.capsule_display_mode,
+        CapsuleDisplayMode::ForegroundWindowScreen
+    );
     assert_eq!(preferences.active_style_pack_id, "custom.cloud");
     assert_eq!(preferences.active_asr_provider, "target-asr");
     assert_eq!(preferences.coding_agent_permission_mode, "plan");
@@ -355,6 +366,7 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
     let legacy_target = Device::new(&server).await;
     let mut local = legacy_target.backend.get_preferences();
     local.stable_transcription_enabled = true;
+    local.capsule_display_mode = CapsuleDisplayMode::PrimaryScreen;
     legacy_target
         .backend
         .repositories()
@@ -365,12 +377,20 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
         .as_object_mut()
         .unwrap()
         .remove("stableTranscriptionEnabled");
+    server.state.lock().unwrap().payload.as_mut().unwrap()["preferences"]
+        .as_object_mut()
+        .unwrap()
+        .remove("capsuleDisplayMode");
     legacy_target.backend.cloud_sync_restore().await.unwrap();
     assert!(
         legacy_target
             .backend
             .get_preferences()
             .stable_transcription_enabled
+    );
+    assert_eq!(
+        legacy_target.backend.get_preferences().capsule_display_mode,
+        CapsuleDisplayMode::PrimaryScreen
     );
 }
 

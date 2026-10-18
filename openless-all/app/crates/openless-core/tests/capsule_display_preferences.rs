@@ -11,9 +11,14 @@ fn legacy_preferences_default_to_cursor_display_without_extra_windows() {
 }
 
 #[test]
-fn both_display_modes_survive_save_reload_and_unrelated_preference_changes() {
+fn all_display_modes_survive_save_reload_and_unrelated_preference_changes() {
     for (mode, wire) in [
         (CapsuleDisplayMode::CursorScreen, "cursorScreen"),
+        (CapsuleDisplayMode::PrimaryScreen, "primaryScreen"),
+        (
+            CapsuleDisplayMode::ForegroundWindowScreen,
+            "foregroundWindowScreen",
+        ),
         (CapsuleDisplayMode::AllScreens, "allScreens"),
     ] {
         let prefs = UserPreferences {

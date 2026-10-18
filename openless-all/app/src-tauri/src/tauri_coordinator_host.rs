@@ -728,7 +728,10 @@ struct CapsuleWindowState {
     hit_test_mode: AtomicU8,
     transcript_visible: AtomicBool,
     style: AtomicU8,
-    mirror_all_displays: AtomicBool,
+    display_mode: AtomicU8,
+    foreground_monitor: Mutex<Option<crate::capsule_mirrors::MonitorRect>>,
+    foreground_session_id: Mutex<Option<String>>,
+    foreground_target_captured: AtomicBool,
     fallback_card_visible: AtomicBool,
     fallback_presentation_id: AtomicU64,
     deferred_payload: Mutex<Option<CapsulePayload>>,
@@ -749,7 +752,10 @@ impl Default for CapsuleWindowState {
             hit_test_mode: AtomicU8::new(HIT_TEST_MODE_CAPSULE),
             transcript_visible: AtomicBool::new(false),
             style: AtomicU8::new(0),
-            mirror_all_displays: AtomicBool::new(false),
+            display_mode: AtomicU8::new(0),
+            foreground_monitor: Mutex::new(None),
+            foreground_session_id: Mutex::new(None),
+            foreground_target_captured: AtomicBool::new(false),
             fallback_card_visible: AtomicBool::new(false),
             fallback_presentation_id: AtomicU64::new(0),
             deferred_payload: Mutex::new(None),
@@ -762,16 +768,86 @@ impl Default for CapsuleWindowState {
     }
 }
 
+const DISPLAY_MODE_CURSOR_SCREEN: u8 = 0;
+const DISPLAY_MODE_PRIMARY_SCREEN: u8 = 1;
+const DISPLAY_MODE_FOREGROUND_WINDOW_SCREEN: u8 = 2;
+const DISPLAY_MODE_ALL_SCREENS: u8 = 3;
+
+fn normalized_display_mode(mode: CapsuleDisplayMode) -> CapsuleDisplayMode {
+    #[cfg(not(target_os = "windows"))]
+    if matches!(
+        mode,
+        CapsuleDisplayMode::PrimaryScreen | CapsuleDisplayMode::ForegroundWindowScreen
+    ) {
+        return CapsuleDisplayMode::CursorScreen;
+    }
+    mode
+}
+
+fn display_mode_tag(mode: CapsuleDisplayMode) -> u8 {
+    match mode {
+        CapsuleDisplayMode::CursorScreen => DISPLAY_MODE_CURSOR_SCREEN,
+        CapsuleDisplayMode::PrimaryScreen => DISPLAY_MODE_PRIMARY_SCREEN,
+        CapsuleDisplayMode::ForegroundWindowScreen => DISPLAY_MODE_FOREGROUND_WINDOW_SCREEN,
+        CapsuleDisplayMode::AllScreens => DISPLAY_MODE_ALL_SCREENS,
+    }
+}
+
+fn display_mode_from_tag(tag: u8) -> CapsuleDisplayMode {
+    match tag {
+        DISPLAY_MODE_PRIMARY_SCREEN => CapsuleDisplayMode::PrimaryScreen,
+        DISPLAY_MODE_FOREGROUND_WINDOW_SCREEN => CapsuleDisplayMode::ForegroundWindowScreen,
+        DISPLAY_MODE_ALL_SCREENS => CapsuleDisplayMode::AllScreens,
+        _ => CapsuleDisplayMode::CursorScreen,
+    }
+}
+
 impl CapsuleWindowState {
     fn cache_display_mode(&self, mode: CapsuleDisplayMode) {
-        let all = mode == CapsuleDisplayMode::AllScreens;
-        let changed = self.mirror_all_displays.swap(all, Ordering::SeqCst) != all;
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let mode = normalized_display_mode(mode);
+        let tag = display_mode_tag(mode);
+        let changed = self.display_mode.swap(tag, Ordering::SeqCst) != tag;
         if changed {
-            *self.mirror_fingerprint.lock() = None;
+            self.clear_foreground_target();
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            {
+                *self.mirror_fingerprint.lock() = None;
+            }
         }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        let _ = changed;
+    }
+
+    fn cached_display_mode(&self) -> CapsuleDisplayMode {
+        display_mode_from_tag(self.display_mode.load(Ordering::SeqCst))
+    }
+
+    fn foreground_target_matches_session(&self, session_id: &str) -> bool {
+        self.foreground_target_captured.load(Ordering::SeqCst)
+            && self.foreground_session_id.lock().as_deref() == Some(session_id)
+    }
+
+    fn begin_foreground_target_capture(
+        &self,
+        session_id: &str,
+        monitor: Option<crate::capsule_mirrors::MonitorRect>,
+    ) {
+        if self.foreground_target_matches_session(session_id) {
+            return;
+        }
+        *self.foreground_session_id.lock() = Some(session_id.to_string());
+        self.foreground_target_captured
+            .store(true, Ordering::SeqCst);
+        *self.foreground_monitor.lock() = monitor;
+    }
+
+    fn clear_foreground_target(&self) {
+        self.foreground_target_captured
+            .store(false, Ordering::SeqCst);
+        *self.foreground_session_id.lock() = None;
+        *self.foreground_monitor.lock() = None;
+    }
+
+    fn foreground_monitor(&self) -> Option<crate::capsule_mirrors::MonitorRect> {
+        *self.foreground_monitor.lock()
     }
 
     fn cache_style(&self, style: CapsuleStyle) {
@@ -837,11 +913,83 @@ impl CapsuleWindowState {
 pub(crate) struct TauriCapsuleWindow {
     app: AppHandle,
     state: Arc<CapsuleWindowState>,
+    qa_context: Arc<crate::qa_adapter::TauriQaHostContext>,
 }
 
 impl TauriCapsuleWindow {
     fn window(&self) -> Option<tauri::WebviewWindow> {
         self.app.get_webview_window("capsule")
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn target_monitor_for_layout(
+        &self,
+        window: &tauri::WebviewWindow,
+    ) -> Option<crate::capsule_mirrors::MonitorRect> {
+        #[cfg(target_os = "windows")]
+        {
+            return crate::capsule_mirrors::target_monitor_rect_for_mode(
+                window,
+                self.state.cached_display_mode(),
+                self.state.foreground_monitor(),
+            );
+        }
+        #[cfg(target_os = "macos")]
+        {
+            crate::capsule_mirrors::target_monitor_rect(window)
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn prepare_display_target(&self, payload: &CapsulePayload, window: &tauri::WebviewWindow) {
+        const NON_DICTATION_SESSION: &str = "__openless_non_dictation_foreground__";
+
+        if payload.selection_polish {
+            return;
+        }
+        match payload.state {
+            CapsuleState::Recording => {
+                if self.state.cached_display_mode() == CapsuleDisplayMode::ForegroundWindowScreen {
+                    let session_id = payload
+                        .session_id
+                        .as_deref()
+                        .unwrap_or(NON_DICTATION_SESSION);
+                    if !self.state.foreground_target_matches_session(session_id) {
+                        let raw_hwnd = self
+                            .qa_context
+                            .is_panel_visible()
+                            .then(|| self.qa_context.external_focus_target())
+                            .flatten()
+                            .or_else(crate::coordinator::capture_external_focus_target);
+                        let monitor = raw_hwnd.and_then(|hwnd| {
+                            crate::capsule_mirrors::monitor_rect_for_hwnd(window, hwnd)
+                        });
+                        self.state
+                            .begin_foreground_target_capture(session_id, monitor);
+                    }
+                }
+            }
+            // Keep Done/Cancelled/Error on the recording target for their visible terminal frame;
+            // Idle clears it after the terminal animation has been hidden.
+            CapsuleState::Idle => self.state.clear_foreground_target(),
+            CapsuleState::Done | CapsuleState::Cancelled | CapsuleState::Error => {}
+            CapsuleState::Transcribing | CapsuleState::Polishing => {}
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn prepare_display_target(&self, payload: &CapsulePayload, _window: &tauri::WebviewWindow) {
+        if !payload.selection_polish
+            && matches!(
+                payload.state,
+                CapsuleState::Idle
+                    | CapsuleState::Done
+                    | CapsuleState::Cancelled
+                    | CapsuleState::Error
+            )
+        {
+            self.state.clear_foreground_target();
+        }
     }
 
     fn rail_window(&self) -> Option<tauri::WebviewWindow> {
@@ -1004,7 +1152,7 @@ impl TauriCapsuleWindow {
         }
     }
 
-    /// Apply the user's cursor-only/all-displays choice on the native main thread.
+    /// Apply the user's display-target choice on the native main thread.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(crate) fn sync_capsule_mirrors(&self) {
         let _ = self.run_on_main_thread(|capsule| capsule.apply_capsule_mirrors());
@@ -1023,7 +1171,8 @@ impl TauriCapsuleWindow {
         let Some(primary) = self.window() else {
             return;
         };
-        let Some(primary_rect) = crate::capsule_mirrors::target_monitor_rect(&primary) else {
+        let mode = self.state.cached_display_mode();
+        let Some(primary_rect) = self.target_monitor_for_layout(&primary) else {
             return;
         };
         let monitors = crate::capsule_mirrors::all_monitor_rects(&primary);
@@ -1062,11 +1211,6 @@ impl TauriCapsuleWindow {
         }
 
         let app = self.app.clone();
-        let mode = if self.state.mirror_all_displays.load(Ordering::SeqCst) {
-            CapsuleDisplayMode::AllScreens
-        } else {
-            CapsuleDisplayMode::CursorScreen
-        };
         let targets = if visible {
             mirror_targets(mode, &monitors, primary_rect)
         } else {
@@ -1338,8 +1482,8 @@ impl TauriCapsuleWindow {
     ) -> Option<CapsuleLayoutState> {
         #[cfg(target_os = "windows")]
         {
-            // Use the same cursor display as placement, including mixed-DPI layouts.
-            if let Some(mon) = crate::capsule_mirrors::target_monitor_rect(window) {
+            // Use the same selected display as placement, including mixed-DPI layouts.
+            if let Some(mon) = self.target_monitor_for_layout(window) {
                 let monitors = crate::capsule_mirrors::all_monitor_rects(window);
                 return Some(CapsuleLayoutState {
                     translation_active,
@@ -1406,16 +1550,24 @@ impl TauriCapsuleWindow {
             return;
         };
         let layout_changed = self.state.layout.lock().as_ref() != Some(&next);
-        if layout_changed
-            && crate::position_capsule_bottom_center_with_style_and_transcript(
+        if layout_changed {
+            #[cfg(target_os = "windows")]
+            let position_result = self
+                .target_monitor_for_layout(window)
+                .map(|monitor| {
+                    crate::position_capsule_on_monitor(window, translation_active, style, monitor)
+                })
+                .unwrap_or(Ok(()));
+            #[cfg(not(target_os = "windows"))]
+            let position_result = crate::position_capsule_bottom_center_with_style_and_transcript(
                 window,
                 translation_active,
                 style,
                 self.state.transcript_visible.load(Ordering::SeqCst),
-            )
-            .is_ok()
-        {
-            *self.state.layout.lock() = Some(next);
+            );
+            if position_result.is_ok() {
+                *self.state.layout.lock() = Some(next);
+            }
         }
         #[cfg(target_os = "windows")]
         if self.state.capsule_visible.load(Ordering::SeqCst) {
@@ -1551,6 +1703,7 @@ impl TauriCapsuleWindow {
         let Some(window) = self.window() else {
             return;
         };
+        self.prepare_display_target(payload, &window);
         let fallback_card_active = self.state.defer_if_fallback_active(payload);
 
         {
@@ -1573,8 +1726,7 @@ impl TauriCapsuleWindow {
                 CapsuleWindowAction::PreserveFallbackCard => unreachable!(),
             }
 
-            if action == CapsuleWindowAction::ShowCapsule && !window.is_visible().unwrap_or(false)
-            {
+            if action == CapsuleWindowAction::ShowCapsule && !window.is_visible().unwrap_or(false) {
                 // The OS can move a hidden window (e.g. when a monitor is unplugged), so a
                 // placement cached while it was visible must not be reused on the next show.
                 self.invalidate_layout();
@@ -1610,6 +1762,12 @@ impl TauriCapsuleWindow {
                     }
                     hide_capsule_window_if_present();
                     let _ = self.hide();
+                    if matches!(
+                        payload.state,
+                        CapsuleState::Done | CapsuleState::Cancelled | CapsuleState::Error
+                    ) {
+                        self.state.clear_foreground_target();
+                    }
                 }
             }
         }
@@ -1625,13 +1783,18 @@ impl TauriCapsuleWindow {
 pub(crate) struct TauriCoordinatorHost {
     app: crate::core_adapters::AppHandleSlot,
     capsule: Arc<CapsuleWindowState>,
+    qa_context: Arc<crate::qa_adapter::TauriQaHostContext>,
 }
 
 impl TauriCoordinatorHost {
-    pub(crate) fn new(app: crate::core_adapters::AppHandleSlot) -> Self {
+    pub(crate) fn new(
+        app: crate::core_adapters::AppHandleSlot,
+        qa_context: Arc<crate::qa_adapter::TauriQaHostContext>,
+    ) -> Self {
         Self {
             app,
             capsule: Arc::new(CapsuleWindowState::default()),
+            qa_context,
         }
     }
 
@@ -1651,6 +1814,7 @@ impl TauriCoordinatorHost {
         self.app().map(|app| TauriCapsuleWindow {
             app,
             state: Arc::clone(&self.capsule),
+            qa_context: Arc::clone(&self.qa_context),
         })
     }
 
@@ -1951,9 +2115,14 @@ mod tests {
     #[test]
     fn display_mode_changes_invalidate_mirrors_without_changing_style() {
         let state = CapsuleWindowState::default();
-        assert!(!state.mirror_all_displays.load(Ordering::SeqCst));
+        assert_eq!(
+            state.cached_display_mode(),
+            CapsuleDisplayMode::CursorScreen
+        );
         for mode in [
             CapsuleDisplayMode::AllScreens,
+            CapsuleDisplayMode::PrimaryScreen,
+            CapsuleDisplayMode::ForegroundWindowScreen,
             CapsuleDisplayMode::CursorScreen,
         ] {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1961,14 +2130,49 @@ mod tests {
                 *state.mirror_fingerprint.lock() = Some(123);
             }
             state.cache_display_mode(mode);
+            #[cfg(target_os = "windows")]
+            assert_eq!(state.cached_display_mode(), mode);
+            #[cfg(not(target_os = "windows"))]
             assert_eq!(
-                state.mirror_all_displays.load(Ordering::SeqCst),
-                mode == CapsuleDisplayMode::AllScreens
+                state.cached_display_mode(),
+                if matches!(
+                    mode,
+                    CapsuleDisplayMode::PrimaryScreen | CapsuleDisplayMode::ForegroundWindowScreen
+                ) {
+                    CapsuleDisplayMode::CursorScreen
+                } else {
+                    mode
+                }
             );
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             assert!(state.mirror_fingerprint.lock().is_none());
             assert_eq!(state.cached_style(), CapsuleStyle::Siri);
         }
+    }
+
+    #[test]
+    fn foreground_target_capture_is_one_shot_until_session_reset() {
+        let state = CapsuleWindowState::default();
+        let monitor = crate::capsule_mirrors::MonitorRect {
+            left: -1920,
+            top: 0,
+            right: 0,
+            bottom: 1080,
+            work_left: -1920,
+            work_top: 0,
+            work_right: 0,
+            work_bottom: 1040,
+            scale: 1.0,
+            identity: 0,
+        };
+        state.begin_foreground_target_capture("session-a", Some(monitor));
+        state.begin_foreground_target_capture("session-a", None);
+        assert!(state.foreground_target_matches_session("session-a"));
+        assert!(!state.foreground_target_matches_session("session-b"));
+        assert!(state.foreground_target_captured.load(Ordering::SeqCst));
+        state.clear_foreground_target();
+        assert_eq!(state.foreground_monitor(), None);
+        assert!(!state.foreground_target_captured.load(Ordering::SeqCst));
     }
 
     #[test]

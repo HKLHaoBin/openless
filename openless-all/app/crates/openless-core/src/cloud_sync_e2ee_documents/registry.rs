@@ -907,7 +907,12 @@ pub fn validate_preference_value(field: &PreferenceField, value: &Value) -> Docu
     let choices: &[&str] = match field.key {
         "defaultMode" => &["raw", "light", "structured", "formal"],
         "capsuleStyle" => &["siri", "classic", "typeless"],
-        "capsuleDisplayMode" => &["cursorScreen", "allScreens"],
+        "capsuleDisplayMode" => &[
+            "cursorScreen",
+            "primaryScreen",
+            "foregroundWindowScreen",
+            "allScreens",
+        ],
         "pipelineMode" => &["traditional", "multimodal"],
         "chineseScriptPreference" => &["auto", "simplified", "traditional"],
         "outputLanguagePreference" => &["auto", "zhCn", "zhTw", "en", "ja", "ko"],

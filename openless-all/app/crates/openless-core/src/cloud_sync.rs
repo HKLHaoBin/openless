@@ -534,6 +534,7 @@ fn capture_preferences(
     SyncPreferences {
         theme_mode: Some(preferences.theme_mode),
         capsule_style: Some(preferences.capsule_style),
+        capsule_display_mode: Some(preferences.capsule_display_mode),
         default_mode: Some(preferences.default_mode),
         enabled_modes: Some(preferences.enabled_modes.clone()),
         active_style_pack_id: Some(preferences.active_style_pack_id.clone()),
@@ -561,6 +562,7 @@ fn apply_preferences(preferences: &mut UserPreferences, incoming: &SyncPreferenc
     apply!(
         theme_mode,
         capsule_style,
+        capsule_display_mode,
         default_mode,
         enabled_modes,
         active_style_pack_id,
