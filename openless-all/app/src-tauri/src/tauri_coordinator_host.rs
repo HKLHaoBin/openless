@@ -227,6 +227,7 @@ fn position_rail_for_capsule<R: tauri::Runtime>(
     translation_active: bool,
     visible: bool,
 ) -> tauri::Result<()> {
+    let rail_visible_before = rail.is_visible().unwrap_or(false);
     let Some(position) = capsule_transcript_rail_position(style, translation_active, visible)
     else {
         rail.hide()?;
@@ -238,9 +239,12 @@ fn position_rail_for_capsule<R: tauri::Runtime>(
         capsule_origin.x,
         capsule_origin.y + (position.top_offset * scale).round() as i32,
     ))?;
-    // The rail is a sibling overlay and must never steal focus from the
-    // application under the capsule, just like the main capsule HWND.
-    show_capsule_window_for_recording(app, rail, false);
+    // Positioning happens on every streaming frame, but presentation must happen only on a
+    // hidden-to-visible transition. Re-showing the dedicated rail for each transcript character
+    // restarts its WebView entrance animation even when the main capsule stays visible.
+    if should_present_capsule_window(rail_visible_before) {
+        show_capsule_window_for_recording(app, rail, false);
+    }
     Ok(())
 }
 
