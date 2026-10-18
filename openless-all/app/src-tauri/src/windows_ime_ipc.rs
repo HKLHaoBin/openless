@@ -228,11 +228,11 @@ mod windows_message {
         IME_CLIENT_WAIT_TIMEOUT, IME_QUERY_INTERVAL, IME_QUERY_SEND_TIMEOUT_MS,
         IME_SEND_TIMEOUT_MS, IME_SUBMIT_TIMEOUT, IME_WINDOW_RETRY_INTERVAL,
     };
+    use crate::issue1227_debug;
     use crate::windows_ime_protocol::{
         encode_query_payload, encode_submit_payload, ImeSubmitStatus, IME_COPYDATA_QUERY,
         IME_COPYDATA_SUBMIT, IME_MAX_SUBMIT_BYTES, OPENLESS_IME_MESSAGE_WINDOW_CLASS,
     };
-    use crate::issue1227_debug;
 
     const HWND_MESSAGE: isize = -3;
     const WM_COPYDATA: u32 = 0x004A;
@@ -396,6 +396,7 @@ mod windows_message {
                             match status {
                                 ImeSubmitStatus::Committed => "committed",
                                 ImeSubmitStatus::Rejected => "rejected",
+                                ImeSubmitStatus::Failed => "failed",
                             },
                             serde_json::json!({"reply_nonzero": reply != 0}),
                         );
