@@ -11,6 +11,8 @@ class InputPanelState {
   chinese: boolean = true;
   preedit: string = '';
   candidates: string[] = [];
+  candidatesLoading: boolean = false;
+  toolbarActions: string[] = ['layout', 'emoji', 'voice', 'settings'];
   rimeReady: boolean = false;
   page: number = 0;
   hasNext: boolean = false;
@@ -59,6 +61,9 @@ class InputSession {
   private cloudInFlight: boolean = false;
   private feedbackTimer: number = -1;
   private localCandidates: string[] = [];
+  private candidatePageSize: number = 0;
+  private candidateBase: number = 0;
+  private candidatesAppended: boolean = false;
   private cloudChoices: string[] = [];
   private cloudSettings?: preferences.Preferences;
 
@@ -77,7 +82,14 @@ class InputSession {
       this.cloudSettings = settings;
       const enabled = await settings.get('enabled', false);
       const publicUpdates = await settings.get('public_updates', true);
+      const toolbar = await settings.get('toolbar_actions', 'layout,emoji,voice,settings');
       if (generation === this.generation) {
+        if (typeof toolbar === 'string') {
+          const actions = toolbar.split(',');
+          if (actions.length === 4 && actions.every((action: string) => this.toolbarActionAllowed(action))) {
+            imeStorage.setOrCreate('toolbarActions', actions);
+          }
+        }
         imeStorage.setOrCreate('cloudEnabled', enabled === true);
         imeStorage.setOrCreate('dictionaryAuto', publicUpdates === true);
         if (imeStorage.get<boolean>('rimeReady')) this.checkPublicDictionary(false);
@@ -348,6 +360,10 @@ class InputSession {
     clearTimeout(this.cloudTimer);
     this.cloudChoices = [];
     this.localCandidates = [];
+    this.candidatePageSize = 0;
+    this.candidateBase = 0;
+    this.candidatesAppended = false;
+    imeStorage.setOrCreate('candidatesLoading', false);
     this.encoding = '';
     imeStorage.setOrCreate('preedit', '');
     imeStorage.setOrCreate('candidates', [] as string[]);
@@ -360,6 +376,9 @@ class InputSession {
     clearTimeout(this.cloudTimer);
     this.cloudChoices = [];
     this.localCandidates = state.candidates;
+    if (state.page === 0 && state.candidates.length > 0) this.candidatePageSize = state.candidates.length;
+    this.candidateBase = state.page * this.candidatePageSize;
+    this.candidatesAppended = false;
     this.candidateRevision = state.revision;
     this.encoding = state.input;
     imeStorage.setOrCreate('preedit', state.preedit || state.input);
@@ -432,6 +451,21 @@ class InputSession {
     if (enabled) this.checkPublicDictionary(false);
   }
 
+  private toolbarActionAllowed(action: string): boolean {
+    return ['layout', 'emoji', 'voice', 'settings', 'symbols', 'numbers', 'language', 'inputMethods'].includes(action);
+  }
+
+  setToolbarAction(slot: number, action: string): void {
+    const settings = this.cloudSettings;
+    if (!settings || slot < 0 || slot > 3 || !Number.isInteger(slot) || !this.toolbarActionAllowed(action)) return;
+    const actions = (imeStorage.get<string[]>('toolbarActions') || ['layout', 'emoji', 'voice', 'settings']).slice();
+    actions[slot] = action;
+    imeStorage.setOrCreate('toolbarActions', actions);
+    settings.put('toolbar_actions', actions.join(',')).then(() => settings.flush()).catch(() => {
+      imeStorage.setOrCreate('status', '快捷入口保存失败，请重试');
+    });
+  }
+
   private rimeOperation(operation: string, argument: string, feedback: boolean = false): void {
     const generation = this.generation;
     const epoch = this.queueEpoch;
@@ -476,12 +510,48 @@ class InputSession {
   }
 
   selectCandidate(index: number, expectedText: string = ''): void {
+    if (imeStorage.get<boolean>('candidatesLoading')) return;
     const displayed = imeStorage.get<string[]>('candidates') || [];
     const text = expectedText || displayed[index];
     if (text === undefined || !displayed.includes(text)) return;
     const local = this.localCandidates.indexOf(text);
-    if (local >= 0) this.rimeOperation('select', local.toString() + '@' + this.candidateRevision.toString());
+    if (local >= 0) this.rimeOperation(this.candidatesAppended ? 'select_absolute' : 'select',
+      (this.candidatesAppended ? this.candidateBase + local : local).toString() + '@' + this.candidateRevision.toString());
     else if (this.cloudChoices.includes(text)) this.rimeOperation('external', this.candidateRevision.toString() + '@' + text);
+  }
+
+  loadMoreCandidates(): void {
+    if (!this.client || !this.rimeSession || !this.encoding || !imeStorage.get<boolean>('hasNext') ||
+      imeStorage.get<boolean>('pendingCommit') || imeStorage.get<boolean>('candidatesLoading')) return;
+    const generation = this.generation;
+    const epoch = this.queueEpoch;
+    const revision = this.candidateRevision;
+    const input = this.encoding;
+    const session = this.rimeSession;
+    imeStorage.setOrCreate('candidatesLoading', true);
+    this.queue = this.queue.then(async (): Promise<void> => {
+      if (generation !== this.generation || epoch !== this.queueEpoch || revision !== this.candidateRevision) return;
+      const oldPage = imeStorage.get<number>('page') ?? 0;
+      const state = await rimeRequest('key', session, '65366');
+      if (generation !== this.generation || epoch !== this.queueEpoch || session !== this.rimeSession) return;
+      if (state.input !== input || state.commit || state.page !== oldPage + 1) {
+        this.publish(state);
+        return;
+      }
+      this.cloudEpoch++;
+      clearTimeout(this.cloudTimer);
+      this.candidateRevision = state.revision;
+      this.localCandidates = this.localCandidates.concat(state.candidates);
+      this.candidatesAppended = true;
+      this.cloudChoices = this.cloudChoices.filter((text: string) => !this.localCandidates.includes(text));
+      imeStorage.setOrCreate('candidates', this.localCandidates.slice(0, 1).concat(this.cloudChoices).concat(this.localCandidates.slice(1)));
+      imeStorage.setOrCreate('page', state.page);
+      imeStorage.setOrCreate('hasNext', state.hasNext);
+    }).catch(() => {
+      if (generation === this.generation && epoch === this.queueEpoch) imeStorage.setOrCreate('status', '候选加载失败，可再次滑动重试');
+    }).finally(() => {
+      if (generation === this.generation && epoch === this.queueEpoch) imeStorage.setOrCreate('candidatesLoading', false);
+    });
   }
   space(): void { this.rimeOperation('space', ''); }
   page(next: boolean): void { this.rimeOperation('key', next ? '65366' : '65365'); }
