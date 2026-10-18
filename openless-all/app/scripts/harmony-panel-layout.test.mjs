@@ -55,7 +55,7 @@ function adaptiveGeometry(h) {
   const width = h.state.get('keyboardWidth');
   assert.equal(width, (split ? 12 : 10) * keyWidth + (split ? 10 : 9) * gap);
   assert.ok(Math.abs(width + 12 - h.panel.width / h.screen.densityPixels) < 0.01, 'keys must fill the panel width without outer blank bands');
-  assert.ok(size <= keyWidth + 0.01, 'narrow keys must not remain tall rectangles');
+  if (h.state.get('keyboardLayout') === 'floating') assert.ok(size <= keyWidth + 0.01);
   assert.ok(size >= 12);
   const rows = h.state.get('showNumberRow') ? 5 : 4;
   const fitted = rows * size + (rows - 1) * 7 + 66 + (h.state.get('keyboardLayout') === 'floating' ? 26 : 0);
@@ -65,6 +65,7 @@ function adaptiveGeometry(h) {
 adaptiveGeometry(h);
 assert.equal(h.state.get('keyboardLayout'), 'standard');
 assert.equal(h.state.get('showNumberRow'), true);
+const standardHeight = h.panel.height;
 const initialResizes = h.panel.resizes;
 await Promise.all([h.layout.refresh(), h.layout.refresh(), h.layout.refresh()]);
 assert.equal(h.panel.resizes, initialResizes, 'native resize notifications must not cause another resize');
@@ -72,6 +73,7 @@ h.layout.select('split');
 await h.layout.queue;
 assert.equal(h.state.get('keyboardLayout'), 'split');
 assert.equal(h.values.get('mode'), 'split');
+assert.equal(h.panel.height, standardHeight);
 adaptiveGeometry(h);
 h.layout.select('floating');
 await h.layout.queue;
@@ -107,6 +109,14 @@ assert.equal(h.panel.flag, 0);
 assert.equal(h.state.get('showNumberRow'), false);
 assert.ok(h.state.get('keyHeight') * 4 + 18 + 66 <= h.panel.height / h.screen.densityPixels);
 
+const landscapeHeight = h.panel.height;
+h.layout.select('split');
+await h.layout.queue;
+adaptiveGeometry(h);
+assert.equal(h.panel.height, landscapeHeight);
+h.layout.select('standard');
+await h.layout.queue;
+
 // A native mode failure keeps the previous working mode and stored preference.
 h.panel.failFloating = true;
 h.layout.select('floating');
@@ -114,6 +124,15 @@ await h.layout.queue;
 assert.equal(h.state.get('keyboardLayout'), 'standard');
 assert.equal(h.values.get('mode'), 'standard');
 assert.match(h.state.get('status'), /切换失败/);
+
+const narrow = await host();
+Object.assign(narrow.screen, { width: 720, height: 1600 });
+await narrow.layout.refresh();
+const narrowHeight = narrow.panel.height;
+narrow.layout.select('split');
+await narrow.layout.queue;
+adaptiveGeometry(narrow);
+assert.equal(narrow.panel.height, narrowHeight);
 
 const invalid = await host({ mode: 'unknown', scale: Infinity, x: -20, y: 99 });
 assert.equal(invalid.state.get('keyboardLayout'), 'standard');

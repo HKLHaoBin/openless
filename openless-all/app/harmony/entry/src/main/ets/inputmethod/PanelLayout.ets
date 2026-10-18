@@ -56,7 +56,7 @@ class PanelLayout {
     if (this.geometry === geometry) return;
     this.geometry = '';
     // Keep all five rows visible in landscape as well as portrait.
-    const requestedHeight = floating ? Math.round(304 * this.scale) : this.mode === 'split' ? 368 : 328;
+    const requestedHeight = floating ? Math.round(304 * this.scale) : 328;
     const maxPanelVp = Math.min(requestedHeight, Math.floor(screen.height * 0.65 / density));
     const showNumberRow = !floating && maxPanelVp >= 300;
     const rows = showNumberRow ? 5 : 4;
@@ -69,7 +69,7 @@ class PanelLayout {
     // this deliberately produces wider keys instead of a taller keyboard.
     const keyboardWidth = this.width / density - 12;
     const keyWidth = (keyboardWidth - gaps * gap) / columns;
-    const keyHeight = Math.max(12, Math.floor(Math.min(keyWidth,
+    const keyHeight = Math.max(12, Math.floor(Math.min(floating ? keyWidth : maxPanelVp,
       (maxPanelVp - 66 - (floating ? 26 : 0) - (rows - 1) * 7) / rows)));
     const fittedHeight = rows * keyHeight + (rows - 1) * 7 + 66 + (floating ? 26 : 0);
     this.height = Math.round(Math.min(maxPanelVp, fittedHeight) * density);
