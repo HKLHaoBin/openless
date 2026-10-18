@@ -45,6 +45,7 @@ struct InputMethodPanel {
   @State layer: number = 0;
   @State utility: number = 0;
   @State toolTab: number = 0;
+  @State toolPosition: number = 0;
   @State expanded: boolean = false;
   @State symbolPage: number = 0;
   @State previewId: string = '';
@@ -56,7 +57,7 @@ struct InputMethodPanel {
   @Styles
   keySurface() {
     .borderRadius(10)
-    .shadow({ radius: 0.5, color: KEY_SHADOW, offsetX: 0, offsetY: 1 })
+    .shadow({ radius: 1.25, color: KEY_SHADOW, offsetX: 0, offsetY: 2 })
   }
 
   @Styles
@@ -206,7 +207,7 @@ struct InputMethodPanel {
 
   private openTools(tab: number): void {
     if (this.utility === 1 && this.toolTab === tab) this.utility = 0;
-    else { this.toolTab = tab; this.utility = 1; this.expanded = false; }
+    else { this.toolTab = tab; this.toolPosition = tab; this.utility = 1; this.expanded = false; }
   }
 
   private inputMode(chinese: boolean): void {
@@ -226,7 +227,11 @@ struct InputMethodPanel {
   @Builder
   keyboardToolbar() {
     Row({ space: 6 }) {
-      this.toolbarButton($r('app.media.ime_tools'), '输入法工具', () => { this.openTools(0); })
+      Button({ type: ButtonType.Normal }) {
+        Image($r('app.media.ime_tools')).width(25).height(25)
+      }.width(38).height(34).padding(0).borderRadius(999)
+        .backgroundColor(Color.Transparent).pressMotion().focusable(false)
+        .accessibilityText('输入法工具').onClick(() => { this.openTools(0); })
       this.toolbarButton($r('app.media.ime_keyboard'), '键盘布局', () => { this.openTools(2); })
       this.toolbarButton($r('app.media.ime_emoji'), '表情', () => { this.utility = this.utility === 2 ? 0 : 2; })
       Button({ type: ButtonType.Normal }) {
@@ -261,7 +266,7 @@ struct InputMethodPanel {
     Row({ space: 4 }) {
       Button({ type: ButtonType.Normal }) {
         Image($r('app.media.ime_tools')).width(25).height(25)
-      }.width(38).height(32).padding(0).borderRadius(12)
+      }.width(38).height(34).padding(0).borderRadius(999)
         .backgroundColor(Color.Transparent).pressMotion().focusable(false)
         .accessibilityText('输入法工具').onClick(() => { this.openTools(0); })
       Scroll() {
@@ -418,6 +423,7 @@ struct InputMethodPanel {
       }.width('100%').height('100%').justifyContent(FlexAlign.Center)
     }.width(this.menuTileSize()).height(this.menuTileSize()).margin(5).padding(4)
       .backgroundColor(KEY).borderRadius(12).pressMotion().focusable(false).enabled(available)
+      .shadow({ radius: 1.25, color: KEY_SHADOW, offsetX: 0, offsetY: 2 })
       .accessibilityText(label).onClick(() => { action(); })
   }
 
@@ -522,25 +528,33 @@ struct InputMethodPanel {
     Row() {
       Button({ type: ButtonType.Normal }) {
         Image($r('app.media.ime_chevron_down')).width(22).height(22).rotate({ angle: 90 })
-      }.width(34).height(34).borderRadius(999).padding(0)
+      }.width(38).height(34).borderRadius(999).padding(0)
         .backgroundColor(KEY).pressMotion().focusable(false).accessibilityText('返回键盘')
         .onClick(() => { this.utility = 0; })
       Blank().layoutWeight(1)
-      Row({ space: 6 }) {
-        ForEach(['常用功能', '输入方式', '键盘模式'], (label: string, index: number) => {
-          Button(label, { type: ButtonType.Normal }).height(34)
-            .width(Math.min(112, (this.keyboardWidth - 108) / 3)).fontSize(14)
-            .fontWeight(this.toolTab === index ? FontWeight.Medium : FontWeight.Regular)
-            .fontColor(this.toolTab === index ? INK : MUTED)
-            .backgroundColor(this.toolTab === index ? KEY : Color.Transparent)
-            .borderRadius(999).padding(0).pressMotion().focusable(false)
-            .accessibilityText(label).onClick(() => { this.toolSwiper.changeIndex(index, true); })
-        }, (label: string) => label)
-      }.justifyContent(FlexAlign.Center).padding({ left: 4, right: 4 })
-        .backgroundColor(FUNCTION_KEY).borderRadius(999)
+      Stack({ alignContent: Alignment.Start }) {
+        Row() {
+          Blank().width(this.toolTabWidth()).height(28).backgroundColor(KEY).borderRadius(999)
+            .translate({ x: this.toolPosition * (this.toolTabWidth() + 6) })
+        }.width('100%').height(34).padding({ left: 4, right: 4 })
+        Row({ space: 6 }) {
+          ForEach(['常用功能', '输入方式', '键盘模式'], (label: string, index: number) => {
+            Button(label, { type: ButtonType.Normal }).height(34).width(this.toolTabWidth()).fontSize(14)
+              .fontWeight(this.toolTab === index ? FontWeight.Medium : FontWeight.Regular)
+              .fontColor(this.toolTab === index ? INK : MUTED).backgroundColor(Color.Transparent)
+              .borderRadius(999).padding(0).pressMotion().focusable(false)
+              .accessibilityText(label).onClick(() => { this.toolSwiper.changeIndex(index, true); })
+          }, (label: string) => label)
+        }.padding({ left: 4, right: 4 })
+      }.width(this.toolTabWidth() * 3 + 20).height(34).backgroundColor(FUNCTION_KEY).borderRadius(999)
+        .shadow({ radius: 1.25, color: KEY_SHADOW, offsetX: 0, offsetY: 2 })
       Blank().layoutWeight(1)
-      Blank().width(34)
+      Blank().width(38)
     }.width('100%').height(34)
+  }
+
+  private toolTabWidth(): number {
+    return Math.min(112, (this.keyboardWidth - 108) / 3);
   }
 
   @Builder
@@ -590,6 +604,10 @@ struct InputMethodPanel {
       this.toolPage(2)
     }.width('100%').layoutWeight(1).index(this.toolTab).indicator(false).loop(false)
       .duration(220).curve(Curve.EaseOut).onChange((index: number) => { this.toolTab = index; })
+      .onContentDidScroll((_selected: number, index: number, position: number, _length: number) => {
+        this.toolPosition = Math.max(0, Math.min(2, index - position));
+      })
+      .onAnimationEnd((index: number) => { this.toolPosition = index; })
   }
 
   @Builder
