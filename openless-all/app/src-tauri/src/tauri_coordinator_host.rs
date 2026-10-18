@@ -707,6 +707,57 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
     false
 }
 
+/// Hide a capsule mirror through both Tauri and Win32 on Windows.
+///
+/// Mirrors are shown with a native `SetWindowPos(..., SWP_SHOWWINDOW)` path.
+/// Use the matching native hide path so a successful Tauri hide cannot leave
+/// the topmost mirror HWND visible after the target set becomes empty.
+#[cfg(target_os = "windows")]
+fn hide_capsule_mirror<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> Result<(), &'static str> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, ShowWindow, HWND_NOTOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, SW_HIDE,
+    };
+
+    window.hide().map_err(|_| "tauri_hide_failed")?;
+    let handle = window
+        .window_handle()
+        .map_err(|_| "win32_handle_unavailable")?;
+    let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+        return Err("non_win32_handle");
+    };
+    let hwnd = HWND(raw.hwnd.get() as *mut _);
+    if hwnd.0.is_null() {
+        return Err("null_win32_handle");
+    }
+
+    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
+        )
+    }
+    .map_err(|_| "win32_hide_failed")?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_capsule_mirror<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> Result<(), &'static str> {
+    window.hide().map_err(|_| "tauri_hide_failed")
+}
+
 #[cfg(target_os = "windows")]
 fn hide_capsule_window_if_present() {
     use std::iter::once;
@@ -1370,7 +1421,12 @@ impl TauriCapsuleWindow {
         for index in targets.len()..MAX_CAPSULE_MIRRORS {
             for prefix in [CAPSULE_MIRROR_PREFIX, RAIL_MIRROR_PREFIX] {
                 if let Some(window) = app.get_webview_window(&mirror_label(prefix, index)) {
-                    let hide_failed = if let Err(error) = window.hide() {
+                    let hide_result = if prefix == CAPSULE_MIRROR_PREFIX {
+                        hide_capsule_mirror(&window).map_err(|error| error.to_string())
+                    } else {
+                        window.hide().map_err(|error| error.to_string())
+                    };
+                    let hide_failed = if let Err(error) = hide_result {
                         log::warn!("[capsule] mirror hide failed: {error}");
                         complete = false;
                         true
@@ -1380,7 +1436,7 @@ impl TauriCapsuleWindow {
                     #[cfg(target_os = "windows")]
                     capsule_diag_record(
                         "P3",
-                        &["H2", "H3"],
+                        &["H2", "H3", "H6"],
                         "mirror_window",
                         if hide_failed { "hide_failed" } else { "hidden" },
                         serde_json::json!({
