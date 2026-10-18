@@ -630,10 +630,9 @@ pub(crate) fn show_capsule_window_for_recording<R: tauri::Runtime>(
 }
 
 #[cfg(target_os = "windows")]
-fn show_capsule_window_no_activate<R: tauri::Runtime>(
-    _app: &AppHandle<R>,
+fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
-    _reassert_spaces: bool,
+    show: bool,
 ) -> bool {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
@@ -644,12 +643,14 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
 
     let Ok(handle) = window.window_handle() else {
         log::warn!(
-            "[capsule] no_activate failed: window_handle() unavailable — Win32 show skipped"
+            "[capsule] no_activate failed: window_handle() unavailable — Win32 presentation skipped"
         );
         return false;
     };
     let RawWindowHandle::Win32(raw) = handle.as_raw() else {
-        log::warn!("[capsule] no_activate failed: non-Win32 RawWindowHandle — Win32 show skipped");
+        log::warn!(
+            "[capsule] no_activate failed: non-Win32 RawWindowHandle — Win32 presentation skipped"
+        );
         return false;
     };
     let hwnd = HWND(raw.hwnd.get() as *mut _);
@@ -658,22 +659,53 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
         return false;
     }
 
-    let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
-    if let Err(error) = unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        )
-    } {
+    if show {
+        let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+    }
+    let position_result = if show {
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        }
+    } else {
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+    };
+    if let Err(error) = position_result {
         log::warn!("[capsule] no_activate failed: SetWindowPos returned {error}");
         return false;
     }
     true
+}
+
+#[cfg(target_os = "windows")]
+fn show_capsule_window_no_activate<R: tauri::Runtime>(
+    _app: &AppHandle<R>,
+    window: &tauri::WebviewWindow<R>,
+    _reassert_spaces: bool,
+) -> bool {
+    set_capsule_window_topmost_no_activate(window, true)
+}
+
+#[cfg(target_os = "windows")]
+fn reassert_capsule_window_topmost<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
+    set_capsule_window_topmost_no_activate(window, false)
 }
 
 #[cfg(target_os = "macos")]
@@ -850,6 +882,10 @@ fn capsule_window_action(
     } else {
         CapsuleWindowAction::HideCapsule
     }
+}
+
+fn should_present_capsule_window(window_visible_before: bool) -> bool {
+    !window_visible_before
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2061,6 +2097,7 @@ impl TauriCapsuleWindow {
         let Some(window) = self.window() else {
             return;
         };
+        let window_visible_before = window.is_visible().unwrap_or(false);
         self.prepare_display_target(payload, &window);
         let fallback_card_active = self.state.defer_if_fallback_active(payload);
 
@@ -2080,7 +2117,9 @@ impl TauriCapsuleWindow {
                     "state": capsule_diag_state_name(payload.state),
                     "show_capsule": show_capsule,
                     "fallback_card_active": fallback_card_active,
-                    "window_visible_before": window.is_visible().unwrap_or(false),
+                    "window_visible_before": window_visible_before,
+                    "native_presentation": action == CapsuleWindowAction::ShowCapsule
+                        && should_present_capsule_window(window_visible_before),
                     "session_present": payload.session_id.is_some(),
                     "session_transition": capsule_diag_payload_session_transition(
                         payload.session_id.as_deref(),
@@ -2108,7 +2147,7 @@ impl TauriCapsuleWindow {
                 CapsuleWindowAction::PreserveFallbackCard => unreachable!(),
             }
 
-            if action == CapsuleWindowAction::ShowCapsule && !window.is_visible().unwrap_or(false) {
+            if action == CapsuleWindowAction::ShowCapsule && !window_visible_before {
                 // The OS can move a hidden window (e.g. when a monitor is unplugged), so a
                 // placement cached while it was visible must not be reused on the next show.
                 self.invalidate_layout();
@@ -2127,7 +2166,18 @@ impl TauriCapsuleWindow {
                             capsule_state_log_name(payload.state)
                         );
                     }
-                    show_capsule_window_for_recording(&self.app, &window, reassert_spaces);
+                    if should_present_capsule_window(window_visible_before) {
+                        show_capsule_window_for_recording(&self.app, &window, reassert_spaces);
+                    } else {
+                        #[cfg(target_os = "windows")]
+                        {
+                            reassert_capsule_window_topmost(&window);
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            show_capsule_window_for_recording(&self.app, &window, reassert_spaces);
+                        }
+                    }
                     #[cfg(target_os = "macos")]
                     crate::restore_main_window_key_if_active(&self.app);
                 }
@@ -2615,6 +2665,12 @@ mod tests {
                 ..initial
             }
         );
+    }
+
+    #[test]
+    fn capsule_is_presented_only_after_a_hidden_to_visible_transition() {
+        assert!(should_present_capsule_window(false));
+        assert!(!should_present_capsule_window(true));
     }
 
     #[test]
