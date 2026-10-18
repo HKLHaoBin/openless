@@ -2,6 +2,7 @@ import { inputMethod } from '@kit.IMEKit';
 import { imeStorage, inputSession } from '../inputmethod/InputSession';
 import { panelLayout } from '../inputmethod/PanelLayout';
 import { SymbolGesture, letterSymbol, digitSymbol, symbolRows, localizedSymbol, liveSymbolHint } from '../inputmethod/SymbolGesture';
+import { ClipboardEntry } from '../inputmethod/ClipboardHistory';
 
 const BACKGROUND: Resource = $r('app.color.ime_panel_background');
 const KEY: Resource = $r('app.color.ime_key_background');
@@ -25,6 +26,7 @@ struct InputMethodPanel {
   @LocalStorageLink('keyFontSize') keyFontSize: number = 22;
   @LocalStorageLink('swipeSymbols') swipeSymbols: boolean = true;
   @LocalStorageLink('keySound') keySound: boolean = false;
+  @LocalStorageLink('clipboardItems') clipboardItems: ClipboardEntry[] = [];
   @LocalStorageLink('cloudEnabled') cloudEnabled: boolean = false;
   @LocalStorageLink('symbolFeedback') symbolFeedback: string = '';
   @LocalStorageLink('dictionaryStatus') dictionaryStatus: string = '公共词库：自动更新';
@@ -97,8 +99,10 @@ struct InputMethodPanel {
   }
 
   private keyContext(): string {
-    return inputSession.bindingVersion().toString() + ':' + this.chinese + ':' + this.layer + ':' + this.symbolPage + ':' + this.keyboardLayout + ':' + this.utility;
+    return inputSession.bindingVersion().toString() + ':' + this.chinese + ':' + this.layer + ':' + this.symbolPage + ':' + this.keyboardLayout + ':' + this.utility + ':' + this.liveSwipeEnabled();
   }
+
+  private liveSwipeEnabled(): boolean { return imeStorage.get<boolean>('swipeSymbols') !== false; }
 
   private clearPreview(id: string): void {
     if (this.previewId === id) { this.previewId = ''; this.previewSymbol = ''; this.previewArmed = false; }
@@ -106,7 +110,7 @@ struct InputMethodPanel {
 
   private armSymbol(id: string, symbol: string, mode: string): void {
     const current = liveSymbolHint(id, symbol, this.chinese);
-    if (this.symbolGesture.arm(id, current, this.keyContext(), mode)) {
+    if (this.symbolGesture.arm(id, current, this.keyContext(), mode, this.liveSwipeEnabled())) {
       this.previewId = id; this.previewSymbol = current; this.previewArmed = true;
     }
   }
@@ -121,7 +125,7 @@ struct InputMethodPanel {
   private keyGap(): number { return this.keyboardLayout === 'standard' ? 7 : 5; }
 
   private finishSymbol(id: string, mode: string): void {
-    const symbol = this.symbolGesture.finish(id, this.keyContext(), mode);
+    const symbol = this.symbolGesture.finish(id, this.keyContext(), mode, this.liveSwipeEnabled());
     this.clearPreview(id);
     if (symbol) this.insertSymbol(symbol);
   }
@@ -161,12 +165,15 @@ struct InputMethodPanel {
         .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).pressMotion().focusable(false)
         .accessibilityText(hint ? localizedSymbol(key, this.chinese) + (this.swipeSymbols ? '，长按或上滑输入' : '，长按输入') + liveSymbolHint(id, hint, this.chinese) : localizedSymbol(key, this.chinese))
         .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) this.symbolGesture.begin(id, this.keyContext());
+          if (event.type === TouchType.Down && event.touches.length) this.symbolGesture.begin(id, this.keyContext(), event.touches[0].x, event.touches[0].y);
+          else if (event.type === TouchType.Move && event.touches.length) {
+            if (this.symbolGesture.moveTouch(id, event.touches[0].x, event.touches[0].y)) this.clearPreview(id);
+          }
           else if (event.type === TouchType.Cancel) this.cancelSymbol(id);
         })
         .gesture(GestureGroup(GestureMode.Exclusive,
           PanGesture({ direction: PanDirection.Up, distance: this.swipeDistance() })
-            .onActionStart((event: GestureEvent) => { if (this.swipeSymbols) { this.armSymbol(id, hint, 'swipe'); this.moveSymbol(id, event); } })
+            .onActionStart((event: GestureEvent) => { this.armSymbol(id, hint, 'swipe'); this.moveSymbol(id, event); })
             .onActionUpdate((event: GestureEvent) => { this.moveSymbol(id, event); })
             .onActionEnd((event: GestureEvent) => { this.moveSymbol(id, event); this.finishSymbol(id, 'swipe'); })
             .onActionCancel(() => { this.cancelSymbol(id, 'swipe'); }),
@@ -343,7 +350,7 @@ struct InputMethodPanel {
 
   private utilityTitle(): string {
     switch (this.utility) {
-      case 4: return '键盘设置';
+      case 4: return '词库与云候选';
       case 5: return '剪贴板';
       case 6: return '润色模式';
       case 7: return '字体大小';
@@ -374,30 +381,60 @@ struct InputMethodPanel {
 
   @Builder
   clipboardPanel() {
-    Column({ space: 18 }) {
-      Image($r('app.media.ime_clipboard')).width(36).height(36)
-      Text('点击系统粘贴按钮，将剪贴板文字写入当前输入框').fontSize(14).fontColor(INK).textAlign(TextAlign.Center)
-      PasteButton({ icon: PasteIconStyle.LINES, text: PasteDescription.PASTE }).width(180).height(48)
-        .enabled(this.connected && !this.pendingCommit)
-        .onClick((_event: ClickEvent, result: PasteButtonOnClickResult) => {
-          if (result === PasteButtonOnClickResult.SUCCESS) inputSession.pasteClipboard();
-        })
-      Text('仅在点击后读取，不记录剪贴板历史').fontSize(12).fontColor(MUTED)
-    }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).padding(10)
+    Column({ space: 6 }) {
+      Row({ space: 10 }) {
+        PasteButton({ icon: PasteIconStyle.LINES, text: PasteDescription.PASTE }).width(140).height(40)
+          .enabled(this.connected && !this.pendingCommit)
+          .onClick((_event: ClickEvent, result: PasteButtonOnClickResult) => {
+            if (result === PasteButtonOnClickResult.SUCCESS) inputSession.pasteClipboard();
+          })
+        Text('本地记录 ' + this.clipboardItems.length.toString() + '/30').layoutWeight(1).fontSize(12).fontColor(MUTED)
+        Button('清空').height(32).fontSize(13).fontColor(INK).backgroundColor(KEY).pressMotion().focusable(false)
+          .enabled(this.clipboardItems.length > 0).accessibilityText('清空本地剪贴板记录')
+          .onClick(() => { inputSession.clearClipboardHistory(); })
+      }.width('100%')
+      Text('仅保存主动粘贴的文字；私密输入不记录，仅存本机。点击记录可再次粘贴。').fontSize(11).fontColor(MUTED).width('100%')
+      if (this.clipboardItems.length === 0) {
+        Text('暂无记录，点击上方系统粘贴按钮开始使用').fontSize(14).fontColor(MUTED).layoutWeight(1)
+      } else {
+        Scroll() {
+          Column({ space: 8 }) {
+            ForEach(this.clipboardItems, (item: ClipboardEntry) => {
+              Row({ space: 6 }) {
+                Button({ type: ButtonType.Normal }) {
+                  Text(item.text).fontSize(15).fontColor(INK).maxLines(3).textAlign(TextAlign.Start)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+                }.layoutWeight(1).height(76).padding(8).backgroundColor(Color.Transparent).pressMotion().focusable(false)
+                  .enabled(this.connected && !this.pendingCommit).onClick(() => { inputSession.pasteClipboardItem(item.id); })
+                this.clipboardAction($r('app.media.ime_pin'), item.pinned ? '取消固定' : '固定记录',
+                  () => { inputSession.pinClipboardItem(item.id); }, item.pinned)
+                this.clipboardAction($r('app.media.ime_clipboard'), '复制记录', () => { inputSession.copyClipboardItem(item.id); })
+                this.clipboardAction($r('app.media.ime_trash'), '删除记录', () => { inputSession.deleteClipboardItem(item.id); })
+              }.width('100%').backgroundColor(KEY).borderRadius(12).padding({ left: 4, right: 4 })
+            }, (item: ClipboardEntry) => item.id + ':' + item.pinned + ':' + item.usedAt)
+          }.width('100%').padding({ top: 2, bottom: 6 })
+        }.width('100%').layoutWeight(1).scrollBar(BarState.Auto)
+      }
+    }.width('100%').layoutWeight(1)
+  }
+
+  @Builder
+  clipboardAction(icon: Resource, label: string, action: () => void, active: boolean = false) {
+    Button({ type: ButtonType.Normal }) { Image(icon).width(20).height(20) }
+      .width(32).height(32).padding(0).borderRadius(999).backgroundColor(active ? FUNCTION_KEY : Color.Transparent)
+      .pressMotion().focusable(false).accessibilityText(label).onClick(() => { action(); })
   }
 
   @Builder
   polishPanel() {
     Column({ space: 6 }) {
       Text('选择语音输入使用的润色模式').fontSize(13).fontColor(MUTED)
-      Row() {
+      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
         this.menuTile($r('app.media.ime_polish'), '保留原文', () => { inputSession.setPolishMode('raw'); this.utility = 0; })
         this.menuTile($r('app.media.ime_polish'), '轻度润色', () => { inputSession.setPolishMode('light'); this.utility = 0; })
-      }
-      Row() {
         this.menuTile($r('app.media.ime_polish'), '结构整理', () => { inputSession.setPolishMode('structured'); this.utility = 0; })
         this.menuTile($r('app.media.ime_polish'), '正式表达', () => { inputSession.setPolishMode('formal'); this.utility = 0; })
-      }
+      }.width('100%')
     }.width('100%').layoutWeight(1)
   }
 
@@ -584,14 +621,24 @@ struct InputMethodPanel {
   layoutOptions() {
     Column({ space: 0 }) {
       Row() {
-        this.menuTile($r('app.media.ime_split'), '拇指模式', () => { this.selectLayout('split'); })
-        this.menuTile($r('app.media.ime_standard'), '普通模式', () => { this.selectLayout('standard'); })
+        ForEach([0, 1, 2, 3].slice(0, this.menuSplit(4)), (index: number) => { this.layoutTool(index) }, (index: number) => index.toString())
       }
-      Row() {
-        this.menuTile($r('app.media.ime_floating'), '悬浮模式', () => { this.selectLayout('floating'); })
-        this.menuTile($r('app.media.ime_onehand'), '单手模式', () => { this.selectLayout('onehand'); })
+      if (this.menuSplit(4) < 4) {
+        Row() { ForEach([0, 1, 2, 3].slice(this.menuSplit(4)), (index: number) => { this.layoutTool(index) }, (index: number) => index.toString()) }
       }
     }.width('100%').padding({ top: 8, bottom: 8 })
+  }
+
+  @Builder
+  layoutTool(index: number) {
+    if (index === 0) { this.menuTile($r('app.media.ime_split'), '拇指模式', () => { this.selectLayout('split'); }) }
+    else if (index === 1) { this.menuTile($r('app.media.ime_standard'), '普通模式', () => { this.selectLayout('standard'); }) }
+    else if (index === 2) { this.menuTile($r('app.media.ime_floating'), '悬浮模式', () => { this.selectLayout('floating'); }) }
+    else { this.menuTile($r('app.media.ime_onehand'), '单手模式', () => { this.selectLayout('onehand'); }) }
+  }
+
+  private menuSplit(count: number): number {
+    return count * (this.menuTileSize() + 24) <= this.keyboardWidth ? count : Math.ceil(count / 2);
   }
 
   private selectLayout(mode: string): void {
@@ -608,23 +655,20 @@ struct InputMethodPanel {
       Column({ space: note ? 4 : 9 }) {
         Image(icon).width(note ? 22 : 28).height(note ? 22 : 28).objectFit(ImageFit.Contain)
         Text(label).fontSize(label.length > 4 ? 11 : 13).fontColor(INK).maxLines(1)
-        if (note) { Text(this.menuNote(label, note)).fontSize(10).fontColor(MUTED).maxLines(1) }
+        if (note) {
+          Text(label === '上滑输入' ? (this.swipeSymbols ? '已开启' : '已关闭') :
+            label === '按键音' ? (this.keySound ? '已开启' : '已关闭') : note).fontSize(10).fontColor(MUTED).maxLines(1)
+        }
       }.width('100%').height('100%').justifyContent(FlexAlign.Center)
-    }.width(this.menuTileSize()).height(this.menuTileSize()).margin(5).padding(4)
+    }.width(this.menuTileSize()).height(this.menuTileSize()).margin({ left: 12, right: 12, top: 6, bottom: 6 }).padding(4)
       .backgroundColor(KEY).borderRadius(12).pressMotion().focusable(false).enabled(available)
       .shadow({ radius: 1.25, color: KEY_SHADOW, offsetX: 0, offsetY: 2 })
       .accessibilityText(label).onClick(() => { action(); })
   }
 
-  private menuNote(label: string, note: string): string {
-    if (label === '按键音') return this.keySound ? '已开启' : '已关闭';
-    if (label === '上滑输入') return this.swipeSymbols ? '已开启' : '已关闭';
-    return note;
-  }
-
   @Builder
   commonTool(index: number) {
-    if (index === 0) { this.menuTile($r('app.media.ime_settings'), '设置', () => { this.utility = 4; }) }
+    if (index === 0) { this.menuTile($r('app.media.ime_settings'), '设置', () => { inputSession.settings(); }) }
     else if (index === 1) { this.menuTile($r('app.media.ime_clipboard'), '剪贴板', () => { this.utility = 5; }) }
     else if (index === 2) { this.menuTile($r('app.media.ime_polish'), '润色模式', () => { this.utility = 6; }) }
     else if (index === 3) { this.menuTile($r('app.media.ime_font'), '字体大小', () => { this.utility = 7; }) }
@@ -642,11 +686,20 @@ struct InputMethodPanel {
   commonTools() {
     Scroll() {
       Column({ space: 0 }) {
-        Row() { ForEach([0, 1, 2, 3, 4, 5], (index: number) => { this.commonTool(index) }, (index: number) => index.toString()) }
-        Row() { ForEach([6, 7, 8, 9, 10, 11], (index: number) => { this.commonTool(index) }, (index: number) => index.toString()) }
-      }.width(Math.max(this.keyboardWidth, (this.menuTileSize() + 10) * 6))
-    }.width('100%').height((this.menuTileSize() + 10) * 2).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+        Row() { ForEach([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].slice(0, this.menuSplit(12)), (index: number) => { this.commonTool(index) }, (index: number) => index.toString()) }
+        if (this.menuSplit(12) < 12) {
+          Row() { ForEach([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].slice(this.menuSplit(12)), (index: number) => { this.commonTool(index) }, (index: number) => index.toString()) }
+        }
+      }.width(Math.max(this.keyboardWidth, (this.menuTileSize() + 24) * this.menuSplit(12)))
+    }.width('100%').height((this.menuTileSize() + 12) * (this.menuSplit(12) === 12 ? 1 : 2)).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
       .align(Alignment.TopStart)
+  }
+
+  @Builder
+  inputTool(index: number) {
+    if (index === 0) { this.menuTile($r('app.media.ime_keyboard'), '26键', () => { this.inputMode(true); }, this.connected && !this.password && !this.pendingCommit) }
+    else if (index === 1) { this.menuTile($r('app.media.ime_number'), '9键', () => {}, false, '待接入') }
+    else { this.menuTile($r('app.media.ime_handwrite'), '手写输入法', () => {}, false, '待接入') }
   }
 
   @Builder
@@ -786,10 +839,13 @@ struct InputMethodPanel {
           } else if (tab === 1) {
             Column({ space: 0 }) {
               Row() {
-                this.menuTile($r('app.media.ime_keyboard'), '26键', () => { this.inputMode(true); }, this.connected && !this.password && !this.pendingCommit)
-                this.menuTile($r('app.media.ime_number'), '9键', () => {}, false, '待接入')
+                ForEach([0, 1, 2].slice(0, this.menuSplit(3)), (index: number) => { this.inputTool(index) }, (index: number) => index.toString())
               }
-              Row() { this.menuTile($r('app.media.ime_handwrite'), '手写输入法', () => {}, false, '待接入') }
+              if (this.menuSplit(3) < 3) {
+                Row() { ForEach([0, 1, 2].slice(this.menuSplit(3)), (index: number) => { this.inputTool(index) }, (index: number) => index.toString()) }
+              }
+              Button('词库与云候选').height(32).backgroundColor(Color.Transparent).fontColor(MUTED)
+                .pressMotion().focusable(false).onClick(() => { this.utility = 4; })
             }.width('100%')
           } else {
             this.layoutOptions()

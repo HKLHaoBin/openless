@@ -5,6 +5,7 @@ import { preferences } from '@kit.ArkData';
 import { VoiceClient } from './VoiceClient';
 import { KeySound } from './KeySound';
 import { pasteboard } from '@kit.BasicServicesKit';
+import { ClipboardEntry, ClipboardHistory } from './ClipboardHistory';
 
 class InputPanelState {
   connected: boolean = false;
@@ -18,6 +19,7 @@ class InputPanelState {
   keyFontSize: number = 22;
   swipeSymbols: boolean = true;
   keySound: boolean = false;
+  clipboardItems: ClipboardEntry[] = [];
   rimeReady: boolean = false;
   page: number = 0;
   hasNext: boolean = false;
@@ -73,6 +75,8 @@ class InputSession {
   private cloudChoices: string[] = [];
   private cloudSettings?: preferences.Preferences;
   private sound?: KeySound;
+  private clipboard?: ClipboardHistory;
+  private clipboardSaving: Promise<void> = Promise.resolve();
 
   attach(context: InputMethodExtensionContext, keyboard: inputMethodEngine.KeyboardController,
     client: inputMethodEngine.InputClient): void {
@@ -93,7 +97,14 @@ class InputSession {
       const font = Number(await settings.get('key_font_size', 22));
       const swipe = await settings.get('swipe_symbols', true);
       const sound = await settings.get('key_sound', false);
+      await this.clipboardSaving;
+      const clipboard = await settings.get('clipboard_history', '[]');
       if (generation === this.generation) {
+        if (typeof clipboard === 'string') {
+          this.clipboard = new ClipboardHistory();
+          this.clipboard.load(clipboard);
+          imeStorage.setOrCreate('clipboardItems', this.clipboard.list());
+        }
         if ([20, 22, 24, 26].includes(font)) imeStorage.setOrCreate('keyFontSize', font);
         imeStorage.setOrCreate('swipeSymbols', swipe !== false);
         imeStorage.setOrCreate('keySound', sound === true);
@@ -514,11 +525,50 @@ class InputSession {
     pasteboard.getSystemPasteboard().getData().then((data: pasteboard.PasteData) => {
       if (generation !== this.generation) return;
       const text = data.getPrimaryText();
-      if (text) this.insert(text); else imeStorage.setOrCreate('status', '剪贴板中没有文字');
+      if (text) {
+        if (imeStorage.get<boolean>('editorVerified') && !imeStorage.get<boolean>('password')) {
+          this.clipboard?.add(text);
+          this.saveClipboard();
+        }
+        this.insert(text);
+      } else imeStorage.setOrCreate('status', '剪贴板中没有文字');
     }).catch(() => {
       if (generation === this.generation) imeStorage.setOrCreate('status', '无法读取剪贴板，请重新点击系统粘贴按钮');
     });
   }
+
+  private saveClipboard(): void {
+    if (!this.clipboard) return;
+    imeStorage.setOrCreate('clipboardItems', this.clipboard.list());
+    const settings = this.cloudSettings;
+    const generation = this.generation;
+    if (!settings) return;
+    const saved = this.clipboard.serialize();
+    this.clipboardSaving = this.clipboardSaving.then(() => settings.put('clipboard_history', saved)).then(() => settings.flush()).catch(() => {
+      if (generation === this.generation) imeStorage.setOrCreate('status', '剪贴板记录保存失败');
+    });
+  }
+
+  pasteClipboardItem(id: string): void {
+    const text = this.clipboard?.get(id);
+    if (!text || !this.client || imeStorage.get<boolean>('pendingCommit')) return;
+    this.clipboard?.add(text); this.saveClipboard(); this.insert(text);
+  }
+
+  copyClipboardItem(id: string): void {
+    const text = this.clipboard?.get(id);
+    if (!text) return;
+    const generation = this.generation;
+    pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text)).then(() => {
+      if (generation === this.generation) imeStorage.setOrCreate('status', '已复制到系统剪贴板');
+    }).catch(() => {
+      if (generation === this.generation) imeStorage.setOrCreate('status', '复制失败，请重试');
+    });
+  }
+
+  pinClipboardItem(id: string): void { this.clipboard?.pin(id); this.saveClipboard(); }
+  deleteClipboardItem(id: string): void { this.clipboard?.remove(id); this.saveClipboard(); }
+  clearClipboardHistory(): void { this.clipboard?.clear(); this.saveClipboard(); }
 
   setPolishMode(mode: string): void {
     if (!this.context || !['raw', 'light', 'structured', 'formal'].includes(mode)) return;

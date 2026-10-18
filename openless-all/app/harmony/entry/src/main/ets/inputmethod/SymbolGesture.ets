@@ -4,6 +4,9 @@ class SymbolPress {
   consumed: boolean = false;
   armed: boolean = false;
   mode: string = '';
+  x: number = 0;
+  y: number = 0;
+  moved: boolean = false;
   constructor(context: string) { this.context = context; }
 }
 
@@ -11,10 +14,22 @@ class SymbolPress {
 // and never carry a held key into another editor, language or layout.
 export class SymbolGesture {
   private presses: Map<string, SymbolPress> = new Map();
-  begin(key: string, context: string): void { this.presses.set(key, new SymbolPress(context)); }
-  arm(key: string, symbol: string, context: string, mode: string): boolean {
+  begin(key: string, context: string, x: number = 0, y: number = 0): void {
+    const press = new SymbolPress(context); press.x = x; press.y = y;
+    this.presses.set(key, press);
+  }
+  moveTouch(key: string, x: number, y: number): boolean {
     const press = this.presses.get(key);
-    if (!press || press.context !== context) return false;
+    if (!press) return false;
+    if ((x - press.x) * (x - press.x) + (y - press.y) * (y - press.y) <= 100) return false;
+    press.moved = true;
+    if (press.mode !== 'hold') return false;
+    press.armed = false; press.symbol = ''; press.consumed = true;
+    return true;
+  }
+  arm(key: string, symbol: string, context: string, mode: string, swipeEnabled: boolean = true): boolean {
+    const press = this.presses.get(key);
+    if (!press || press.context !== context || (mode === 'swipe' && !swipeEnabled) || (mode === 'hold' && press.moved)) return false;
     press.consumed = true;
     press.symbol = symbol;
     press.mode = mode;
@@ -27,10 +42,10 @@ export class SymbolGesture {
     press.armed = press.symbol.length > 0 && y <= -distance && Math.abs(x) <= -y * 0.55;
     return press.armed;
   }
-  finish(key: string, context: string, mode: string): string {
+  finish(key: string, context: string, mode: string, swipeEnabled: boolean = true): string {
     const press = this.presses.get(key);
     if (!press || press.mode !== mode) return '';
-    const symbol = press.context === context && press.armed ? press.symbol : '';
+    const symbol = press.context === context && press.armed && (mode !== 'swipe' || swipeEnabled) ? press.symbol : '';
     press.armed = false;
     press.symbol = '';
     return symbol;

@@ -27,6 +27,9 @@ function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () =>
   const exports = {};
   vm.runInNewContext(compiled, {
     exports, console, LocalStorage: Storage, VoiceClient: Voice,
+    pasteboard: {
+      getSystemPasteboard: () => ({ getData: async () => ({ getPrimaryText: () => '本地剪贴板测试' }) }),
+    },
     preferences: { getPreferences: async () => ({ get: async () => false, put: async () => {}, flush: async () => {} }) },
     cloudCandidates: queryCloud,
     refreshPublicDictionary: async () => ({ pending: false, revision: 'test', checked: 1 }),
@@ -89,6 +92,21 @@ await normal.drain();
 assert.equal(normal.acknowledgements(), 1);
 assert.equal(normal.state.get('pendingCommit'), false);
 assert.equal(normal.state.get('commitNeedsConfirmation'), false);
+
+for (const [attribute, expectedRecords] of [
+  [{ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }, 1],
+  [{ inputPattern: 10, enterKeyType: 0, bundleName: 'native.test' }, 0],
+  [undefined, 0],
+]) {
+  const pasted = host(async () => { if (!attribute) throw Error('unknown field'); return attribute; });
+  await pasted.drain();
+  let recorded = 0;
+  pasted.session.clipboard = { add: () => { recorded++; }, list: () => [], serialize: () => '[]' };
+  pasted.session.pasteClipboard();
+  await pasted.drain();
+  assert.equal(recorded, expectedRecords, 'password and unverified fields must not populate clipboard history');
+  assert.deepEqual(pasted.inserted, ['本地剪贴板测试'], 'explicit system paste remains available in private fields');
+}
 
 const scrolling = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {}, async () => [],
   [['甲', '乙'], ['丙', '丁'], ['戊']]);
