@@ -1499,6 +1499,9 @@ export const en: typeof zhCN = {
       capsuleDisplayPrimaryScreen: 'Primary display only',
       capsuleDisplayForegroundWindowScreen: 'Display under the foreground window',
       capsuleDisplayAllScreens: 'Show on all displays',
+      capsuleDisplayModeRestartTitle: 'Restart OpenLess to apply display mode',
+      capsuleDisplayModeRestartDesc:
+        'Switching from all-screen display requires a restart to clear the previous capsule windows. Restart now?',
       capsuleStyleLabel: 'Capsule style',
       capsuleStyleSiri: 'Shimmer Siri style',
       capsuleStyleClassic: 'OpenLess default style',

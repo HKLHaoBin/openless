@@ -1,7 +1,7 @@
 // Recording & input settings: recording mode, audio cues, input behavior, and
 // platform-specific options.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CapsuleStylePreview } from '../../components/TypelessCapsule';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
@@ -28,7 +28,9 @@ import type {
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { Card, Collapsible } from '../_atoms';
+import { PresenceModal } from '../../components/ui/Modal';
+import { Card, Collapsible, Btn } from '../_atoms';
+import { restartApp } from '../../lib/ipc';
 import { SectionTitle, SettingRow, Toggle, inputStyle, segmentedTrackStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
 import { detectOS, type OS } from '../../components/WindowChrome';
@@ -61,6 +63,10 @@ export function RecordingInputSection({ forcedOs }: { forcedOs?: OS } = {}) {
   const [microphoneDevices, setMicrophoneDevices] = useState<MicrophoneDevice[]>([]);
   const [microphoneDevicesLoaded, setMicrophoneDevicesLoaded] = useState(false);
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
+  const [displayModeRestartPending, setDisplayModeRestartPending] = useState(false);
+  const [displayModeRestarting, setDisplayModeRestarting] = useState(false);
+  const displayModeRestartTitleId = useId();
+  const displayModeChangeSequenceRef = useRef(0);
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
@@ -187,6 +193,31 @@ export function RecordingInputSection({ forcedOs }: { forcedOs?: OS } = {}) {
     prefs.capsuleDisplayMode === 'allScreens'
       ? (prefs.capsuleDisplayMode ?? 'cursorScreen')
       : 'cursorScreen';
+
+  const onCapsuleDisplayModeChange = async (next: UserPreferences['capsuleDisplayMode']) => {
+    const previous = prefs.capsuleDisplayMode ?? 'cursorScreen';
+    const changeSequence = ++displayModeChangeSequenceRef.current;
+    await savePrefs({ ...prefs, capsuleDisplayMode: next });
+    if (
+      changeSequence === displayModeChangeSequenceRef.current &&
+      os === 'win' &&
+      previous === 'allScreens' &&
+      next !== 'allScreens'
+    ) {
+      setDisplayModeRestartPending(true);
+    }
+  };
+  const onRestartForDisplayMode = async () => {
+    setDisplayModeRestarting(true);
+    try {
+      await restartApp();
+      setDisplayModeRestartPending(false);
+    } catch (error) {
+      console.error('[settings] restart after capsule display mode change failed', error);
+    } finally {
+      setDisplayModeRestarting(false);
+    }
+  };
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
@@ -472,11 +503,7 @@ export function RecordingInputSection({ forcedOs }: { forcedOs?: OS } = {}) {
             <SelectLite
               value={effectiveCapsuleDisplayMode}
               onChange={(next) =>
-                savePrefs({
-                  ...prefs,
-                  capsuleDisplayMode: next as
-                    'cursorScreen' | 'primaryScreen' | 'foregroundWindowScreen' | 'allScreens',
-                })
+                void onCapsuleDisplayModeChange(next as UserPreferences['capsuleDisplayMode'])
               }
               options={[
                 {
@@ -763,6 +790,43 @@ export function RecordingInputSection({ forcedOs }: { forcedOs?: OS } = {}) {
           </SettingRow>
         </Collapsible>
       )}
+      <PresenceModal
+        open={displayModeRestartPending}
+        onClose={() => {
+          if (!displayModeRestarting) setDisplayModeRestartPending(false);
+        }}
+        zIndex={1000}
+        width="min(420px, calc(100vw - 32px))"
+        style={{ padding: 18 }}
+        labelledBy={displayModeRestartTitleId}
+        render={() => (
+          <>
+            <h2 id={displayModeRestartTitleId} style={{ fontSize: 17, margin: 0 }}>
+              {t('settings.recording.capsuleDisplayModeRestartTitle')}
+            </h2>
+            <p style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-3)' }}>
+              {t('settings.recording.capsuleDisplayModeRestartDesc')}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <Btn
+                size="sm"
+                disabled={displayModeRestarting}
+                onClick={() => setDisplayModeRestartPending(false)}
+              >
+                {t('common.cancel')}
+              </Btn>
+              <Btn
+                variant="blue"
+                size="sm"
+                disabled={displayModeRestarting}
+                onClick={() => void onRestartForDisplayMode()}
+              >
+                {t('settings.about.updateDialog.restartNow')}
+              </Btn>
+            </div>
+          </>
+        )}
+      />
     </>
   );
 }

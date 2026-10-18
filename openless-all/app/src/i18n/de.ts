@@ -1528,6 +1528,9 @@ export const de: typeof zhCN = {
       capsuleDisplayPrimaryScreen: 'Nur Hauptbildschirm',
       capsuleDisplayForegroundWindowScreen: 'Bildschirm des Vordergrundfensters',
       capsuleDisplayAllScreens: 'Auf allen Bildschirmen anzeigen',
+      capsuleDisplayModeRestartTitle: 'OpenLess neu starten, um den Anzeigemodus anzuwenden',
+      capsuleDisplayModeRestartDesc:
+        'Der Wechsel vom Modus für alle Bildschirme erfordert einen Neustart, um die bisherigen Kapselfenster zu schließen. Jetzt neu starten?',
       capsuleStyleLabel: 'Kapselstil',
       capsuleStyleSiri: 'Schimmernder Siri-Stil',
       capsuleStyleClassic: 'OpenLess-Standardstil',

@@ -1428,6 +1428,9 @@ export const zhTW: typeof zhCN = {
       capsuleDisplayPrimaryScreen: '僅主螢幕',
       capsuleDisplayForegroundWindowScreen: '目前前景視窗所在螢幕',
       capsuleDisplayAllScreens: '所有螢幕顯示',
+      capsuleDisplayModeRestartTitle: '重新啟動 OpenLess 以套用顯示模式',
+      capsuleDisplayModeRestartDesc:
+        '從所有螢幕顯示切換需要重新啟動軟體，才能清理先前的膠囊視窗。現在重新啟動嗎？',
       capsuleStyleLabel: '膠囊樣式',
       capsuleStyleSiri: '流光 Siri 風格',
       capsuleStyleClassic: 'Openless 預設風格',

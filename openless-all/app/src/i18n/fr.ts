@@ -1540,6 +1540,9 @@ export const fr: typeof zhCN = {
       capsuleDisplayPrimaryScreen: 'Écran principal uniquement',
       capsuleDisplayForegroundWindowScreen: 'Écran de la fenêtre au premier plan',
       capsuleDisplayAllScreens: 'Afficher sur tous les écrans',
+      capsuleDisplayModeRestartTitle: 'Redémarrer OpenLess pour appliquer le mode d’affichage',
+      capsuleDisplayModeRestartDesc:
+        'Quitter le mode tous les écrans nécessite un redémarrage pour fermer les anciennes capsules. Redémarrer maintenant ?',
       capsuleStyleLabel: 'Style de capsule',
       capsuleStyleSiri: 'Style lumineux Siri',
       capsuleStyleClassic: 'Style par défaut d’OpenLess',

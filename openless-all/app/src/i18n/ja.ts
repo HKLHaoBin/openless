@@ -1487,6 +1487,9 @@ export const ja: typeof zhCN = {
       capsuleDisplayPrimaryScreen: 'メインディスプレイのみ',
       capsuleDisplayForegroundWindowScreen: '前面ウィンドウのある画面',
       capsuleDisplayAllScreens: 'すべての画面に表示',
+      capsuleDisplayModeRestartTitle: '表示モードを適用するには OpenLess を再起動してください',
+      capsuleDisplayModeRestartDesc:
+        'すべての画面表示から切り替えるには、以前のカプセルウィンドウを閉じるため再起動が必要です。今すぐ再起動しますか？',
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
       capsuleStyleClassic: 'Openless デフォルトスタイル',

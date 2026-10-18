@@ -1475,6 +1475,9 @@ export const ko: typeof zhCN = {
       capsuleDisplayPrimaryScreen: '주 디스플레이만',
       capsuleDisplayForegroundWindowScreen: '전경 창이 있는 화면',
       capsuleDisplayAllScreens: '모든 화면에 표시',
+      capsuleDisplayModeRestartTitle: '표시 모드를 적용하려면 OpenLess를 다시 시작하세요',
+      capsuleDisplayModeRestartDesc:
+        '모든 화면 표시에서 전환하려면 이전 캡슐 창을 정리하기 위해 다시 시작해야 합니다. 지금 다시 시작할까요?',
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
       capsuleStyleClassic: 'Openless 기본 스타일',
