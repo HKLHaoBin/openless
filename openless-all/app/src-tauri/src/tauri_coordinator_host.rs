@@ -41,7 +41,7 @@ fn capsule_diag_run_id() -> &'static str {
 }
 
 #[cfg(target_os = "windows")]
-fn capsule_diag_record(
+pub(crate) fn capsule_diag_record(
     probe_id: &'static str,
     hypothesis_ids: &[&'static str],
     event: &'static str,
@@ -67,7 +67,7 @@ fn capsule_diag_record(
 }
 
 #[cfg(not(target_os = "windows"))]
-fn capsule_diag_record(
+pub(crate) fn capsule_diag_record(
     _probe_id: &'static str,
     _hypothesis_ids: &[&'static str],
     _event: &'static str,
@@ -2376,32 +2376,8 @@ impl TauriCoordinatorHost {
 
     pub(crate) fn emit_capsule_state_to_capsule(&self, payload: &crate::types::CapsulePayload) {
         if let Some(app) = self.app() {
-            let capsule_emit_ok = app.emit_to("capsule", "capsule:state", payload).is_ok();
-            let rail_emit_ok = app
-                .emit_to("capsule-rail", "capsule:state", payload)
-                .is_ok();
-            #[cfg(target_os = "windows")]
-            capsule_diag_record(
-                "P6",
-                &["H3", "H4"],
-                "capsule_state_emit",
-                if capsule_emit_ok && rail_emit_ok {
-                    "emitted"
-                } else {
-                    "emit_failed"
-                },
-                serde_json::json!({
-                    "state": capsule_diag_state_name(payload.state),
-                    "capsule_emit_ok": capsule_emit_ok,
-                    "rail_emit_ok": rail_emit_ok,
-                    "session_present": payload.session_id.is_some(),
-                    "message_present": payload.message.is_some(),
-                    "warming": payload.warming,
-                    "selection_polish": payload.selection_polish,
-                }),
-            );
-            #[cfg(not(target_os = "windows"))]
-            let _ = (capsule_emit_ok, rail_emit_ok);
+            let _ = app.emit_to("capsule", "capsule:state", payload);
+            let _ = app.emit_to("capsule-rail", "capsule:state", payload);
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             for prefix in [
                 crate::capsule_mirrors::CAPSULE_MIRROR_PREFIX,

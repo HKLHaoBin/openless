@@ -13,6 +13,37 @@ use openless_core::{
 };
 use tauri::{AppHandle, Emitter, Manager};
 
+#[cfg(target_os = "windows")]
+fn capsule_diag_backend_event_class(kind: &BackendEventKind) -> Option<&'static str> {
+    match kind {
+        BackendEventKind::DictationStateChanged(_) => Some("dictation_state"),
+        BackendEventKind::TranscriptDelta(_) => Some("transcript_delta"),
+        BackendEventKind::PolishDelta(_) => Some("polish_delta"),
+        BackendEventKind::DictationCompleted(_) => Some("dictation_completed"),
+        BackendEventKind::SelectionVoiceStateChanged(_) => Some("selection_voice_state"),
+        BackendEventKind::SelectionVoiceLevel(_) => Some("selection_voice_level"),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn capsule_diag_event_text_nonempty(kind: &BackendEventKind) -> bool {
+    match kind {
+        BackendEventKind::TranscriptDelta(delta) => !delta.text.is_empty(),
+        BackendEventKind::PolishDelta(delta) => !delta.text.is_empty(),
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn capsule_diag_event_is_final(kind: &BackendEventKind) -> bool {
+    match kind {
+        BackendEventKind::TranscriptDelta(delta) => delta.is_final,
+        BackendEventKind::PolishDelta(delta) => delta.is_final,
+        _ => false,
+    }
+}
+
 #[derive(Default)]
 struct CapsuleOwners {
     transcription_notice: Option<SessionId>,
@@ -33,7 +64,27 @@ pub fn start(app: AppHandle, backend: Arc<OpenLessBackend>) {
         loop {
             match events.recv().await {
                 Ok(event) => {
-                    let _ = app.emit("backend:event", &event);
+                    let backend_emit_ok = app.emit("backend:event", &event).is_ok();
+                    #[cfg(target_os = "windows")]
+                    if let Some(event_class) = capsule_diag_backend_event_class(&event.kind) {
+                        crate::tauri_coordinator_host::capsule_diag_record(
+                            "P6",
+                            &["H3", "H4", "H6"],
+                            "backend_event_bridge",
+                            if backend_emit_ok {
+                                "emitted"
+                            } else {
+                                "emit_failed"
+                            },
+                            serde_json::json!({
+                                "event_class": event_class,
+                                "sequence": event.sequence,
+                                "session_present": event.session_id.is_some(),
+                                "text_nonempty": capsule_diag_event_text_nonempty(&event.kind),
+                                "is_final": capsule_diag_event_is_final(&event.kind),
+                            }),
+                        );
+                    }
                     if let Some(coordinator) =
                         app.try_state::<Arc<crate::coordinator::Coordinator>>()
                     {
