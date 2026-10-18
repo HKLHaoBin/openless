@@ -20,6 +20,7 @@ class InputPanelState {
   swipeSymbols: boolean = true;
   keySound: boolean = false;
   clipboardItems: ClipboardEntry[] = [];
+  clipboardStatus: string = '';
   rimeReady: boolean = false;
   page: number = 0;
   hasNext: boolean = false;
@@ -77,6 +78,9 @@ class InputSession {
   private sound?: KeySound;
   private clipboard?: ClipboardHistory;
   private clipboardSaving: Promise<void> = Promise.resolve();
+  private clipboardBoard?: pasteboard.SystemPasteboard;
+  private clipboardChanged: () => void = () => { this.refreshClipboard(); };
+  private clipboardRead: number = 0;
 
   attach(context: InputMethodExtensionContext, keyboard: inputMethodEngine.KeyboardController,
     client: inputMethodEngine.InputClient): void {
@@ -104,6 +108,7 @@ class InputSession {
           this.clipboard = new ClipboardHistory();
           this.clipboard.load(clipboard);
           imeStorage.setOrCreate('clipboardItems', this.clipboard.list());
+          this.refreshClipboard();
         }
         if ([20, 22, 24, 26].includes(font)) imeStorage.setOrCreate('keyFontSize', font);
         imeStorage.setOrCreate('swipeSymbols', swipe !== false);
@@ -136,6 +141,7 @@ class InputSession {
       imeStorage.setOrCreate('chinese', !password);
       imeStorage.setOrCreate('password', password);
       imeStorage.setOrCreate('editorVerified', true);
+      if (!password) this.watchClipboard();
       this.compatibilityEditor = !attribute.bundleName || attribute.bundleName === 'com.droi.tong';
       console.info('[OpenLess IME] editor transport=async-observed' +
         ' bundle=' + (attribute.bundleName || 'unknown'));
@@ -186,6 +192,9 @@ class InputSession {
   }
 
   detach(): void {
+    this.clipboardRead++;
+    try { this.clipboardBoard?.off('update', this.clipboardChanged); } catch (_) {}
+    this.clipboardBoard = undefined;
     clearTimeout(this.feedbackTimer);
     imeStorage.setOrCreate('symbolFeedback', '');
     this.cancelVoice();
@@ -533,7 +542,42 @@ class InputSession {
         this.insert(text);
       } else imeStorage.setOrCreate('status', '剪贴板中没有文字');
     }).catch(() => {
-      if (generation === this.generation) imeStorage.setOrCreate('status', '无法读取剪贴板，请重新点击系统粘贴按钮');
+      if (generation === this.generation) imeStorage.setOrCreate('clipboardStatus', '无法读取剪贴板，请检查剪贴板授权后重试');
+    });
+  }
+
+  private watchClipboard(): void {
+    if (!this.clipboardBoard) {
+      try {
+        this.clipboardBoard = pasteboard.getSystemPasteboard();
+        this.clipboardBoard.on('update', this.clipboardChanged);
+      } catch (_) { this.clipboardBoard = undefined; }
+    }
+    this.refreshClipboard();
+  }
+
+  refreshClipboard(): void {
+    if (!this.client || !this.clipboard || !imeStorage.get<boolean>('editorVerified') ||
+      imeStorage.get<boolean>('password')) return;
+    const generation = this.generation;
+    const read = ++this.clipboardRead;
+    pasteboard.getSystemPasteboard().getData().then((data: pasteboard.PasteData) => {
+      if (generation !== this.generation || read !== this.clipboardRead) return;
+      const text = data.getPrimaryText();
+      if (text) { this.clipboard?.add(text); this.saveClipboard(); }
+      imeStorage.setOrCreate('clipboardStatus', text ? '已读取系统剪贴板，复制新文字后自动更新' : '系统剪贴板中没有文字');
+    }).catch((error: BusinessError) => {
+      if (generation !== this.generation || read !== this.clipboardRead) return;
+      imeStorage.setOrCreate('clipboardStatus', error.code === 201 ?
+        '请先授权读取剪贴板，再返回输入框' : '暂时无法读取系统剪贴板，请刷新重试');
+      console.warn('[OpenLess IME] clipboard read failed code=' + error.code);
+    });
+  }
+
+  authorizeClipboard(): void {
+    this.context?.startAbility({ bundleName: 'openless.hm.com', abilityName: 'EntryAbility',
+      parameters: { requestClipboardPermission: true } }).catch(() => {
+      imeStorage.setOrCreate('clipboardStatus', '无法打开授权页面，请打开 OpenLess 应用重试');
     });
   }
 

@@ -27,6 +27,7 @@ struct InputMethodPanel {
   @LocalStorageLink('swipeSymbols') swipeSymbols: boolean = true;
   @LocalStorageLink('keySound') keySound: boolean = false;
   @LocalStorageLink('clipboardItems') clipboardItems: ClipboardEntry[] = [];
+  @LocalStorageLink('clipboardStatus') clipboardStatus: string = '';
   @LocalStorageLink('cloudEnabled') cloudEnabled: boolean = false;
   @LocalStorageLink('symbolFeedback') symbolFeedback: string = '';
   @LocalStorageLink('dictionaryStatus') dictionaryStatus: string = '公共词库：自动更新';
@@ -383,19 +384,20 @@ struct InputMethodPanel {
   clipboardPanel() {
     Column({ space: 6 }) {
       Row({ space: 10 }) {
-        PasteButton({ icon: PasteIconStyle.LINES, text: PasteDescription.PASTE }).width(140).height(40)
-          .enabled(this.connected && !this.pendingCommit)
-          .onClick((_event: ClickEvent, result: PasteButtonOnClickResult) => {
-            if (result === PasteButtonOnClickResult.SUCCESS) inputSession.pasteClipboard();
-          })
+        Button('粘贴当前内容').height(32).fontSize(13).fontColor(INK).backgroundColor(KEY).pressMotion().focusable(false)
+          .enabled(this.connected && !this.pendingCommit).onClick(() => { inputSession.pasteClipboard(); })
+        Button('刷新').height(32).fontSize(13).fontColor(INK).backgroundColor(KEY).pressMotion().focusable(false)
+          .onClick(() => { inputSession.refreshClipboard(); })
+        Button('剪贴板授权').height(32).fontSize(13).fontColor(INK).backgroundColor(KEY).pressMotion().focusable(false)
+          .onClick(() => { inputSession.authorizeClipboard(); })
         Text('本地记录 ' + this.clipboardItems.length.toString() + '/30').layoutWeight(1).fontSize(12).fontColor(MUTED)
         Button('清空').height(32).fontSize(13).fontColor(INK).backgroundColor(KEY).pressMotion().focusable(false)
           .enabled(this.clipboardItems.length > 0).accessibilityText('清空本地剪贴板记录')
           .onClick(() => { inputSession.clearClipboardHistory(); })
       }.width('100%')
-      Text('仅保存主动粘贴的文字；私密输入不记录，仅存本机。点击记录可再次粘贴。').fontSize(11).fontColor(MUTED).width('100%')
+      Text(this.clipboardStatus || '自动读取复制的文字，仅存本机；点击记录粘贴，私密输入不记录。').fontSize(11).fontColor(MUTED).width('100%')
       if (this.clipboardItems.length === 0) {
-        Text('暂无记录，点击上方系统粘贴按钮开始使用').fontSize(14).fontColor(MUTED).layoutWeight(1)
+        Text('复制文字后自动显示在这里；首次使用请授权读取剪贴板').fontSize(14).fontColor(MUTED).layoutWeight(1)
       } else {
         Scroll() {
           Column({ space: 8 }) {
@@ -415,7 +417,7 @@ struct InputMethodPanel {
           }.width('100%').padding({ top: 2, bottom: 6 })
         }.width('100%').layoutWeight(1).scrollBar(BarState.Auto)
       }
-    }.width('100%').layoutWeight(1)
+    }.width('100%').layoutWeight(1).onAppear(() => { inputSession.refreshClipboard(); })
   }
 
   @Builder

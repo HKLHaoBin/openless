@@ -5,7 +5,7 @@ export class ClipboardEntry {
   usedAt: number = 0;
 }
 
-// App-local history of explicitly pasted text, never a system clipboard watcher.
+// App-local text history populated by the active input method's clipboard reader.
 export class ClipboardHistory {
   private rows: ClipboardEntry[] = [];
 

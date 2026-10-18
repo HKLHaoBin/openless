@@ -10,11 +10,28 @@ const compiled = ts.transpileModule(stripImports(source), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
-function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () => [], candidatePages = []) {
+const clipboardExports = {};
+vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../harmony/entry/src/main/ets/inputmethod/ClipboardHistory.ets', import.meta.url), 'utf8'), {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText, { exports: clipboardExports });
+
+function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () => [], candidatePages = [], autoClipboard = false) {
   const schemas = [], inserted = [];
   const cloudTimers = [], operations = [];
   let pending = '', acknowledgements = 0;
   let timer, recordings = 0;
+  let clipboardText = '本地剪贴板测试', clipboardListener, clipboardFailure;
+  let clipboardReply;
+  const board = {
+    on: (_type, callback) => { clipboardListener = callback; },
+    off: (_type, callback) => { if (clipboardListener === callback) clipboardListener = undefined; },
+    getData: async () => {
+      if (clipboardFailure) throw clipboardFailure;
+      if (clipboardReply) return clipboardReply;
+      const text = clipboardText;
+      return { getPrimaryText: () => text };
+    },
+  };
   class Storage {
     constructor(initial) { this.values = new Map(Object.entries(initial)); }
     setOrCreate(key, value) { this.values.set(key, value); }
@@ -26,11 +43,11 @@ function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () =>
   }
   const exports = {};
   vm.runInNewContext(compiled, {
-    exports, console, LocalStorage: Storage, VoiceClient: Voice,
+    exports, console, LocalStorage: Storage, VoiceClient: Voice, ClipboardHistory: clipboardExports.ClipboardHistory,
     pasteboard: {
-      getSystemPasteboard: () => ({ getData: async () => ({ getPrimaryText: () => '本地剪贴板测试' }) }),
+      getSystemPasteboard: () => board,
     },
-    preferences: { getPreferences: async () => ({ get: async () => false, put: async () => {}, flush: async () => {} }) },
+    preferences: { getPreferences: async () => ({ get: async (key) => autoClipboard && key === 'clipboard_history' ? '[]' : false, put: async () => {}, flush: async () => {} }) },
     cloudCandidates: queryCloud,
     refreshPublicDictionary: async () => ({ pending: false, revision: 'test', checked: 1 }),
     setTimeout: (callback, delay) => {
@@ -78,6 +95,10 @@ function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () =>
   };
   return { session, state, schemas, inserted, drain, pump, timeout: () => timer(), recordings: () => recordings,
     cloudTimers, operations,
+    copy: (text) => { clipboardText = text; clipboardListener?.(); },
+    watching: () => !!clipboardListener,
+    clipboardError: (error) => { clipboardFailure = error; },
+    clipboardDelay: (reply) => { clipboardReply = reply; },
     acknowledgements: () => acknowledgements };
 }
 
@@ -106,6 +127,42 @@ for (const [attribute, expectedRecords] of [
   await pasted.drain();
   assert.equal(recorded, expectedRecords, 'password and unverified fields must not populate clipboard history');
   assert.deepEqual(pasted.inserted, ['本地剪贴板测试'], 'explicit system paste remains available in private fields');
+}
+
+const autoClipboard = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {}, async () => [], [], true);
+await autoClipboard.drain();
+assert.equal(autoClipboard.watching(), true);
+assert.equal(autoClipboard.state.get('clipboardItems')[0].text, '本地剪贴板测试');
+assert.deepEqual(autoClipboard.inserted, [], 'reading the clipboard must never type into the target editor');
+autoClipboard.copy('第二次复制');
+await autoClipboard.drain();
+assert.equal(autoClipboard.state.get('clipboardItems').length, 2);
+autoClipboard.copy('第二次复制');
+await autoClipboard.drain();
+assert.equal(autoClipboard.state.get('clipboardItems').length, 2, 'update notifications deduplicate clipboard history');
+autoClipboard.clipboardError({ code: 201 });
+autoClipboard.session.refreshClipboard();
+await autoClipboard.drain();
+assert.match(autoClipboard.state.get('clipboardStatus'), /授权/);
+assert.equal(autoClipboard.state.get('clipboardItems').length, 2, 'permission denial preserves existing history');
+autoClipboard.clipboardError(undefined);
+let finishClipboard;
+autoClipboard.clipboardDelay(new Promise((resolve) => { finishClipboard = resolve; }));
+autoClipboard.session.refreshClipboard();
+autoClipboard.session.detach();
+finishClipboard({ getPrimaryText: () => '过期读取不得入库' });
+await autoClipboard.drain();
+assert.equal(autoClipboard.watching(), false, 'detaching unregisters only this input session listener');
+assert.equal(autoClipboard.state.get('clipboardItems').length, 2, 'stale clipboard reads cannot update another editor');
+for (const inputPattern of [10, undefined]) {
+  const privateClipboard = host(async () => { if (inputPattern === undefined) throw Error('unknown field');
+    return { inputPattern, enterKeyType: 0, bundleName: 'native.test' }; }, {}, async () => [], [], true);
+  await privateClipboard.drain();
+  privateClipboard.session.refreshClipboard();
+  privateClipboard.copy('私密输入不记录');
+  await privateClipboard.drain();
+  assert.equal(privateClipboard.watching(), false);
+  assert.equal(privateClipboard.state.get('clipboardItems').length, 0);
 }
 
 const scrolling = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {}, async () => [],

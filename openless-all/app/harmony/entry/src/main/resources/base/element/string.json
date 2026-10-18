@@ -1,6 +1,10 @@
 {
   "string": [
     {
+      "name": "clipboard_reason",
+      "value": "用于输入法读取复制的文字并保存本地剪贴板历史，便于连续粘贴"
+    },
+    {
       "name": "ime_name",
       "value": "OpenLess 输入法"
     },
