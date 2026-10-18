@@ -39,6 +39,7 @@ struct InputMethodPanel {
   @LocalStorageLink('password') password: boolean = false;
   @LocalStorageLink('editorVerified') editorVerified: boolean = false;
   @LocalStorageLink('voicePhase') voicePhase: string = 'idle';
+  @LocalStorageLink('voiceHolding') voiceHolding: boolean = false;
   @LocalStorageLink('voiceText') voiceText: string = '';
   @LocalStorageLink('voiceLevel') voiceLevel: number = 0;
   @LocalStorageLink('pendingCommit') pendingCommit: boolean = false;
@@ -579,13 +580,13 @@ struct InputMethodPanel {
     Button({ type: ButtonType.Normal }) {
       if (this.keyboardLayout === 'split') {
         Column({ space: 0 }) {
-          Text('语音').fontSize(10).fontColor(MUTED)
+          Text(this.voiceHolding ? '松开输入' : '语音').fontSize(10).fontColor(MUTED)
           Text('⎵').fontSize(28).fontColor(INK)
         }.width('100%').height('100%').justifyContent(FlexAlign.Center)
       } else {
         Column({ space: 1 }) {
           Text(this.chinese ? '空格' : 'space').fontSize(15).fontColor(MUTED)
-          if (!this.password) { Text('长按语音').fontSize(9).fontColor(MUTED) }
+          if (!this.password) { Text(this.voiceHolding ? '松开输入' : '长按语音').fontSize(9).fontColor(MUTED) }
         }.width('100%').height('100%').justifyContent(FlexAlign.Center)
       }
     }.height(this.keyHeight).layoutWeight(weight).backgroundColor(KEY).keySurface().padding(0).pressMotion().focusable(false)
@@ -593,8 +594,10 @@ struct InputMethodPanel {
       .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
       .gesture(GestureGroup(GestureMode.Exclusive,
         LongPressGesture({ duration: 450, repeat: false })
-          .onAction(() => { if (!this.password && this.voicePhase === 'idle') this.voice(); }),
-        TapGesture().onAction(() => { inputSession.space(); })
+          .onAction(() => { if (!this.password && this.voicePhase === 'idle') inputSession.startVoice(true); })
+          .onActionEnd(() => { inputSession.releaseVoiceHold(); })
+          .onActionCancel(() => { inputSession.cancelVoiceHold(); }),
+        TapGesture().onAction(() => { if (this.voicePhase === 'idle') inputSession.space(); })
       ))
   }
 
@@ -965,7 +968,7 @@ struct InputMethodPanel {
         else { this.keyboardToolbar() }
       }.height(48).width(this.keyboardWidth)
         .justifyContent(FlexAlign.End)
-      if (this.voicePhase !== 'idle') { this.voicePanel() }
+      if (this.voicePhase !== 'idle' && !this.voiceHolding) { this.voicePanel() }
       else if (this.utility === 3) { this.shortcutEditor() }
       else if (this.utility === 4) { this.keyboardSettings() }
       else if (this.utility === 5) { this.clipboardPanel() }

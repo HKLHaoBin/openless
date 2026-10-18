@@ -28,6 +28,7 @@ class InputPanelState {
   password: boolean = false;
   editorVerified: boolean = false;
   voicePhase: string = 'idle';
+  voiceHolding: boolean = false;
   voiceText: string = '';
   voiceLevel: number = 0;
   pendingCommit: boolean = false;
@@ -57,6 +58,7 @@ class InputSession {
   private candidateRevision: number = 0;
   private voice: VoiceClient = new VoiceClient(true);
   private voiceGeneration: number = 0;
+  private voiceReleaseRequested: boolean = false;
   private observedText?: string;
   private selectionBegin: number = -1;
   private selectionEnd: number = -1;
@@ -772,7 +774,7 @@ class InputSession {
     });
   }
 
-  async startVoice(): Promise<void> {
+  async startVoice(holdToTalk: boolean = false): Promise<void> {
     const context = this.context;
     const client = this.client;
     if (!context || !client || imeStorage.get<boolean>('password') || imeStorage.get<string>('voicePhase') !== 'idle') return;
@@ -783,6 +785,8 @@ class InputSession {
     if (imeStorage.get<boolean>('pendingCommit')) { imeStorage.setOrCreate('status', '请先重新确认待写入的候选词'); return; }
     const generation = this.generation;
     const voiceGeneration = ++this.voiceGeneration;
+    this.voiceReleaseRequested = false;
+    imeStorage.setOrCreate('voiceHolding', holdToTalk);
     imeStorage.setOrCreate('voicePhase', 'starting');
     imeStorage.setOrCreate('voiceText', '');
     imeStorage.setOrCreate('status', '正在准备麦克风');
@@ -797,18 +801,32 @@ class InputSession {
       }, (message: string) => {
         if (generation === this.generation && voiceGeneration === this.voiceGeneration) {
           imeStorage.setOrCreate('voicePhase', 'idle');
+          imeStorage.setOrCreate('voiceHolding', false);
           imeStorage.setOrCreate('status', message);
         }
       });
       if (generation !== this.generation || voiceGeneration !== this.voiceGeneration) return;
       imeStorage.setOrCreate('voicePhase', 'recording');
-      imeStorage.setOrCreate('status', '正在录音，点结束开始识别');
+      imeStorage.setOrCreate('status', holdToTalk ? '正在录音，松开空格识别并输入' : '正在录音，点结束识别并输入');
+      if (this.voiceReleaseRequested) await this.stopVoice();
     } catch (error) {
       if (generation === this.generation && voiceGeneration === this.voiceGeneration) {
         imeStorage.setOrCreate('voicePhase', 'idle');
+        imeStorage.setOrCreate('voiceHolding', false);
         imeStorage.setOrCreate('status', (error as Error).message);
       }
     }
+  }
+
+  releaseVoiceHold(): void {
+    if (!imeStorage.get<boolean>('voiceHolding')) return;
+    imeStorage.setOrCreate('voiceHolding', false);
+    this.voiceReleaseRequested = true;
+    if (imeStorage.get<string>('voicePhase') === 'recording') this.stopVoice();
+  }
+
+  cancelVoiceHold(): void {
+    if (imeStorage.get<boolean>('voiceHolding')) this.cancelVoice();
   }
 
   async stopVoice(): Promise<void> {
@@ -824,7 +842,8 @@ class InputSession {
       const text = result.polishedText || result.rawText;
       imeStorage.setOrCreate('voiceText', text);
       imeStorage.setOrCreate('voicePhase', text ? 'review' : 'idle');
-      imeStorage.setOrCreate('status', text ? '确认后写入当前输入框' : '未识别到文字，请重新录音');
+      imeStorage.setOrCreate('status', text ? '正在写入识别结果' : '未识别到文字，请重新录音');
+      if (text) this.confirmVoice();
     } catch (error) {
       if (generation === this.generation && voiceGeneration === this.voiceGeneration) {
         imeStorage.setOrCreate('voicePhase', 'idle');
@@ -840,6 +859,7 @@ class InputSession {
     const voiceGeneration = this.voiceGeneration;
     imeStorage.setOrCreate('voicePhase', 'inserting');
     this.perform('voice insert', async (client: inputMethodEngine.InputClient): Promise<boolean> => {
+      if (voiceGeneration !== this.voiceGeneration || imeStorage.get<string>('voicePhase') !== 'inserting') return false;
       let ok = false;
       try { ok = await this.writeText(client, text); return ok; } finally {
         if (generation === this.generation && voiceGeneration === this.voiceGeneration) {
@@ -853,8 +873,10 @@ class InputSession {
   cancelVoice(): void {
     const phase = imeStorage.get<string>('voicePhase');
     this.voiceGeneration++;
+    this.voiceReleaseRequested = false;
     this.voice.cancel().catch(() => {});
     imeStorage.setOrCreate('voicePhase', 'idle');
+    imeStorage.setOrCreate('voiceHolding', false);
     imeStorage.setOrCreate('voiceText', '');
     imeStorage.setOrCreate('voiceLevel', 0);
     if (phase !== 'idle') imeStorage.setOrCreate('status', '录音已取消');

@@ -20,6 +20,7 @@ function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () =>
   const cloudTimers = [], operations = [];
   let pending = '', acknowledgements = 0;
   let timer, recordings = 0;
+  let voiceStartup = Promise.resolve(), voiceResult = Promise.resolve({ rawText: '语音测试', polishedText: '语音结果' }), voiceStops = 0;
   let clipboardText = '本地剪贴板测试', clipboardListener, clipboardFailure;
   let clipboardReply;
   const board = {
@@ -38,7 +39,8 @@ function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () =>
     get(key) { return this.values.get(key); }
   }
   class Voice {
-    async start() { recordings++; }
+    async start() { recordings++; await voiceStartup; }
+    async stop() { voiceStops++; return voiceResult; }
     async cancel() {}
   }
   const exports = {};
@@ -94,6 +96,7 @@ function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () =>
     await session.queue;
   };
   return { session, state, schemas, inserted, drain, pump, timeout: () => timer(), recordings: () => recordings,
+    voiceStartWith: (promise) => { voiceStartup = promise; }, voiceStopWith: (promise) => { voiceResult = promise; }, voiceStops: () => voiceStops,
     cloudTimers, operations,
     copy: (text) => { clipboardText = text; clipboardListener?.(); },
     watching: () => !!clipboardListener,
@@ -556,3 +559,62 @@ await failedWrite.drain();
 assert.equal(failedWrite.state.get('symbolFeedback'), '未能确认，请检查输入框');
 normal.session.detach();
 assert.equal(normal.state.get('symbolFeedback'), '', 'editor feedback must not leak across bindings');
+
+const voiceEditor = () => host(async () => ({ inputPattern: 0, enterKeyType: 2, bundleName: 'com.huawei.hmos.settings' }));
+const held = voiceEditor();
+await held.drain();
+await held.session.startVoice(true);
+assert.equal(held.state.get('voiceHolding'), true);
+assert.equal(held.state.get('voicePhase'), 'recording');
+held.session.releaseVoiceHold();
+held.session.releaseVoiceHold();
+held.session.cancelVoiceHold(); // Gesture teardown after release must not cancel recognition.
+await held.drain();
+assert.equal(held.voiceStops(), 1);
+assert.deepEqual(held.inserted, ['语音结果'], 'release inserts once without a confirmation step');
+assert.equal(held.state.get('voicePhase'), 'idle');
+
+const earlyRelease = voiceEditor();
+await earlyRelease.drain();
+let finishStartup;
+earlyRelease.voiceStartWith(new Promise((resolve) => { finishStartup = resolve; }));
+const starting = earlyRelease.session.startVoice(true);
+await earlyRelease.pump();
+earlyRelease.session.releaseVoiceHold();
+assert.equal(earlyRelease.state.get('voiceHolding'), false);
+finishStartup();
+await starting;
+await earlyRelease.drain();
+assert.equal(earlyRelease.voiceStops(), 1, 'release while the microphone prepares is retained');
+assert.deepEqual(earlyRelease.inserted, ['语音结果']);
+
+const cancelledHold = voiceEditor();
+await cancelledHold.drain();
+await cancelledHold.session.startVoice(true);
+cancelledHold.session.cancelVoiceHold();
+cancelledHold.session.releaseVoiceHold();
+await cancelledHold.drain();
+assert.deepEqual(cancelledHold.inserted, []);
+assert.equal(cancelledHold.voiceStops(), 0);
+
+const lateVoice = voiceEditor();
+await lateVoice.drain();
+let finishRecognition;
+lateVoice.voiceStopWith(new Promise((resolve) => { finishRecognition = resolve; }));
+await lateVoice.session.startVoice(true);
+lateVoice.session.releaseVoiceHold();
+await lateVoice.pump();
+lateVoice.session.detach();
+finishRecognition({ rawText: '过期结果', polishedText: '' });
+await lateVoice.drain();
+assert.deepEqual(lateVoice.inserted, [], 'late recognition cannot write after editor detaches');
+
+const emptyVoice = voiceEditor();
+await emptyVoice.drain();
+emptyVoice.voiceStopWith(Promise.resolve({ rawText: '', polishedText: '' }));
+await emptyVoice.session.startVoice(true);
+emptyVoice.session.releaseVoiceHold();
+await emptyVoice.drain();
+assert.deepEqual(emptyVoice.inserted, []);
+assert.equal(emptyVoice.state.get('voicePhase'), 'idle');
+console.log('Harmony hold-to-talk: release, early release, cancellation, late results and empty recognition passed');
