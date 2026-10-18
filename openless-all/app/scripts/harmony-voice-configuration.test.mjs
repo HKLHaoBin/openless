@@ -6,10 +6,19 @@ import ts from 'typescript';
 const source = readFileSync(
   new URL('../harmony/entry/src/main/ets/VoiceConfiguration.ets', import.meta.url),
   'utf8',
-).replace(/^import .*;\n/gm, '');
-const compiled = ts.transpileModule(source, {
-  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
-}).outputText;
+);
+function compile(source) {
+  return ts.transpileModule(source.replace(/\r\n/g, '\n').replace(/^import .*;\n/gm, ''), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText;
+}
+const compiled = compile(source);
+assert.equal(
+  compile(source.replace(/\r?\n/g, '\r\n')),
+  compiled,
+  'Windows CRLF source uses the same isolated test host',
+);
+assert(!compiled.includes('require('), 'device-only imports are removed from the test host');
 const records = new Map();
 let snapshot = {
   version: 1,
