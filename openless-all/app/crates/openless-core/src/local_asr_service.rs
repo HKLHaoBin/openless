@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
-use crate::credentials::{ChannelKind, ChannelMutation, ChannelMutationResult, CredentialStore};
+use crate::credentials::{
+    ChannelKind, ChannelMutation, ChannelMutationResult, CredentialStore, ProviderSlot,
+};
 use crate::domains::{
     LocalAsrActivationRequest, LocalAsrActivationResult, LocalAsrApi, LocalAsrModel,
     LocalAsrModelCard, LocalAsrRemoteInfo, LocalAsrRuntimeStatus, LocalAsrSettings,
@@ -625,7 +627,23 @@ impl LocalAsrApi for LocalAsrService {
             if adapter.restart_required(request.target.runtime) {
                 return Err(restart_required_error());
             }
-            let previous_target = Self::target_for_active_preferences(&previous_preferences);
+            // Preferences can retain a local provider after an older process
+            // stopped, while the runtime itself is cold. Only retire the
+            // selected target when the credential directory confirms that the
+            // previous local channel is still the active, enabled owner.
+            let active_provider = match credentials.active_provider(ProviderSlot::Asr).await {
+                Ok(provider) => provider,
+                Err(error) if error.code == BackendErrorCode::Unsupported => String::new(),
+                Err(error) => return Err(error),
+            };
+            let previous_channel_is_active = channels.iter().any(|channel| {
+                channel.id == active_provider
+                    && channel.enabled
+                    && channel.provider_type == previous_preferences.active_asr_provider
+            });
+            let previous_target = previous_channel_is_active
+                .then(|| Self::target_for_active_preferences(&previous_preferences))
+                .flatten();
             if let Some(previous) = previous_target.filter(|target| {
                 target != &request.target
                     || previous_preferences.active_asr_provider != provider_type

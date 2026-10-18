@@ -2131,6 +2131,30 @@ fn privacy(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
+            toggle_row(
+                ui,
+                tr_l10n(lang, "settings.recording.polish_strategy_enabled_label"),
+                tr_l10n(lang, "settings.recording.polish_strategy_enabled_desc"),
+                vm.settings.polish_strategy_enabled,
+                || {
+                    actions.push(FrontendAction::SettingsToggle(
+                        SettingsField::PolishStrategyEnabled,
+                    ));
+                },
+            );
+            multiline_text_edit_row(
+                ui,
+                tr_l10n(lang, "settings.recording.polish_strategy_script_label"),
+                tr_l10n(lang, "settings.recording.polish_strategy_script_desc"),
+                &mut vm.settings.polish_strategy_script,
+                "fn strategy(input) { #{ action: \"polish\" } }",
+                |text| {
+                    actions.push(FrontendAction::SettingsText(
+                        SettingsTextField::PolishStrategyScript,
+                        text.to_owned(),
+                    ));
+                },
+            );
         },
     );
 }
@@ -3680,6 +3704,28 @@ fn text_edit_row(
             hint,
             ui.available_width().min(300.0),
             false,
+        );
+        if response.changed() {
+            on_change(value);
+        }
+    });
+}
+
+fn multiline_text_edit_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    desc: &str,
+    value: &mut String,
+    hint: &str,
+    on_change: impl FnOnce(&str),
+) {
+    row_desc(ui, label, desc, |ui| {
+        let response = ui.add(
+            egui::TextEdit::multiline(value)
+                .hint_text(hint)
+                .desired_width(ui.available_width().min(420.0))
+                .desired_rows(6)
+                .font(egui::TextStyle::Monospace),
         );
         if response.changed() {
             on_change(value);

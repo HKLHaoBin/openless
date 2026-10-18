@@ -139,6 +139,10 @@ pub struct DictationPolishContext {
     /// Transcripts with at most this many non-whitespace characters skip
     /// polish (0 = off). See `DictationContext::skips_polish_for_short_text`.
     pub polish_skip_max_chars: u32,
+    /// User-defined post-ASR policy, captured when the session starts.
+    pub polish_strategy: crate::polish_strategy::PolishStrategyConfig,
+    /// Request-only overrides selected by the strategy for this transcript.
+    pub polish_request_overrides: Option<crate::polish_strategy::PolishRequestOverrides>,
     pub front_app: Option<String>,
     pub cursor_context: Option<String>,
     /// Newest-first turns captured when the session starts.
@@ -350,6 +354,11 @@ impl DictationContext {
                 llm_thinking_enabled: preferences.llm_thinking_enabled,
                 context_window_minutes: preferences.polish_context_window_minutes,
                 polish_skip_max_chars: preferences.polish_skip_max_chars,
+                polish_strategy: crate::polish_strategy::PolishStrategyConfig {
+                    enabled: preferences.polish_strategy_enabled,
+                    script: preferences.polish_strategy_script.clone(),
+                },
+                polish_request_overrides: None,
                 front_app: options.front_app.clone().and_then(non_blank_owned),
                 cursor_context: options.cursor_context.clone().and_then(non_blank_owned),
                 prior_turns,
@@ -711,16 +720,23 @@ mod tests {
 
     #[test]
     fn textstream_stays_live_without_changing_the_users_batch_preference() {
-        let preferences = UserPreferences { stable_transcription_enabled: true, ..UserPreferences::default() };
+        let preferences = UserPreferences {
+            stable_transcription_enabled: true,
+            ..UserPreferences::default()
+        };
         let pack = builtin_style_pack_for_mode(PolishMode::Structured);
         for (provider, buffered) in [("experimental-textstream", false), ("volcengine", true)] {
             let context = DictationContext::capture(
-                &preferences, &pack,
+                &preferences,
+                &pack,
                 DictationProviderInvocations::new(
                     ProviderInvocation::for_provider(provider),
                     ProviderInvocation::for_provider("openai"),
                     ProviderInvocation::for_provider("omni"),
-                ), Vec::new(), Vec::new(), &DictationStartOptions::default(),
+                ),
+                Vec::new(),
+                Vec::new(),
+                &DictationStartOptions::default(),
             );
             assert_eq!(context.recording.transcribe_after_stop, buffered);
         }

@@ -40,6 +40,9 @@ export function DataStorageSection() {
     if (Number.isNaN(parsed)) return;
     void savePrefs({ ...prefs, polishSkipMaxChars: clamp(parsed, 0, 50) });
   };
+  const onPolishStrategyScriptChange = (raw: string) => {
+    void savePrefs({ ...prefs, polishStrategyScript: raw.slice(0, 32_768) });
+  };
   // History cap 200 is the current HISTORY_CAP (persistence.rs:32); the lower bound of 5 keeps a
   // user-entered 0 from wiping everything as soon as one entry is written; empty string means
   // unlimited, falling back to null → the backend applies its 200 default.
@@ -99,6 +102,29 @@ export function DataStorageSection() {
           value={prefs.polishSkipMaxChars}
           onChange={(e) => onPolishSkipMaxCharsChange(e.target.value)}
           style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+        />
+      </SettingRow>
+      <SettingRow
+        label={t('settings.recording.polishStrategyEnabledLabel')}
+        desc={t('settings.recording.polishStrategyEnabledDesc')}
+      >
+        <Toggle
+          on={prefs.polishStrategyEnabled}
+          onToggle={(next) => void savePrefs({ ...prefs, polishStrategyEnabled: next })}
+        />
+      </SettingRow>
+      <SettingRow
+        label={t('settings.recording.polishStrategyScriptLabel')}
+        desc={t('settings.recording.polishStrategyScriptDesc')}
+      >
+        <textarea
+          value={prefs.polishStrategyScript}
+          onChange={(event) => onPolishStrategyScriptChange(event.target.value)}
+          placeholder={t('settings.recording.polishStrategyScriptPlaceholder')}
+          spellCheck={false}
+          rows={8}
+          maxLength={32_768}
+          style={{ ...inputStyle, flex: '1 1 360px', height: 150, resize: 'vertical', fontFamily: 'monospace' }}
         />
       </SettingRow>
       {/* Cursor context. Placing it under "Privacy" rather than "Polish" is deliberate: this

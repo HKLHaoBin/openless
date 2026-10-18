@@ -619,6 +619,7 @@ impl DictationEngine for PipelineDictationEngine {
             let asr_started = std::time::Instant::now();
             let mut asr_call_label = transcription.asr_call_label();
             let transcription_result = transcription.finish().await;
+            let mut asr_metadata = transcription.transcript_metadata();
             asr_call_label = transcription.asr_call_label().or(asr_call_label);
             for notification in transcription.take_progress_notifications() {
                 publish_progress(
@@ -664,8 +665,9 @@ impl DictationEngine for PipelineDictationEngine {
                         )
                         .await
                         {
-                            Ok((transcript, label)) => {
+                            Ok((transcript, label, metadata)) => {
                                 asr_call_label = label;
+                                asr_metadata = metadata;
                                 transcript
                             }
                             Err((error, label)) => {
@@ -760,8 +762,52 @@ impl DictationEngine for PipelineDictationEngine {
                     is_final: true,
                 }),
             )?;
+            // Issue #1225: evaluate the optional policy only after correction and
+            // final transcript publication, so the script sees what the user will
+            // actually receive and cannot affect raw ASR diagnostics.
+            let strategy_input = crate::polish_strategy::PolishStrategyInput {
+                char_count: transcript
+                    .text
+                    .chars()
+                    .filter(|character| !character.is_whitespace())
+                    .count(),
+                text: transcript.text.clone(),
+                audio_duration_ms: transcript.duration_ms,
+                language: asr_metadata
+                    .language
+                    .clone()
+                    .or_else(|| context.asr.language.clone()),
+                confidence: asr_metadata.confidence,
+                asr_provider: asr_call_label
+                    .as_ref()
+                    .map(|label| label.provider.clone())
+                    .unwrap_or_else(|| context.asr.provider_type.clone()),
+                asr_model: asr_call_label
+                    .as_ref()
+                    .and_then(|label| label.model.clone())
+                    .or_else(|| context.asr.model.clone()),
+            };
+            let strategy_decision = (context.output_target
+                != crate::dictation_context::DictationOutputTarget::Qa)
+                .then(|| {
+                    crate::polish_strategy::evaluate(
+                        &context.polish.polish_strategy,
+                        &strategy_input,
+                    )
+                })
+                .flatten();
+            let strategy_overrides = match &strategy_decision {
+                Some(crate::polish_strategy::PolishStrategyDecision::Request(overrides)) => {
+                    Some(overrides.clone())
+                }
+                _ => None,
+            };
+            let strategy_skips = strategy_skips_polish(&context, strategy_decision.as_ref());
             // Issue #1032: short transcripts skip polish (user-configured threshold).
-            let uses_polisher = context.uses_llm_polisher()
+            // A policy error or `polish` decision deliberately retains this legacy
+            // path; only an explicit `skip` suppresses it.
+            let uses_polisher = !strategy_skips
+                && context.uses_llm_polisher()
                 && !context.skips_polish_for_short_text(&transcript.text);
             let (polish_output, polish_failed, polish_ms) = if uses_polisher {
                 publish_progress(
@@ -785,13 +831,21 @@ impl DictationEngine for PipelineDictationEngine {
                     progress: Arc::clone(&progress),
                 });
                 let polish_started = std::time::Instant::now();
+                let polish_context = strategy_overrides.as_ref().map_or_else(
+                    || Arc::clone(&context),
+                    |overrides| {
+                        let mut updated = (*context).clone();
+                        updated.polish.polish_request_overrides = Some(overrides.clone());
+                        Arc::new(updated)
+                    },
+                );
                 let output = if let Some(error) = context.deferred_llm_error.clone() {
                     Err(error)
                 } else {
                     polisher
                         .polish(
                             session_id,
-                            context,
+                            polish_context,
                             transcript.text.clone(),
                             polish_partials,
                         )
@@ -1108,6 +1162,7 @@ async fn retry_transcription(
     (
         crate::ports::TranscriptOutput,
         Option<crate::auxiliary::AsrCallLabel>,
+        crate::ports::TranscriptMetadata,
     ),
     (BackendError, Option<crate::auxiliary::AsrCallLabel>),
 > {
@@ -1175,6 +1230,7 @@ async fn retry_transcription(
         }
         transcription.consume_pcm_chunk(&pcm);
         let transcription_result = transcription.finish().await;
+        let metadata = transcription.transcript_metadata();
         for notification in transcription.take_progress_notifications() {
             if let Err(error) = publish_progress(
                 &session,
@@ -1190,7 +1246,7 @@ async fn retry_transcription(
                 session
                     .transcription_finished
                     .store(true, Ordering::Release);
-                return Ok((output, last_label));
+                return Ok((output, last_label, metadata));
             }
             Err(error) => {
                 let _ = cancel_transcription_once(&session, transcription).await;
@@ -1260,6 +1316,17 @@ fn publish_progress(
         ));
     }
     progress.publish(session_id, event)
+}
+
+fn strategy_skips_polish(
+    context: &DictationContext,
+    decision: Option<&crate::polish_strategy::PolishStrategyDecision>,
+) -> bool {
+    matches!(
+        decision,
+        Some(crate::polish_strategy::PolishStrategyDecision::Skip)
+    ) && !context.polish.translation_active
+        && context.is_plain_dictation_output()
 }
 
 fn can_fallback_to_raw(policy: PolishFailurePolicy, error: &BackendError) -> bool {
@@ -1605,6 +1672,13 @@ impl TranscriptionSession for BufferedTranscriptionSession {
     fn asr_call_label(&self) -> Option<crate::auxiliary::AsrCallLabel> {
         self.downstream()
             .and_then(|session| session.asr_call_label())
+    }
+
+    fn transcript_metadata(&self) -> crate::ports::TranscriptMetadata {
+        self.downstream()
+            .map_or_else(crate::ports::TranscriptMetadata::default, |session| {
+                session.transcript_metadata()
+            })
     }
 
     fn take_progress_notifications(&self) -> Vec<crate::types::NotificationPayload> {
@@ -3083,6 +3157,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn custom_strategy_skip_bypasses_the_polisher() {
+        let fixture = fixture_engine(
+            false,
+            Ok(crate::ports::PolishOutput::text("must not be used")),
+            None,
+            None,
+        );
+        let mut context = DictationContext::default();
+        context.polish.polish_strategy = crate::polish_strategy::PolishStrategyConfig {
+            enabled: true,
+            script: r#"fn strategy(input) { #{ action: "skip" } }"#.into(),
+        };
+        let session_id = SessionId::new();
+        fixture
+            .engine
+            .start(session_id, Arc::new(context), fixture.progress.clone())
+            .await
+            .unwrap();
+        let result = fixture
+            .engine
+            .finish(session_id, fixture.progress.clone())
+            .await
+            .unwrap();
+        assert_eq!(fixture.polish_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(result.polished_text, "raw text");
+    }
+
+    #[tokio::test]
+    async fn custom_strategy_request_overrides_are_scoped_to_the_polish_call() {
+        let fixture = fixture_engine(
+            false,
+            Ok(crate::ports::PolishOutput::text("polished text")),
+            None,
+            None,
+        );
+        let mut context = DictationContext::default();
+        context.polish.polish_strategy = crate::polish_strategy::PolishStrategyConfig {
+            enabled: true,
+            script: r#"fn strategy(input) { #{ action: "request", maxTokens: 321 } }"#.into(),
+        };
+        let context = Arc::new(context);
+        let session_id = SessionId::new();
+        fixture
+            .engine
+            .start(session_id, Arc::clone(&context), fixture.progress.clone())
+            .await
+            .unwrap();
+        fixture
+            .engine
+            .finish(session_id, fixture.progress.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(context.polish.polish_request_overrides, None);
+        let polish_contexts = fixture.polish_contexts.lock().unwrap();
+        assert_eq!(polish_contexts.len(), 1);
+        assert_eq!(
+            polish_contexts[0]
+                .polish
+                .polish_request_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.max_tokens),
+            Some(321)
+        );
+    }
+
+    #[tokio::test]
     async fn short_transcript_under_threshold_skips_polish() {
         // Issue #1032: "raw text" has 7 non-whitespace characters, within a limit of 8.
         let fixture = fixture_engine(
@@ -3096,11 +3237,7 @@ mod tests {
         let session_id = SessionId::new();
         fixture
             .engine
-            .start(
-                session_id,
-                Arc::new(context),
-                fixture.progress.clone(),
-            )
+            .start(session_id, Arc::new(context), fixture.progress.clone())
             .await
             .unwrap();
         let result = fixture
@@ -3127,11 +3264,7 @@ mod tests {
         let session_id = SessionId::new();
         fixture
             .engine
-            .start(
-                session_id,
-                Arc::new(context),
-                fixture.progress.clone(),
-            )
+            .start(session_id, Arc::new(context), fixture.progress.clone())
             .await
             .unwrap();
         let result = fixture
@@ -3367,6 +3500,20 @@ mod tests {
             }),
         );
         (engine, Arc::new(RecordingProgress::default()), starts)
+    }
+
+    #[test]
+    fn strategy_skip_preserves_translation_and_voice_edit_semantics() {
+        let context = raw_dictation_context();
+        let decision = crate::polish_strategy::PolishStrategyDecision::Skip;
+        assert!(strategy_skips_polish(&context, Some(&decision)));
+
+        let mut translation = (*context).clone();
+        translation.polish.translation_active = true;
+        assert!(!strategy_skips_polish(&translation, Some(&decision)));
+
+        let voice_edit = context.with_output_target(DictationOutputTarget::VoiceEdit);
+        assert!(!strategy_skips_polish(&voice_edit, Some(&decision)));
     }
 
     fn raw_dictation_context() -> Arc<DictationContext> {

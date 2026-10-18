@@ -49,6 +49,7 @@ pub mod omni;
 pub mod output_cleaning;
 mod persistence;
 pub mod polish;
+pub mod polish_strategy;
 pub mod ports;
 pub mod preferences;
 pub mod prompt_compose;
@@ -291,6 +292,10 @@ pub use model_store::{
     ModelTransport, ModelTransportRequest, ModelTransportResponse, ReqwestModelTransport,
     MODEL_PARTIAL_INDEX, MODEL_READY_SENTINEL,
 };
+pub use polish_strategy::{
+    evaluate as evaluate_polish_strategy, PolishRequestOverrides, PolishStrategyConfig,
+    PolishStrategyDecision, PolishStrategyInput, ReasoningEffort,
+};
 pub use ports::PreparedTranscription;
 pub use ports::{
     ActiveRecording, AudioConsumer, AudioRecorder, CaptureStartRequest, CapturedTextTarget,
@@ -300,8 +305,8 @@ pub use ports::{
     InsertWriteResult, NoopEditObservationAdapter, NoopHostActions, NoopHostContextAdapter,
     PendingAudioCapture, PolishOutput, RecordingArchive, RecordingControlSink, RecordingEvent,
     RecordingProgressSink, ResourceResolver, TextInserter, TextInsertionSession, TextPolisher,
-    TextStreamChunk, TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
-    UnsupportedTextInserter, VoiceCapture,
+    TextStreamChunk, TextStreamSink, TranscriptMetadata, TranscriptOutput, TranscriptionEngine,
+    TranscriptionSession, UnsupportedTextInserter, VoiceCapture,
 };
 pub use preferences::PreferencesStore;
 pub use prompt_compose::{
