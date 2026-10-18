@@ -232,6 +232,7 @@ mod windows_message {
         encode_query_payload, encode_submit_payload, ImeSubmitStatus, IME_COPYDATA_QUERY,
         IME_COPYDATA_SUBMIT, IME_MAX_SUBMIT_BYTES, OPENLESS_IME_MESSAGE_WINDOW_CLASS,
     };
+    use crate::issue1227_debug;
 
     const HWND_MESSAGE: isize = -3;
     const WM_COPYDATA: u32 = 0x004A;
@@ -277,7 +278,28 @@ mod windows_message {
     pub fn submit_text_to_window(
         request: ImeSubmitRequest,
     ) -> WindowsImeIpcResult<ImeSubmitStatus> {
-        let target = request.target.ok_or(WindowsImeIpcError::NoReadyClient)?;
+        let target = match request.target {
+            Some(target) => {
+                issue1227_debug::record(
+                    "P1",
+                    &["H1", "H3"],
+                    "submit_target",
+                    "present",
+                    serde_json::json!({"target_present": true}),
+                );
+                target
+            }
+            None => {
+                issue1227_debug::record(
+                    "P1",
+                    &["H1", "H3"],
+                    "submit_target",
+                    "absent",
+                    serde_json::json!({"target_present": false}),
+                );
+                return Err(WindowsImeIpcError::NoReadyClient);
+            }
+        };
         let token = next_submit_token();
         let payload = encode_submit_payload(token, &request.text);
         if payload.len() > IME_MAX_SUBMIT_BYTES {
@@ -292,6 +314,16 @@ mod windows_message {
             "[windows-ime] submitting text to IME window pid={} tid={}",
             window.process_id,
             window.thread_id
+        );
+        issue1227_debug::record(
+            "P1",
+            &["H1", "H3"],
+            "submit_dispatch",
+            "entered",
+            serde_json::json!({
+                "same_target_thread": window.thread_id == target.thread_id,
+                "window_present": true,
+            }),
         );
 
         let reply = send_copy_data(
@@ -312,7 +344,25 @@ mod windows_message {
                 WindowsImeIpcError::Io(format!("sending to the IME window failed: OS error {code}"))
             }
         })?;
-        classify_submit_reply(reply)?;
+        match classify_submit_reply(reply) {
+            Ok(()) => issue1227_debug::record(
+                "P1",
+                &["H2", "H3"],
+                "submit_dispatch",
+                "accepted",
+                serde_json::json!({"reply_nonzero": true}),
+            ),
+            Err(error) => {
+                issue1227_debug::record(
+                    "P1",
+                    &["H2", "H3"],
+                    "submit_dispatch",
+                    "rejected",
+                    serde_json::json!({"reply_nonzero": reply != 0}),
+                );
+                return Err(error);
+            }
+        }
 
         let deadline = Instant::now() + IME_SUBMIT_TIMEOUT;
         let query = encode_query_payload(token);
@@ -325,19 +375,56 @@ mod windows_message {
                 IME_QUERY_SEND_TIMEOUT_MS,
             ) {
                 Ok(reply) => {
-                    if let Some(status) = classify_query_reply(reply)? {
+                    let query_status = match classify_query_reply(reply) {
+                        Ok(status) => status,
+                        Err(error) => {
+                            issue1227_debug::record(
+                                "P1",
+                                &["H2", "H3"],
+                                "submit_query",
+                                "ambiguous",
+                                serde_json::json!({"reply_nonzero": reply != 0}),
+                            );
+                            return Err(error);
+                        }
+                    };
+                    if let Some(status) = query_status {
+                        issue1227_debug::record(
+                            "P1",
+                            &["H2", "H3"],
+                            "submit_query",
+                            match status {
+                                ImeSubmitStatus::Committed => "committed",
+                                ImeSubmitStatus::Rejected => "rejected",
+                            },
+                            serde_json::json!({"reply_nonzero": reply != 0}),
+                        );
                         return Ok(status);
                     }
                 }
                 // The host is busy, possibly inside the commit itself.
                 Err(SendFailure::TimedOut) => {}
                 Err(SendFailure::NotDelivered(code)) => {
+                    issue1227_debug::record(
+                        "P1",
+                        &["H1", "H3"],
+                        "submit_query",
+                        "window_gone",
+                        serde_json::json!({"window_present": false, "os_error": code}),
+                    );
                     return Err(WindowsImeIpcError::OutcomeUnknown(format!(
                         "IME window went away after submit dispatch: OS error {code}"
                     )));
                 }
             }
             if Instant::now() >= deadline {
+                issue1227_debug::record(
+                    "P1",
+                    &["H1", "H2", "H3"],
+                    "submit_query",
+                    "timeout",
+                    serde_json::json!({"window_present": true}),
+                );
                 return Err(WindowsImeIpcError::OutcomeUnknown(
                     "OpenLess IME IPC timed out after submit dispatch".to_string(),
                 ));

@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "edit_session.h"
+#include "issue1227_debug.h"
 
 extern LONG g_object_count;
 extern HINSTANCE g_module;
@@ -45,7 +46,11 @@ bool ReadToken(const COPYDATASTRUCT *copy_data, uint32_t *token) {
 
 } // namespace
 
-OpenLessTextService::OpenLessTextService() { InterlockedIncrement(&g_object_count); }
+OpenLessTextService::OpenLessTextService() {
+  InterlockedIncrement(&g_object_count);
+  issue1227_debug::Record("P2", "\"H1\"", "service_construct", "entered",
+                         "\"stage\":\"construct\"");
+}
 
 OpenLessTextService::~OpenLessTextService() {
   Deactivate();
@@ -87,6 +92,9 @@ STDMETHODIMP OpenLessTextService::Activate(ITfThreadMgr *thread_mgr, TfClientId 
 STDMETHODIMP OpenLessTextService::ActivateEx(ITfThreadMgr *thread_mgr, TfClientId client_id,
                                              DWORD flags) {
   UNREFERENCED_PARAMETER(flags);
+  issue1227_debug::Record("P2", "\"H1\"", "activate", "entered",
+                         thread_mgr != nullptr ? "\"thread_mgr_present\":true,\"client_id_present\":true"
+                                                : "\"thread_mgr_present\":false,\"client_id_present\":false");
 
   if (thread_mgr == nullptr) {
     return E_INVALIDARG;
@@ -110,6 +118,9 @@ STDMETHODIMP OpenLessTextService::ActivateEx(ITfThreadMgr *thread_mgr, TfClientI
 // Must stay wait-free: TSF can call this while the host thread is being torn
 // down, where blocking on another thread deadlocks the whole host process.
 STDMETHODIMP OpenLessTextService::Deactivate() {
+  issue1227_debug::Record(
+      "P2", "\"H1\",\"H2\",\"H3\"", "deactivate", "entered",
+      message_window_ != nullptr ? "\"window_present\":true" : "\"window_present\":false");
   CancelPendingSubmit();
   DestroyMessageWindow();
 
@@ -142,14 +153,20 @@ HRESULT OpenLessTextService::EnsureMessageWindow() {
   message_window_ = CreateWindowExW(0, kMessageWindowClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
                                     nullptr, g_module, this);
   if (message_window_ == nullptr) {
+    issue1227_debug::Record("P2", "\"H1\"", "window_create", "failed",
+                           "\"present\":false");
     return HRESULT_FROM_WIN32(GetLastError());
   }
+  issue1227_debug::Record("P2", "\"H1\"", "window_create", "succeeded",
+                         "\"present\":true");
 
   return S_OK;
 }
 
 void OpenLessTextService::DestroyMessageWindow() {
   if (message_window_ != nullptr) {
+    issue1227_debug::Record("P2", "\"H1\",\"H3\"", "window_destroy", "entered",
+                           "\"present\":true");
     const HWND window = message_window_;
     message_window_ = nullptr;
     SetWindowLongPtrW(window, GWLP_USERDATA, 0);
@@ -185,6 +202,8 @@ LRESULT OpenLessTextService::AcceptSubmit(const COPYDATASTRUCT *copy_data) {
               text_bytes);
   submit_token_ = token;
   submit_status_ = kStatusPending;
+  issue1227_debug::Record("P3", "\"H2\",\"H3\"", "submit_accept", "accepted",
+                         "\"token_present\":true,\"text_present\":true");
 
   // The sender's SendMessage can be dispatched while the host is in the middle
   // of something else. Commit from a posted message instead, so the edit
@@ -192,6 +211,8 @@ LRESULT OpenLessTextService::AcceptSubmit(const COPYDATASTRUCT *copy_data) {
   if (!PostMessageW(message_window_, kRunSubmitMessage, token, 0)) {
     const DWORD error = GetLastError();
     CancelPendingSubmit();
+    issue1227_debug::Record("P3", "\"H2\",\"H3\"", "submit_post", "failed",
+                           "\"posted\":false");
     return StatusFromHResult(HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_GEN_FAILURE));
   }
   return kStatusAccepted;
@@ -203,8 +224,15 @@ LRESULT OpenLessTextService::QuerySubmit(const COPYDATASTRUCT *copy_data) {
     return kStatusBadRequest;
   }
   if (token != submit_token_) {
+    issue1227_debug::Record("P3", "\"H2\",\"H3\"", "submit_query", "stale_token",
+                           "\"token_match\":false");
     return kStatusUnknownToken;
   }
+  issue1227_debug::Record(
+      "P3", "\"H2\",\"H3\"", "submit_query", "matched",
+      async_edit_ ? (async_edit_->completed ? "\"async_present\":true,\"completed\":true"
+                                            : "\"async_present\":true,\"completed\":false")
+                  : "\"async_present\":false,\"completed\":false");
 
   if (async_edit_ && async_edit_->completed) {
     submit_status_ = StatusFromHResult(async_edit_->result);
@@ -215,6 +243,8 @@ LRESULT OpenLessTextService::QuerySubmit(const COPYDATASTRUCT *copy_data) {
 
 void OpenLessTextService::RunPendingSubmit(uint32_t token) {
   if (token != submit_token_ || submit_status_ != kStatusPending || async_edit_) {
+    issue1227_debug::Record("P3", "\"H1\",\"H2\",\"H3\"", "submit_run", "skipped",
+                           token == submit_token_ ? "\"token_match\":true" : "\"token_match\":false");
     return; // Superseded, cancelled, or already running.
   }
 
@@ -232,6 +262,9 @@ void OpenLessTextService::RunPendingSubmit(uint32_t token) {
 
   // The edit session can re-enter the message loop, so a newer submit or
   // Deactivate may have replaced this one in the meantime.
+  issue1227_debug::Record(
+      "P3", "\"H1\",\"H2\"", "submit_run", "returned",
+      token == submit_token_ ? "\"token_match\":true" : "\"token_match\":false");
   if (token != submit_token_) {
     if (async_edit) {
       async_edit->cancelled = true;
@@ -247,6 +280,9 @@ void OpenLessTextService::RunPendingSubmit(uint32_t token) {
 }
 
 void OpenLessTextService::CancelPendingSubmit() {
+  issue1227_debug::Record(
+      "P3", "\"H1\",\"H2\",\"H3\"", "submit_cancel", "entered",
+      async_edit_ ? "\"async_present\":true" : "\"async_present\":false");
   if (async_edit_) {
     async_edit_->cancelled = true;
     async_edit_.reset();
@@ -292,6 +328,9 @@ HRESULT OpenLessTextService::CommitTextOnOwnerThread(
   HRESULT edit_result = S_OK;
   hr = context->RequestEditSession(client_id, session, TF_ES_SYNC | TF_ES_READWRITE, &edit_result);
   session->Release();
+  issue1227_debug::Record(
+      "P3", "\"H2\"", "edit_session_request", "returned",
+      SUCCEEDED(hr) && SUCCEEDED(edit_result) ? "\"sync_ok\":true" : "\"sync_ok\":false");
 
   const bool synchronous_rejected =
       hr == TF_E_SYNCHRONOUS || (SUCCEEDED(hr) && edit_result == TF_E_SYNCHRONOUS);
@@ -344,6 +383,9 @@ LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window, UINT messag
 
   // Keep the service alive: committing can re-enter and let TSF deactivate and
   // release it before this call returns.
+  issue1227_debug::Record(
+      "P2", "\"H1\",\"H3\"", "message_dispatch", "entered",
+      message == WM_COPYDATA ? "\"message\":\"copydata\"" : "\"message\":\"run_submit\"");
   service->AddRef();
   LRESULT result = 0;
   try {

@@ -1,5 +1,7 @@
 #include "edit_session.h"
 
+#include "issue1227_debug.h"
+
 #include <utility>
 
 extern LONG g_object_count;
@@ -51,6 +53,9 @@ STDMETHODIMP_(ULONG) OpenLessEditSession::Release() {
 STDMETHODIMP OpenLessEditSession::DoEditSession(TfEditCookie edit_cookie) {
   const HRESULT hr = async_state_ && async_state_->cancelled ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
                                                              : InsertText(edit_cookie);
+  issue1227_debug::Record(
+      "P3", "\"H2\"", "edit_session_complete", "returned",
+      SUCCEEDED(hr) ? "\"result_ok\":true" : "\"result_ok\":false");
   if (async_state_) {
     async_state_->result = hr;
     async_state_->completed = true;

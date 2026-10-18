@@ -4,6 +4,9 @@ use std::sync::{
     Arc,
 };
 
+#[cfg(target_os = "windows")]
+use crate::issue1227_debug;
+
 /// A timed-out native call cannot be forcibly stopped. Its worker owns the
 /// permit and model until it actually exits; later calls wait asynchronously.
 pub(super) async fn run_serialized_decode<T: Send + 'static>(
@@ -11,6 +14,14 @@ pub(super) async fn run_serialized_decode<T: Send + 'static>(
     timeout: std::time::Duration,
     decode: impl FnOnce(Arc<AtomicBool>) -> Result<T> + Send + 'static,
 ) -> Result<T> {
+    #[cfg(target_os = "windows")]
+    issue1227_debug::record(
+        "P4",
+        &["H4"],
+        "decode_enter",
+        "entered",
+        serde_json::json!({"gate_present": true}),
+    );
     struct CancelOnDrop(Arc<AtomicBool>);
     impl Drop for CancelOnDrop {
         fn drop(&mut self) {
@@ -19,7 +30,7 @@ pub(super) async fn run_serialized_decode<T: Send + 'static>(
     }
     let cancelled = Arc::new(AtomicBool::new(false));
     let _cancel_on_drop = CancelOnDrop(Arc::clone(&cancelled));
-    tokio::time::timeout(timeout, async move {
+    let timed = tokio::time::timeout(timeout, async move {
         let permit = gate
             .acquire_owned()
             .await
@@ -29,13 +40,36 @@ pub(super) async fn run_serialized_decode<T: Send + 'static>(
             if cancelled.load(Ordering::Acquire) {
                 anyhow::bail!("sherpa-onnx transcribe cancelled");
             }
-            decode(cancelled)
+            let result = decode(cancelled);
+            #[cfg(target_os = "windows")]
+            issue1227_debug::record(
+                "P4",
+                &["H4"],
+                "decode_worker",
+                if result.is_ok() {
+                    "succeeded"
+                } else {
+                    "failed"
+                },
+                serde_json::json!({"worker_returned": true}),
+            );
+            result
         })
         .await
         .context("sherpa-onnx transcribe worker failed")?
     })
-    .await
-    .context("sherpa-onnx transcribe timeout")?
+    .await;
+    if timed.is_err() {
+        #[cfg(target_os = "windows")]
+        issue1227_debug::record(
+            "P4",
+            &["H4"],
+            "decode_timeout",
+            "timed_out",
+            serde_json::json!({"worker_returned": false}),
+        );
+    }
+    timed.context("sherpa-onnx transcribe timeout")?
 }
 
 #[cfg(test)]

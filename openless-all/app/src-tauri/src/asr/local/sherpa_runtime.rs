@@ -24,6 +24,8 @@ use super::blocking_decode::run_serialized_decode;
 use crate::asr::local::sherpa::{
     SherpaPreparePhase, SherpaPrepareProgressPayload, SherpaRuntimeStatus, PROVIDER_ID,
 };
+#[cfg(target_os = "windows")]
+use crate::issue1227_debug;
 
 const QWEN3_ASR_CHUNK_LIMIT_MS: u64 = 30_000;
 const QWEN3_ASR_MAX_NEW_TOKENS: i32 = 256;
@@ -325,8 +327,27 @@ impl SherpaOnnxRuntime {
     pub async fn release_now(&self) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
         let mut state = self.state.lock();
+        #[cfg(target_os = "windows")]
+        issue1227_debug::record(
+            "P4",
+            &["H4"],
+            "model_release",
+            "entered",
+            serde_json::json!({
+                "offline_present": state.offline_loaded.is_some(),
+                "online_present": state.online_loaded.is_some(),
+            }),
+        );
         state.offline_loaded = None;
         state.online_loaded = None;
+        #[cfg(target_os = "windows")]
+        issue1227_debug::record(
+            "P4",
+            &["H4"],
+            "model_release",
+            "completed",
+            serde_json::json!({"offline_present": false, "online_present": false}),
+        );
         Ok(())
     }
 
@@ -340,9 +361,25 @@ impl SherpaOnnxRuntime {
     ) -> Result<bool> {
         let _lifecycle = self.lifecycle.lock().await;
         if generation.load(Ordering::Acquire) != expected {
+            #[cfg(target_os = "windows")]
+            issue1227_debug::record(
+                "P4",
+                &["H4"],
+                "model_release_generation",
+                "skipped",
+                serde_json::json!({"generation_match": false}),
+            );
             return Ok(false);
         }
         let mut state = self.state.lock();
+        #[cfg(target_os = "windows")]
+        issue1227_debug::record(
+            "P4",
+            &["H4"],
+            "model_release_generation",
+            "entered",
+            serde_json::json!({"generation_match": true}),
+        );
         state.offline_loaded = None;
         state.online_loaded = None;
         Ok(true)
