@@ -14,7 +14,6 @@ function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () =>
   const schemas = [], inserted = [];
   const cloudTimers = [], operations = [];
   let pending = '', acknowledgements = 0;
-  let candidatePage = 0;
   let timer, recordings = 0;
   class Storage {
     constructor(initial) { this.values = new Map(Object.entries(initial)); }
@@ -48,12 +47,13 @@ function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () =>
     rimeRequest: async (operation, session, argument) => {
       operations.push([operation, argument]);
       if (candidatePages.length) {
-        if (operation === 'key' && argument === '65366') candidatePage = Math.min(candidatePages.length - 1, candidatePage + 1);
         if (operation === 'select_absolute') pending = candidatePages.flat()[Number(argument.split('@')[0])];
         if (operation === 'ack') { pending = ''; acknowledgements++; }
-        return { session: 'test', revision: candidatePage + 1, input: pending ? '' : 'ni', preedit: 'ni',
-          candidates: candidatePages[candidatePage], commit: pending, page: candidatePage,
-          hasNext: candidatePage < candidatePages.length - 1 };
+        const offset = operation === 'candidates' ? Number(argument.split('@')[0]) : 0;
+        const rows = operation === 'candidates' ? candidatePages.flat().slice(offset, offset + 32) : candidatePages[0];
+        return { session: 'test', revision: 1, input: pending ? '' : 'ni', preedit: 'ni',
+          candidates: rows, commit: pending, page: 0, candidateOffset: offset,
+          candidateHasNext: offset + rows.length < candidatePages.flat().length, hasNext: candidatePages.length > 1 };
       }
       if (operation === 'create') { schemas.push(argument); pending = ''; }
       if (operation === 'select') pending = '测试';
@@ -97,17 +97,17 @@ scrolling.session.loadMoreCandidates();
 scrolling.session.loadMoreCandidates();
 await scrolling.drain();
 assert.deepEqual(Array.from(scrolling.state.get('candidates')), ['甲', '乙', '丙', '丁', '戊']);
-assert.equal(scrolling.operations.filter(([op, arg]) => op === 'key' && arg === '65366').length, 2);
+assert.equal(scrolling.operations.filter(([op]) => op === 'candidates').length, 1);
 scrolling.session.loadMoreCandidates();
 await scrolling.drain();
 assert.deepEqual(Array.from(scrolling.state.get('candidates')), ['甲', '乙', '丙', '丁', '戊']);
 assert.equal(scrolling.state.get('hasNext'), false);
 scrolling.session.loadMoreCandidates();
 await scrolling.drain();
-assert.equal(scrolling.operations.filter(([op, arg]) => op === 'key' && arg === '65366').length, 2);
+assert.equal(scrolling.operations.filter(([op]) => op === 'candidates').length, 1);
 scrolling.session.selectCandidate(3, '丁');
 await scrolling.drain();
-assert(scrolling.operations.some(([op, arg]) => op === 'select_absolute' && arg === '3@3'));
+assert(scrolling.operations.some(([op, arg]) => op === 'select_absolute' && arg === '3@1'));
 assert.deepEqual(scrolling.inserted, ['丁']);
 
 const batchPages = Array.from({ length: 20 }, (_, page) => ['词' + page * 2, '词' + (page * 2 + 1)]);
@@ -115,7 +115,7 @@ const batch = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 
 await batch.drain();
 batch.session.loadMoreCandidates();
 await batch.drain();
-assert.equal(batch.state.get('candidates').length, 32, 'one batch must fill the initial candidate pool');
+assert.equal(batch.state.get('candidates').length, 34, 'one native range adds 32 candidates to the initial pool');
 assert.equal(batch.state.get('hasNext'), true);
 batch.session.loadMoreCandidates();
 await batch.drain();
@@ -129,7 +129,7 @@ oldCandidate.session.loadMoreCandidates();
 await oldCandidate.drain();
 oldCandidate.session.selectCandidate(0, '甲');
 await oldCandidate.drain();
-assert(oldCandidate.operations.some(([op, arg]) => op === 'select_absolute' && arg === '0@2'));
+assert(oldCandidate.operations.some(([op, arg]) => op === 'select_absolute' && arg === '0@1'));
 assert.deepEqual(oldCandidate.inserted, ['甲']);
 
 const scrollCloud = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'native.test' }), {}, async () => [],
@@ -151,7 +151,7 @@ staleScroll.session.publish({ revision: 99, input: 'hao', preedit: 'hao', candid
 await staleScroll.drain();
 assert.deepEqual(Array.from(staleScroll.state.get('candidates')), ['好']);
 assert.equal(staleScroll.state.get('candidatesLoading'), false);
-assert.equal(staleScroll.operations.filter(([op, arg]) => op === 'key' && arg === '65366').length, 0,
+assert.equal(staleScroll.operations.filter(([op]) => op === 'candidates').length, 0,
   'a queued append must not page a new composition');
 
 let asyncWrites = 0, syncWrites = 0, asyncDeletes = 0;

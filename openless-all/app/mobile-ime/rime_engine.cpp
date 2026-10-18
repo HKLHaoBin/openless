@@ -4,6 +4,7 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -24,7 +25,7 @@ std::string quote(const std::string& value) {
     }
     return out + "\"";
 }
-std::string snapshot(RimeSessionId id, bool expanded = false) {
+std::string snapshot(RimeSessionId id, bool expanded = false, int offset = 0, int limit = 64) {
     auto& session = sessions.at(id);
     RIME_STRUCT(RimeCommit, commit);
     if (api->get_commit(id, &commit)) {
@@ -41,16 +42,19 @@ std::string snapshot(RimeSessionId id, bool expanded = false) {
         ",\"preedit\":" + quote(context.composition.preedit ? context.composition.preedit : "") +
         ",\"page\":" + std::to_string(context.menu.page_no) +
         ",\"hasNext\":" + (context.menu.is_last_page ? "false" : "true") + ",\"candidates\":[";
+    bool more = !context.menu.is_last_page;
     if (expanded) {
         // Android's existing overflow list needs more than a single menu page.
         // Keep the native order and use absolute indices for this bounded list.
         RimeCandidateListIterator iterator{};
-        if (api->candidate_list_begin(id, &iterator)) {
+        more = false;
+        if (api->candidate_list_from_index(id, &iterator, offset)) {
             int count = 0;
-            while (count < 64 && api->candidate_list_next(&iterator)) {
+            while (count < limit && api->candidate_list_next(&iterator)) {
                 if (count++) out += ',';
                 out += quote(iterator.candidate.text ? iterator.candidate.text : "");
             }
+            more = count == limit && api->candidate_list_next(&iterator);
             api->candidate_list_end(&iterator);
         }
     } else {
@@ -59,7 +63,8 @@ std::string snapshot(RimeSessionId id, bool expanded = false) {
             out += quote(context.menu.candidates[i].text ? context.menu.candidates[i].text : "");
         }
     }
-    out += "]}";
+    out += "],\"candidateOffset\":" + std::to_string(expanded ? offset : context.menu.page_no * context.menu.page_size) +
+        ",\"candidateHasNext\":" + (more ? "true" : "false") + "}";
     api->free_context(&context);
     return out;
 }
@@ -113,6 +118,20 @@ std::string request(const std::string& op, const std::string& handle, const std:
         api->destroy_session(id); sessions.erase(id); return "{\"ok\":true}";
     }
     auto& session = sessions.at(id);
+    int candidate_offset = 0;
+    int candidate_limit = 64;
+    if (op == "candidates" && !arg.empty()) {
+        const auto separator = arg.find('@');
+        if (separator == std::string::npos) throw std::runtime_error("Rime candidate revision required");
+        size_t n = 0, r = 0;
+        const auto offset = std::stoul(arg.substr(0, separator), &n);
+        const auto revision = std::stoul(arg.substr(separator + 1), &r);
+        if (n != separator || r != arg.size() - separator - 1 || revision != session.revision ||
+            offset > static_cast<unsigned long>(std::numeric_limits<int>::max()))
+            throw std::runtime_error("Rime candidate range is stale or invalid");
+        candidate_offset = static_cast<int>(offset);
+        candidate_limit = 32;
+    }
     if (op == "ack") session.pending.clear();
     else if (op == "clear") { api->clear_composition(id); session.pending.clear(); }
     else if (op != "state" && op != "candidates") {
@@ -146,7 +165,7 @@ std::string request(const std::string& op, const std::string& handle, const std:
     }
     // Observing a composition must not invalidate the displayed candidates.
     if (op != "state" && op != "candidates") ++session.revision;
-    return snapshot(id, op == "candidates");
+    return snapshot(id, op == "candidates", candidate_offset, candidate_limit);
 }
 }
 extern "C" char* openless_rime_request(const char* operation, const char* session, const char* argument) {

@@ -14,6 +14,8 @@ export interface RimeState {
   commit: string;
   page: number;
   hasNext: boolean;
+  candidateOffset?: number;
+  candidateHasNext?: boolean;
 }
 let initialization: Promise<void> | undefined = undefined;
 let validated: boolean = false;

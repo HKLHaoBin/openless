@@ -88,6 +88,36 @@ class RimeEngineIntegrationTest {
         } finally { OpenLessRime.request("destroy", session) }
     }
 
+    @Test fun rangedCandidatesDoNotChangeSpaceSelectionOrPage() {
+        OpenLessRime.initialize(InstrumentationRegistry.getInstrumentation().targetContext)
+        for (useSpace in listOf(true, false)) {
+            val session = OpenLessRime.request("create", "", "private").getString("session")
+            try {
+                for (letter in "shi") OpenLessRime.request("key", session, letter.code.toString())
+                val before = OpenLessRime.request("state", session)
+                val revision = before.getLong("revision")
+                val offset = before.getJSONArray("candidates").length()
+                val range = OpenLessRime.request("candidates", session, "$offset@$revision")
+                val rows = range.getJSONArray("candidates")
+                assertTrue(rows.length() in 1..32)
+                assertEquals(offset, range.getInt("candidateOffset"))
+                assertEquals(revision, range.getLong("revision"))
+                val after = OpenLessRime.request("state", session)
+                assertEquals(before.getInt("page"), after.getInt("page"))
+                assertEquals(before.getJSONArray("candidates").toString(), after.getJSONArray("candidates").toString())
+                try {
+                    OpenLessRime.request("candidates", session, "$offset@${revision - 1}")
+                    fail("A range from an obsolete composition must be rejected")
+                } catch (_: IllegalStateException) {}
+                val selected = if (useSpace) OpenLessRime.request("key", session, "32")
+                    else OpenLessRime.request("select_absolute", session, "$offset@$revision")
+                assertEquals(if (useSpace) before.getJSONArray("candidates").getString(0) else rows.getString(0),
+                    selected.getString("commit"))
+                OpenLessRime.request("ack", session)
+            } finally { OpenLessRime.request("destroy", session) }
+        }
+    }
+
     private fun typePinyin(session: String, input: String): org.json.JSONObject {
         for (letter in input) OpenLessRime.request("key", session, letter.code.toString())
         return OpenLessRime.request("candidates", session)

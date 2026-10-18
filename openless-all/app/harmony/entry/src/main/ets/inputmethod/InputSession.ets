@@ -380,7 +380,7 @@ class InputSession {
     this.cloudChoices = [];
     this.localCandidates = state.candidates;
     if (state.page === 0 && state.candidates.length > 0) this.candidatePageSize = state.candidates.length;
-    this.candidateBase = state.page * this.candidatePageSize;
+    this.candidateBase = state.candidateOffset ?? state.page * this.candidatePageSize;
     this.candidatesAppended = false;
     this.candidateRevision = state.revision;
     this.encoding = state.input;
@@ -537,26 +537,19 @@ class InputSession {
     imeStorage.setOrCreate('candidatesLoading', true);
     this.queue = this.queue.then(async (): Promise<void> => {
       if (generation !== this.generation || epoch !== this.queueEpoch || revision !== this.candidateRevision) return;
-      const target = this.localCandidates.length < 32 ? 32 : this.localCandidates.length + 32;
-      this.cloudEpoch++;
-      clearTimeout(this.cloudTimer);
-      while (this.localCandidates.length < target && imeStorage.get<boolean>('hasNext')) {
-        const oldPage = imeStorage.get<number>('page') ?? 0;
-        const state = await rimeRequest('key', session, '65366');
-        if (generation !== this.generation || epoch !== this.queueEpoch || session !== this.rimeSession) return;
-        if (state.input !== input || state.commit || state.page !== oldPage + 1) {
-          this.publish(state);
-          return;
-        }
-        this.candidateRevision = state.revision;
-        this.localCandidates = this.localCandidates.concat(state.candidates);
-        this.candidatesAppended = true;
-        this.cloudChoices = this.cloudChoices.filter((text: string) => !this.localCandidates.includes(text));
-        imeStorage.setOrCreate('candidates', this.localCandidates.slice(0, 1).concat(this.cloudChoices).concat(this.localCandidates.slice(1)));
-        imeStorage.setOrCreate('page', state.page);
-        imeStorage.setOrCreate('hasNext', state.hasNext && state.candidates.length > 0);
+      const offset = this.candidateBase + this.localCandidates.length;
+      const state = await rimeRequest('candidates', session, offset.toString() + '@' + revision.toString());
+      if (generation !== this.generation || epoch !== this.queueEpoch || session !== this.rimeSession) return;
+      if (state.input !== input || state.commit) {
+        this.publish(state);
+        return;
       }
-      this.scheduleCloud();
+      if (state.revision !== revision || state.candidateOffset !== offset) throw new Error('候选版本已变化');
+      this.localCandidates = this.localCandidates.concat(state.candidates);
+      this.candidatesAppended = true;
+      this.cloudChoices = this.cloudChoices.filter((text: string) => !this.localCandidates.includes(text));
+      imeStorage.setOrCreate('candidates', this.localCandidates.slice(0, 1).concat(this.cloudChoices).concat(this.localCandidates.slice(1)));
+      imeStorage.setOrCreate('hasNext', state.candidateHasNext === true && state.candidates.length > 0);
     }).catch(() => {
       if (generation === this.generation && epoch === this.queueEpoch) imeStorage.setOrCreate('status', '候选加载失败，可再次滑动重试');
     }).finally(() => {
