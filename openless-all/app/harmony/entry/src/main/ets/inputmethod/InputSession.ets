@@ -55,7 +55,7 @@ class InputSession {
   private rimeSession: string = '';
   private encoding: string = '';
   private candidateRevision: number = 0;
-  private voice: VoiceClient = new VoiceClient();
+  private voice: VoiceClient = new VoiceClient(true);
   private voiceGeneration: number = 0;
   private observedText?: string;
   private selectionBegin: number = -1;

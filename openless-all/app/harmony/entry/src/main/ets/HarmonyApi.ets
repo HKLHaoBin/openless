@@ -9,6 +9,7 @@ import nativeHost from 'libopenless_harmony.so';
 import { restoreHarmonyCredentials } from './CredentialVault';
 import { testRime } from './inputmethod/RimeClient';
 import { VoiceClient, VoiceResult } from './inputmethod/VoiceClient';
+import { publishVoiceConfiguration } from './VoiceConfiguration';
 
 interface Revisions { preferencesRevision: number; stylePackRevision: number; historyRevision: number; vocabularyRevision: number; }
 interface RevisionReply { ok: boolean; value: Revisions; }
@@ -21,6 +22,8 @@ interface Reply { ok: boolean; value?: Object | null; error?: string; }
 interface ArchiveReply { ok: boolean; value: string; error?: string; }
 interface DeviceInfo { name: string; isDefault: boolean; }
 interface DictationEvent { phase: string; level: number; error: string; }
+interface VoiceCredentialStatus { pipelineMode: string; asrConfigured: boolean; omniConfigured: boolean; }
+interface VoiceCredentialReply { ok: boolean; value: VoiceCredentialStatus; }
 class CommandArgs { deviceName: string = ''; pane: string = ''; account: string = ''; provider?: string; value: string = ''; fileName: string = ''; message: string = ''; url: string = ''; id: string = ''; zipPath: string = ''; targetPath: string = ''; text: string = ''; }
 
 export class HarmonyApi {
@@ -72,6 +75,7 @@ export class HarmonyApi {
         }
         this.revisions = snapshot.value;
       }
+      await publishVoiceConfiguration();
       return wire;
     });
     this.nativeQueue = task.then(() => {}, () => {});
@@ -225,7 +229,13 @@ export class HarmonyApi {
   private decode(value: Uint8Array): string { return util.TextDecoder.create('utf-8').decodeWithStream(value); }
   private alias(args: CommandArgs): Uint8Array { return this.bytes(JSON.stringify({account: args.account, provider: args.provider})); }
 
-  async restoreCredentials(): Promise<void> { await restoreHarmonyCredentials(); }
+  async restoreCredentials(): Promise<void> {
+    const restored = await restoreHarmonyCredentials();
+    await publishVoiceConfiguration();
+    const status: VoiceCredentialReply = JSON.parse(await nativeHost.invokeAsync('get_credentials', '{}'));
+    if (status.ok) console.info('[OpenLess Main Voice] restored=' + restored + ' mode=' + status.value.pipelineMode +
+      ' asrConfigured=' + status.value.asrConfigured + ' omniConfigured=' + status.value.omniConfigured);
+  }
 
   private async persistCredential(args: CommandArgs): Promise<void> {
     if (!args.account) throw new Error('凭据字段不能为空');

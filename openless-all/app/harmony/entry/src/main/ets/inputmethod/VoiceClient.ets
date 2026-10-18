@@ -2,6 +2,7 @@ import { abilityAccessCtrl, common } from '@kit.AbilityKit';
 import { audio } from '@kit.AudioKit';
 import nativeHost from 'libopenless_harmony.so';
 import { restoreHarmonyCredentials } from '../CredentialVault';
+import { restoreVoiceConfiguration } from '../VoiceConfiguration';
 
 interface NativeReply { ok: boolean; error?: string; }
 interface StartReply extends NativeReply { value: string; }
@@ -32,11 +33,14 @@ function requireSuccess(wire: string): void {
 // AudioKit owns capture; openless-core owns sessions, providers and history.
 // Every run retains its own delivery queue, even when cancellation races stop.
 export class VoiceClient {
+  private readonly fromKeyboard: boolean;
+  constructor(fromKeyboard: boolean = false) { this.fromKeyboard = fromKeyboard; }
   private run?: VoiceRun;
   private cleanup: Promise<void> = Promise.resolve();
 
   async setPolishMode(context: common.Context, mode: string): Promise<void> {
     requireSuccess(nativeHost.initBackend(context.filesDir + '/openless', context.cacheDir + '/openless'));
+    if (this.fromKeyboard) await restoreVoiceConfiguration();
     requireSuccess(await nativeHost.invokeAsync('set_default_polish_mode', JSON.stringify({ mode: mode })));
   }
 
@@ -69,6 +73,9 @@ export class VoiceClient {
     run.stage = 'backend_init';
     requireSuccess(nativeHost.initBackend(context.filesDir + '/openless', context.cacheDir + '/openless'));
     console.info('[OpenLess Voice] backend dataDir=' + context.filesDir + '/openless');
+    run.stage = 'configuration_restore';
+    if (this.fromKeyboard) await restoreVoiceConfiguration();
+    this.check(run);
     run.stage = 'backend_reload';
     requireSuccess(await nativeHost.invokeAsync('__reload_voice_backend', '{}'));
     this.check(run);

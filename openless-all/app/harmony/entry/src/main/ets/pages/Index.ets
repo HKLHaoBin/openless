@@ -16,6 +16,7 @@ struct Index {
   aboutToAppear(): void {
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      console.info('[OpenLess Native] backend dataDir=' + context.filesDir + '/openless');
       this.api.configure(context, this.controller);
       const result = nativeHost.initBackend(context.filesDir + '/openless', context.cacheDir + '/openless');
       const response: Record<string, Object> = JSON.parse(result);

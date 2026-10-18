@@ -1,6 +1,7 @@
 mod credentials;
 mod history;
 mod self_test;
+mod voice_configuration;
 use openless_core::{BackendConfig, BackendDependencies, OpenLessBackend};
 use serde_json::{json, Value};
 use std::{
@@ -194,6 +195,8 @@ fn ime_dictionary_base(host: &Host) -> PathBuf {
 fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
     let b = &host.backend;
     let value = match command {
+        "__export_voice_configuration" => voice_configuration::export(host)?,
+        "__import_voice_configuration" => voice_configuration::import(host, args)?,
         "ime_dictionary_select" => json!(openless_core::ime_dictionary::select(
             &ime_dictionary_base(host)
         )),
@@ -799,7 +802,7 @@ pub unsafe extern "C" fn openless_invoke(
             let args = serde_json::from_str(&text(args)?).map_err(|e| e.to_string())?;
             let _voice_control = if matches!(
                 command.as_str(),
-                "__reload_voice_backend" | "start_dictation"
+                "__reload_voice_backend" | "__import_voice_configuration" | "start_dictation"
             ) {
                 Some(
                     VOICE_CONTROL

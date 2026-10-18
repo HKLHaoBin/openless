@@ -34,6 +34,8 @@ ArkTS / ArkWeb Stage 工程，将 React 前端离线打包进 HAP。
 
 参考：[IME Kit](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides-v5/ime-kit-V5)、[输入法插入与预上屏示例](https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-ime-7)、[官方扩展能力模板（包含 Accessibility 和 InputMethod）](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-hmos-add-new-ability)。
 
+输入法扩展具有独立沙箱；主应用和输入法的 `filesDir` 字符串相同，也不代表共享配置文件。主应用启动和配置写入后，将白名单内的语音设置与渠道元数据发布到应用专属 Asset Store，键盘录音前导入自己的后端，再恢复既有安全凭据。快照分片遵守 Asset Store 单条 1024 字节限制，提交清单后才对读者可见；读取期间更新会重试，不接受混合版本。快照不包含 API Key、用户词库、历史或云同步配置。未改变的快照不会覆盖键盘单独选择的润色模式。首次使用须先打开主应用发布配置。`harmony-voice-configuration.test.mjs` 覆盖分片、并发更新和大小限制，原生测试以两个独立数据目录验证主应用多模态设置经导入后可启动键盘语音会话；它不代替真实联网识别验收。
+
 从仓库根目录构建：
 
 ```bash
