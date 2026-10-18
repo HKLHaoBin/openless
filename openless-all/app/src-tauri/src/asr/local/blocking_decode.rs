@@ -4,7 +4,7 @@ use std::sync::{
     Arc,
 };
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(test)))]
 use crate::issue1227_debug;
 
 /// A timed-out native call cannot be forcibly stopped. Its worker owns the
@@ -14,7 +14,7 @@ pub(super) async fn run_serialized_decode<T: Send + 'static>(
     timeout: std::time::Duration,
     decode: impl FnOnce(Arc<AtomicBool>) -> Result<T> + Send + 'static,
 ) -> Result<T> {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", not(test)))]
     issue1227_debug::record(
         "P4",
         &["H4"],
@@ -41,7 +41,7 @@ pub(super) async fn run_serialized_decode<T: Send + 'static>(
                 anyhow::bail!("sherpa-onnx transcribe cancelled");
             }
             let result = decode(cancelled);
-            #[cfg(target_os = "windows")]
+            #[cfg(all(target_os = "windows", not(test)))]
             issue1227_debug::record(
                 "P4",
                 &["H4"],
@@ -60,7 +60,7 @@ pub(super) async fn run_serialized_decode<T: Send + 'static>(
     })
     .await;
     if timed.is_err() {
-        #[cfg(target_os = "windows")]
+        #[cfg(all(target_os = "windows", not(test)))]
         issue1227_debug::record(
             "P4",
             &["H4"],
