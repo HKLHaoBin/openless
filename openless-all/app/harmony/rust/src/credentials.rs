@@ -11,6 +11,13 @@ use std::{
 fn failure(e: impl std::fmt::Display) -> BackendError {
     BackendError::new(BackendErrorCode::Persistence, e.to_string())
 }
+fn read_metadata(path: &std::path::Path) -> Result<CredentialMetadata, BackendError> {
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(failure),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(CredentialMetadata::default()),
+        Err(e) => Err(failure(e)),
+    }
+}
 type Dirty = Arc<Mutex<HashMap<CredentialKey, Option<SecretValue>>>>;
 type Values = Arc<Mutex<HashMap<CredentialKey, SecretValue>>>;
 struct DiskMetadata {
@@ -20,15 +27,7 @@ struct DiskMetadata {
 impl CredentialMetadataStore for DiskMetadata {
     fn load_metadata(&self) -> BoxFuture<'static, Result<CredentialMetadata, BackendError>> {
         let path = self.path.clone();
-        Box::pin(async move {
-            match std::fs::read(path) {
-                Ok(bytes) => serde_json::from_slice(&bytes).map_err(failure),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(CredentialMetadata::default())
-                }
-                Err(e) => Err(failure(e)),
-            }
-        })
+        Box::pin(async move { read_metadata(&path) })
     }
     fn save_metadata(
         &self,
@@ -77,8 +76,20 @@ impl HarmonyCredentials {
     }
 }
 impl HarmonyCredentials {
-    pub fn hydrate(&self, key: CredentialKey, value: SecretValue) -> Result<(), BackendError> {
-        self.values.lock().map_err(failure)?.insert(key, value);
+    pub fn hydrate(&self, mut key: CredentialKey, value: SecretValue) -> Result<(), BackendError> {
+        let legacy_omni = key.namespace == CredentialNamespace::Omni && key.provider_id.is_none();
+        if legacy_omni {
+            key.provider_id =
+                Some(read_metadata(&self.metadata.path)?.active_provider(ProviderSlot::Omni));
+        }
+        let mut values = self.values.lock().map_err(failure)?;
+        if legacy_omni {
+            // A provider-scoped Asset entry always wins over a legacy alias,
+            // independent of the order returned by the secure vault.
+            values.entry(key).or_insert(value);
+        } else {
+            values.insert(key, value);
+        }
         Ok(())
     }
     pub fn dirty_records(&self) -> Result<serde_json::Value, BackendError> {
@@ -205,25 +216,42 @@ impl CredentialStore for HarmonyCredentials {
     }
     fn write(
         &self,
-        key: CredentialKey,
+        mut key: CredentialKey,
         value: SecretValue,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let values = self.values.clone();
         let dirty = self.dirty.clone();
+        let directory = self.directory.clone();
         Box::pin(async move {
-            dirty
-                .lock()
-                .map_err(failure)?
-                .insert(key.clone(), Some(value.clone()));
+            let legacy = key.clone();
+            if key.namespace == CredentialNamespace::Omni && key.provider_id.is_none() {
+                key.provider_id = Some(directory.active_provider(ProviderSlot::Omni).await?);
+            }
+            let mut writes = dirty.lock().map_err(failure)?;
+            if key != legacy {
+                writes.insert(legacy, None);
+            }
+            writes.insert(key.clone(), Some(value.clone()));
+            drop(writes);
             values.lock().map_err(failure)?.insert(key, value);
             Ok(())
         })
     }
-    fn remove(&self, key: CredentialKey) -> BoxFuture<'static, Result<(), BackendError>> {
+    fn remove(&self, mut key: CredentialKey) -> BoxFuture<'static, Result<(), BackendError>> {
         let values = self.values.clone();
         let dirty = self.dirty.clone();
+        let directory = self.directory.clone();
         Box::pin(async move {
-            dirty.lock().map_err(failure)?.insert(key.clone(), None);
+            let legacy = key.clone();
+            if key.namespace == CredentialNamespace::Omni && key.provider_id.is_none() {
+                key.provider_id = Some(directory.active_provider(ProviderSlot::Omni).await?);
+            }
+            let mut writes = dirty.lock().map_err(failure)?;
+            if key != legacy {
+                writes.insert(legacy, None);
+            }
+            writes.insert(key.clone(), None);
+            drop(writes);
             values.lock().map_err(failure)?.remove(&key);
             Ok(())
         })
@@ -279,5 +307,186 @@ impl CredentialStore for HarmonyCredentials {
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let d = self.directory.clone();
         Box::pin(async move { d.set_active_provider(s, id).await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn omni_recording_accepts_restored_settings_credentials_without_a_network_request() {
+        let root = std::env::temp_dir().join(format!(
+            "openless-harmony-omni-recording-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let runtime = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let host = crate::build_host(root.clone(), root.join("cache"), runtime).unwrap();
+        crate::dispatch(
+            &host,
+            "set_active_omni_provider",
+            serde_json::json!({"provider":"dashscope-omni"}),
+        )
+        .unwrap();
+        crate::dispatch(
+            &host,
+            "__hydrate_credential",
+            serde_json::json!({"account":"omni.api_key","value":"fixture-only-not-a-real-key"}),
+        )
+        .unwrap();
+        let mut prefs = host.backend.get_preferences();
+        prefs.multimodal_pipeline_enabled = true;
+        prefs.pipeline_mode = openless_core::shared_types::PipelineMode::Multimodal;
+        {
+            let _entered = host.runtime.enter();
+            host.backend
+                .update_settings(
+                    prefs,
+                    openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
+                    &openless_core::settings::NoopSettingsRuntime,
+                )
+                .unwrap();
+        }
+        let session = crate::dispatch(&host, "start_dictation", serde_json::json!({})).unwrap();
+        let id = serde_json::from_value(session.clone()).unwrap();
+        host.backend.feed_external_pcm(id, &[1, 0, 2, 0]).unwrap();
+        crate::dispatch(
+            &host,
+            "cancel_dictation",
+            serde_json::json!({"session":session}),
+        )
+        .unwrap();
+        host.runtime.block_on(host.backend.shutdown()).unwrap();
+        drop(host);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn omni_unscoped_settings_bind_to_active_provider_and_restore_legacy_assets() {
+        let root = std::env::temp_dir().join(format!(
+            "openless-harmony-omni-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let store = HarmonyCredentials::new(root.join("channels.json"));
+            store
+                .set_active_provider(ProviderSlot::Omni, "dashscope-omni".into())
+                .await
+                .unwrap();
+            let unscoped =
+                CredentialKey::new(CredentialNamespace::Omni, None, "omni.api_key").unwrap();
+            let scoped = CredentialKey::new(
+                CredentialNamespace::Omni,
+                Some("dashscope-omni".into()),
+                "omni.api_key",
+            )
+            .unwrap();
+            assert!(
+                !store
+                    .status(UserPreferences::default())
+                    .await
+                    .unwrap()
+                    .omni_configured
+            );
+            store
+                .write(unscoped.clone(), SecretValue::new("fixture-current"))
+                .await
+                .unwrap();
+            assert!(
+                store
+                    .status(UserPreferences::default())
+                    .await
+                    .unwrap()
+                    .omni_configured
+            );
+            assert_eq!(
+                store
+                    .read(scoped.clone())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .expose_secret(),
+                "fixture-current"
+            );
+            let dirty = store.dirty_records().unwrap();
+            assert!(dirty
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["provider"] == "dashscope-omni" && row["value"].is_string()));
+            assert!(dirty
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["provider"].is_null() && row["value"].is_null()));
+            for legacy_first in [true, false] {
+                let restored = HarmonyCredentials::new(root.join("channels.json"));
+                if legacy_first {
+                    restored
+                        .hydrate(unscoped.clone(), SecretValue::new("fixture-legacy"))
+                        .unwrap();
+                }
+                restored
+                    .hydrate(scoped.clone(), SecretValue::new("fixture-current"))
+                    .unwrap();
+                if !legacy_first {
+                    restored
+                        .hydrate(unscoped.clone(), SecretValue::new("fixture-legacy"))
+                        .unwrap();
+                }
+                assert!(
+                    restored
+                        .status(UserPreferences::default())
+                        .await
+                        .unwrap()
+                        .omni_configured
+                );
+                assert_eq!(
+                    restored
+                        .read(scoped.clone())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .expose_secret(),
+                    "fixture-current"
+                );
+            }
+            let legacy = HarmonyCredentials::new(root.join("channels.json"));
+            legacy
+                .hydrate(unscoped.clone(), SecretValue::new("fixture-legacy"))
+                .unwrap();
+            assert!(
+                legacy
+                    .status(UserPreferences::default())
+                    .await
+                    .unwrap()
+                    .omni_configured
+            );
+            assert!(legacy.read(scoped.clone()).await.unwrap().is_some());
+            store.remove(unscoped.clone()).await.unwrap();
+            assert!(store.read(scoped).await.unwrap().is_none());
+            assert!(
+                !store
+                    .status(UserPreferences::default())
+                    .await
+                    .unwrap()
+                    .omni_configured
+            );
+            store
+                .set_active_provider(ProviderSlot::Omni, "gemini".into())
+                .await
+                .unwrap();
+            assert!(store.read(unscoped).await.unwrap().is_none());
+        });
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
