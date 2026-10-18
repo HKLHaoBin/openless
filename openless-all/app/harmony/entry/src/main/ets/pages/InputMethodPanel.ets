@@ -391,7 +391,7 @@ struct InputMethodPanel {
       Row({ space: 10 }) {
         ForEach(['standard', 'split', 'floating'], (mode: string, index: number) => {
           Button(['标准键盘', '分离键盘', '悬浮键盘'][index], { type: ButtonType.Normal })
-            .height(48).layoutWeight(1).fontSize(15).borderRadius(8).padding(0).pressMotion().focusable(false)
+            .height(48).layoutWeight(1).fontSize(15).borderRadius(999).padding(0).pressMotion().focusable(false)
             .fontColor(this.keyboardLayout === mode ? '#FFFFFF' : INK)
             .backgroundColor(this.keyboardLayout === mode ? ACCENT : KEY)
             .onClick(() => { this.layer = 0; this.expanded = false; this.utility = 0; panelLayout.select(mode); })
@@ -499,15 +499,23 @@ struct InputMethodPanel {
 
   @Builder
   toolTabs() {
-    Row({ space: 6 }) {
+    Stack({ alignContent: Alignment.Center }) {
+      Row({ space: 6 }) {
         ForEach(['常用功能', '输入方式', '键盘模式'], (label: string, index: number) => {
-          Button(label, { type: ButtonType.Normal }).height(36).layoutWeight(1).fontSize(14)
+          Button(label, { type: ButtonType.Normal }).height(34)
+            .width(Math.min(112, (this.keyboardWidth - 100) / 3)).fontSize(14)
             .fontWeight(this.toolTab === index ? FontWeight.Medium : FontWeight.Regular)
             .fontColor(this.toolTab === index ? INK : MUTED)
             .backgroundColor(this.toolTab === index ? KEY : Color.Transparent)
-            .borderRadius(10).padding(0).pressMotion().focusable(false)
+            .borderRadius(999).padding(0).pressMotion().focusable(false)
             .accessibilityText(label).onClick(() => { this.toolTab = index; })
         }, (label: string) => label)
+      }.justifyContent(FlexAlign.Center)
+      Button({ type: ButtonType.Normal }) {
+        Image($r('app.media.ime_chevron_down')).width(22).height(22).rotate({ angle: 90 })
+      }.width(34).height(34).align(Alignment.Start).borderRadius(999).padding(0)
+        .backgroundColor(KEY).pressMotion().focusable(false).accessibilityText('返回键盘')
+        .onClick(() => { this.utility = 0; })
     }.width('100%').height(34)
   }
 
@@ -518,32 +526,32 @@ struct InputMethodPanel {
         Column({ space: 10 }) {
           if (this.toolTab === 0) {
             Row({ space: 10 }) {
-              Button('语音输入').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+              Button('语音输入').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
                 .enabled(this.connected && this.editorVerified && !this.password && !this.pendingCommit && this.voicePhase === 'idle')
                 .onClick(() => { this.voice(); })
-              Button('表情').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+              Button('表情').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
                 .onClick(() => { this.utility = 2; })
             }.width('100%')
             Row({ space: 10 }) {
-              Button('应用设置').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+              Button('应用设置').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
                 .onClick(() => { inputSession.settings(); })
-              Button('收起键盘').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+              Button('收起键盘').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
                 .onClick(() => { inputSession.hide(); })
             }.width('100%')
           } else if (this.toolTab === 1) {
             Row({ space: 10 }) {
-              Button('中文拼音').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+              Button('中文拼音').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
                 .enabled(this.connected && !this.password && !this.pendingCommit).onClick(() => { this.inputMode(true); })
-              Button('英文输入').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+              Button('英文输入').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
                 .enabled(this.connected && !this.pendingCommit).onClick(() => { this.inputMode(false); })
             }.width('100%')
             Row({ space: 10 }) {
-              Button('数字键盘').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+              Button('数字键盘').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
                 .onClick(() => { this.layer = 1; this.utility = 0; })
-              Button('符号键盘').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+              Button('符号键盘').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
                 .onClick(() => { this.layer = 2; this.symbolPage = 0; this.utility = 0; })
             }.width('100%')
-            Button('切换系统输入法').width('100%').height(40).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+            Button('切换系统输入法').width('100%').height(40).fontColor(INK).backgroundColor(KEY).keySurface().borderRadius(999).pressMotion().focusable(false)
               .onClick(() => { this.inputMethods(); })
             Button(this.cloudEnabled ? '云候选：开（Google）' : '云候选：关').width('100%').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
               .onClick(() => { inputSession.toggleCloudCandidates(); })
@@ -558,8 +566,6 @@ struct InputMethodPanel {
           }
         }.width('100%').padding({ top: 4, bottom: 8 })
       }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
-      Button('返回键盘', { type: ButtonType.Normal }).width('100%').height(36).fontColor(INK).backgroundColor(KEY)
-        .borderRadius(10).pressMotion().focusable(false).onClick(() => { this.utility = 0; })
     }.width('100%').layoutWeight(1)
   }
 
