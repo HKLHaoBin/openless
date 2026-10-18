@@ -51,7 +51,7 @@ void Record(const char *probe_id, const char *hypothesis_ids, const char *event,
             const char *outcome, const char *safe_json) {
   const std::string run_id = "native-" + std::to_string(GetCurrentProcessId());
   const std::string line =
-      "{\"schema\":\"diagnosing-bugs.v1\",\"session_id\":\"" + kSessionId +
+      std::string("{\"schema\":\"diagnosing-bugs.v1\",\"session_id\":\"") + kSessionId +
       "\",\"run_id\":\"" + run_id + "\",\"probe_id\":\"" + probe_id +
       "\",\"hypothesis_ids\":[" + hypothesis_ids + "]" +
       ",\"event\":\"" + event + "\",\"outcome\":\"" + outcome +

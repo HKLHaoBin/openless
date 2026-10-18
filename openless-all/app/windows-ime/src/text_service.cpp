@@ -118,11 +118,10 @@ STDMETHODIMP OpenLessTextService::ActivateEx(ITfThreadMgr *thread_mgr, TfClientI
 // Must stay wait-free: TSF can call this while the host thread is being torn
 // down, where blocking on another thread deadlocks the whole host process.
 STDMETHODIMP OpenLessTextService::Deactivate() {
-  issue1227_debug::Record(
-      "P2", "\"H1\",\"H2\",\"H3\"", "deactivate", "entered",
-      message_window_ != nullptr ? "\"window_present\":true" : "\"window_present\":false");
   CancelPendingSubmit();
   DestroyMessageWindow();
+  issue1227_debug::Record("P2", "\"H1\",\"H2\",\"H3\"", "deactivate", "completed",
+                         "\"window_present\":false");
 
   if (thread_mgr_ != nullptr) {
     thread_mgr_->Release();
