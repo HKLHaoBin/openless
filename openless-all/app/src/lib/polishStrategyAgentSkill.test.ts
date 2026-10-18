@@ -1,3 +1,4 @@
+// @ts-nocheck — Node-only contract harness; production skill generation remains strictly typed.
 import assert from 'node:assert/strict';
 import { buildPolishStrategyAgentSkill } from './polishStrategyAgentSkill';
 

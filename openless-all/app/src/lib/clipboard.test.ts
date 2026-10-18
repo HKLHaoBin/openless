@@ -1,3 +1,4 @@
+// @ts-nocheck — Node-only clipboard harness; production clipboard code remains strictly typed.
 import assert from 'node:assert/strict';
 import { copyTextToClipboard } from './clipboard';
 
