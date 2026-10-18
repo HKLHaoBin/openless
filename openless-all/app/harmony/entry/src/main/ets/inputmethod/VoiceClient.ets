@@ -9,6 +9,8 @@ export interface VoiceResult { rawText: string; polishedText: string; }
 interface StopReply extends NativeReply { value: VoiceResult; }
 interface VoiceSettings { microphoneDeviceName: string; }
 interface SettingsReply extends NativeReply { value: VoiceSettings; }
+interface CredentialStatus { pipelineMode: string; asrConfigured: boolean; omniConfigured: boolean; }
+interface CredentialReply extends NativeReply { value: CredentialStatus; }
 
 class VoiceRun {
   session: string = '';
@@ -19,6 +21,7 @@ class VoiceRun {
   delivery: Promise<void> = Promise.resolve();
   startup: Promise<void> = Promise.resolve();
   failure: string = '';
+  stage: string = 'permission';
 }
 
 function requireSuccess(wire: string): void {
@@ -44,6 +47,7 @@ export class VoiceClient {
     this.run = run;
     run.startup = this.begin(run, context, level, failed);
     try { await run.startup; } catch (error) {
+      console.warn('[OpenLess Voice] startup failed stage=' + run.stage);
       if (this.run === run) this.run = undefined;
       try { await this.dispose(run, true); } finally { throw new Error((error as Error).message); }
     }
@@ -62,11 +66,22 @@ export class VoiceClient {
       'ohos.permission.MICROPHONE') !== abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
       throw new Error('请打开 OpenLess 设置，在权限与数据中授权麦克风');
     }
+    run.stage = 'backend_init';
     requireSuccess(nativeHost.initBackend(context.filesDir + '/openless', context.cacheDir + '/openless'));
+    console.info('[OpenLess Voice] backend dataDir=' + context.filesDir + '/openless');
+    run.stage = 'backend_reload';
     requireSuccess(await nativeHost.invokeAsync('__reload_voice_backend', '{}'));
     this.check(run);
-    await restoreHarmonyCredentials();
+    run.stage = 'credential_restore';
+    const restored = await restoreHarmonyCredentials();
     this.check(run);
+    run.stage = 'credential_status';
+    const status: CredentialReply = JSON.parse(await nativeHost.invokeAsync('get_credentials', '{}'));
+    if (status.ok) {
+      console.info('[OpenLess Voice] restored=' + restored + ' mode=' + status.value.pipelineMode +
+        ' asrConfigured=' + status.value.asrConfigured + ' omniConfigured=' + status.value.omniConfigured);
+    } else { console.warn('[OpenLess Voice] credential status unavailable'); }
+    run.stage = 'settings';
     const settings: SettingsReply = JSON.parse(await nativeHost.invokeAsync('get_settings', '{}'));
     if (!settings.ok) throw new Error(settings.error || '麦克风设置读取失败');
     const name = settings.value.microphoneDeviceName;
@@ -81,10 +96,12 @@ export class VoiceClient {
       }
     }
     this.check(run);
+    run.stage = 'session_start';
     const reply: StartReply = JSON.parse(await nativeHost.invokeAsync('start_dictation', '{}'));
     if (!reply.ok) throw new Error(reply.error || '请在设置中配置可用的语音识别渠道');
     run.session = reply.value;
     this.check(run);
+    run.stage = 'capturer_create';
     const capturer = await audio.createAudioCapturer({
       streamInfo: { samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_16000,
         channels: audio.AudioChannel.CHANNEL_1, sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
@@ -122,8 +139,11 @@ export class VoiceClient {
         }).then(() => { run.pendingBytes -= frame.byteLength; });
       }
     });
+    run.stage = 'capturer_start';
     await capturer.start();
     this.check(run);
+    run.stage = 'recording';
+    console.info('[OpenLess Voice] recording started');
   }
 
   private async release(run: VoiceRun): Promise<void> {

@@ -5,7 +5,7 @@ import nativeHost from 'libopenless_harmony.so';
 
 interface CredentialRecord { account: string; provider?: string; value?: string; }
 
-export async function restoreHarmonyCredentials(): Promise<void> {
+export async function restoreHarmonyCredentials(): Promise<number> {
   try {
     const query = new Map<asset.Tag, asset.Value>();
     query.set(asset.Tag.DATA_LABEL_NORMAL_1, new util.TextEncoder().encodeInto('openless.credentials'));
@@ -23,7 +23,9 @@ export async function restoreHarmonyCredentials(): Promise<void> {
       if (result['ok'] !== true) throw new Error('凭据恢复失败');
     }
     console.info('[OpenLess Vault] secure credentials restored');
+    return records.length;
   } catch (error) {
     if ((error as BusinessError).code !== 24000002) throw new Error(String(error));
+    return 0;
   }
 }
