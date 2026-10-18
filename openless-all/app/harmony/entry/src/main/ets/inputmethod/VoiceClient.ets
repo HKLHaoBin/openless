@@ -33,6 +33,11 @@ export class VoiceClient {
   private run?: VoiceRun;
   private cleanup: Promise<void> = Promise.resolve();
 
+  async setPolishMode(context: InputMethodExtensionContext, mode: string): Promise<void> {
+    requireSuccess(nativeHost.initBackend(context.filesDir + '/openless', context.cacheDir + '/openless'));
+    requireSuccess(await nativeHost.invokeAsync('set_default_polish_mode', JSON.stringify({ mode: mode })));
+  }
+
   async start(context: InputMethodExtensionContext, level: (value: number) => void,
     failed: (message: string) => void): Promise<void> {
     if (this.run) throw new Error('录音尚未结束');

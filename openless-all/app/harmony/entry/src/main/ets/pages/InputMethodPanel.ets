@@ -22,6 +22,9 @@ struct InputMethodPanel {
   @LocalStorageLink('candidates') candidates: string[] = [];
   @LocalStorageLink('candidatesLoading') candidatesLoading: boolean = false;
   @LocalStorageLink('toolbarActions') toolbarActions: string[] = ['layout', 'emoji', 'voice', 'settings'];
+  @LocalStorageLink('keyFontSize') keyFontSize: number = 22;
+  @LocalStorageLink('swipeSymbols') swipeSymbols: boolean = true;
+  @LocalStorageLink('keySound') keySound: boolean = false;
   @LocalStorageLink('cloudEnabled') cloudEnabled: boolean = false;
   @LocalStorageLink('symbolFeedback') symbolFeedback: string = '';
   @LocalStorageLink('dictionaryStatus') dictionaryStatus: string = '公共词库：自动更新';
@@ -143,7 +146,7 @@ struct InputMethodPanel {
     Stack({ alignContent: Alignment.Top }) {
       Button({ type: ButtonType.Normal }) {
         Stack({ alignContent: Alignment.Center }) {
-          Text(letter ? (this.chinese ? key.toUpperCase() : key) : localizedSymbol(key, this.chinese)).fontSize(letter ? 22 : 24)
+          Text(letter ? (this.chinese ? key.toUpperCase() : key) : localizedSymbol(key, this.chinese)).fontSize(letter ? this.keyFontSize : this.keyFontSize + 2)
             .fontColor(this.previewId === id && this.previewArmed ? '#FFFFFF' : INK)
           if (hint) {
             Column() {
@@ -156,14 +159,14 @@ struct InputMethodPanel {
       }.width('100%').height('100%').keySurface().padding(0)
         .backgroundColor(this.previewId === id && this.previewArmed ? ACCENT : KEY)
         .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).pressMotion().focusable(false)
-        .accessibilityText(hint ? localizedSymbol(key, this.chinese) + '，长按或上滑输入' + liveSymbolHint(id, hint, this.chinese) : localizedSymbol(key, this.chinese))
+        .accessibilityText(hint ? localizedSymbol(key, this.chinese) + (this.swipeSymbols ? '，长按或上滑输入' : '，长按输入') + liveSymbolHint(id, hint, this.chinese) : localizedSymbol(key, this.chinese))
         .onTouch((event: TouchEvent) => {
           if (event.type === TouchType.Down) this.symbolGesture.begin(id, this.keyContext());
           else if (event.type === TouchType.Cancel) this.cancelSymbol(id);
         })
         .gesture(GestureGroup(GestureMode.Exclusive,
           PanGesture({ direction: PanDirection.Up, distance: this.swipeDistance() })
-            .onActionStart((event: GestureEvent) => { this.armSymbol(id, hint, 'swipe'); this.moveSymbol(id, event); })
+            .onActionStart((event: GestureEvent) => { if (this.swipeSymbols) { this.armSymbol(id, hint, 'swipe'); this.moveSymbol(id, event); } })
             .onActionUpdate((event: GestureEvent) => { this.moveSymbol(id, event); })
             .onActionEnd((event: GestureEvent) => { this.moveSymbol(id, event); this.finishSymbol(id, 'swipe'); })
             .onActionCancel(() => { this.cancelSymbol(id, 'swipe'); }),
@@ -333,9 +336,95 @@ struct InputMethodPanel {
         Image($r('app.media.ime_chevron_down')).width(22).height(22).rotate({ angle: 90 })
       }.width(38).height(34).padding(0).borderRadius(999).backgroundColor(KEY).pressMotion().focusable(false)
         .accessibilityText('返回键盘').onClick(() => { this.utility = 0; })
-      Text('编辑快捷入口').layoutWeight(1).textAlign(TextAlign.Center).fontSize(14).fontColor(INK)
+      Text(this.utilityTitle()).layoutWeight(1).textAlign(TextAlign.Center).fontSize(14).fontColor(INK)
       Blank().width(38)
     }.width('100%').height(34)
+  }
+
+  private utilityTitle(): string {
+    switch (this.utility) {
+      case 4: return '键盘设置';
+      case 5: return '剪贴板';
+      case 6: return '润色模式';
+      case 7: return '字体大小';
+      case 8: return '常用语';
+      default: return '编辑快捷入口';
+    }
+  }
+
+  @Builder
+  keyboardSettings() {
+    Scroll() {
+      Column({ space: 10 }) {
+        Button('打开应用设置').width('100%').height(40).backgroundColor(KEY).fontColor(INK)
+          .pressMotion().focusable(false).onClick(() => { inputSession.settings(); })
+        Button(this.cloudEnabled ? '云候选：开（Google）' : '云候选：关').width('100%').height(40).backgroundColor(KEY).fontColor(INK)
+          .pressMotion().focusable(false).onClick(() => { inputSession.toggleCloudCandidates(); })
+        Text('开启后将当前拼音发送给 Google，密码框不查询').fontSize(12).fontColor(MUTED)
+        Button(this.dictionaryAuto ? '公共词库自动更新：开' : '公共词库自动更新：关').width('100%').height(40).backgroundColor(KEY).fontColor(INK)
+          .pressMotion().focusable(false).onClick(() => { inputSession.togglePublicDictionaryUpdates(); })
+        Button(this.dictionaryStatus).width('100%').height(40).backgroundColor(KEY).fontColor(INK)
+          .pressMotion().focusable(false).onClick(() => { inputSession.checkPublicDictionary(); })
+        Text('公共词库每周检查；学习词仅保存在本机。按键音跟随媒体音量。').fontSize(12).fontColor(MUTED)
+        Button('切换系统输入法').width('100%').height(40).backgroundColor(KEY).fontColor(INK)
+          .pressMotion().focusable(false).onClick(() => { this.inputMethods(); })
+      }.width('100%').padding({ top: 6, bottom: 8 })
+    }.width('100%').layoutWeight(1).scrollBar(BarState.Auto)
+  }
+
+  @Builder
+  clipboardPanel() {
+    Column({ space: 18 }) {
+      Image($r('app.media.ime_clipboard')).width(36).height(36)
+      Text('点击系统粘贴按钮，将剪贴板文字写入当前输入框').fontSize(14).fontColor(INK).textAlign(TextAlign.Center)
+      PasteButton({ icon: PasteIconStyle.LINES, text: PasteDescription.PASTE }).width(180).height(48)
+        .enabled(this.connected && !this.pendingCommit)
+        .onClick((_event: ClickEvent, result: PasteButtonOnClickResult) => {
+          if (result === PasteButtonOnClickResult.SUCCESS) inputSession.pasteClipboard();
+        })
+      Text('仅在点击后读取，不记录剪贴板历史').fontSize(12).fontColor(MUTED)
+    }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).padding(10)
+  }
+
+  @Builder
+  polishPanel() {
+    Column({ space: 6 }) {
+      Text('选择语音输入使用的润色模式').fontSize(13).fontColor(MUTED)
+      Row() {
+        this.menuTile($r('app.media.ime_polish'), '保留原文', () => { inputSession.setPolishMode('raw'); this.utility = 0; })
+        this.menuTile($r('app.media.ime_polish'), '轻度润色', () => { inputSession.setPolishMode('light'); this.utility = 0; })
+      }
+      Row() {
+        this.menuTile($r('app.media.ime_polish'), '结构整理', () => { inputSession.setPolishMode('structured'); this.utility = 0; })
+        this.menuTile($r('app.media.ime_polish'), '正式表达', () => { inputSession.setPolishMode('formal'); this.utility = 0; })
+      }
+    }.width('100%').layoutWeight(1)
+  }
+
+  @Builder
+  fontPanel() {
+    Column({ space: 16 }) {
+      Text('中英文 Aa').fontSize(this.keyFontSize).fontColor(INK)
+      Row() {
+        ForEach([20, 22, 24, 26], (size: number, index: number) => {
+          Button(['小', '标准', '大', '特大'][index]).layoutWeight(1).height(48)
+            .fontColor(INK).backgroundColor(this.keyFontSize === size ? FUNCTION_KEY : KEY).pressMotion().focusable(false)
+            .onClick(() => { inputSession.setKeyFontSize(size); })
+        }, (size: number) => size.toString())
+      }.width('100%')
+    }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).padding(10)
+  }
+
+  @Builder
+  phrasePanel() {
+    Scroll() {
+      Column({ space: 8 }) {
+        ForEach(['你好！', '谢谢！', '好的，收到。', '请稍等一下。', '稍后回复你。', '辛苦了！'], (phrase: string) => {
+          Button(phrase).width('100%').height(42).fontColor(INK).backgroundColor(KEY).pressMotion().focusable(false)
+            .enabled(this.connected && !this.pendingCommit).onClick(() => { inputSession.insert(phrase); this.utility = 0; })
+        }, (phrase: string) => phrase)
+      }.width('100%').padding({ top: 4, bottom: 8 })
+    }.width('100%').layoutWeight(1).scrollBar(BarState.Auto)
   }
 
   @Builder
@@ -493,15 +582,15 @@ struct InputMethodPanel {
 
   @Builder
   layoutOptions() {
-    Column({ space: 14 }) {
-      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
-        this.menuTile($r('app.media.ime_standard'), '标准键盘', () => { this.selectLayout('standard'); })
-        this.menuTile($r('app.media.ime_split'), '分离键盘', () => { this.selectLayout('split'); })
-        this.menuTile($r('app.media.ime_floating'), '悬浮键盘', () => { this.selectLayout('floating'); })
-      }.width('100%')
-      Text('当前：' + (this.keyboardLayout === 'split' ? '分离键盘' : this.keyboardLayout === 'floating' ? '悬浮键盘' : '标准键盘'))
-        .fontSize(13).fontColor(INK)
-      Text('悬浮键盘可拖动顶部横条，使用 − / + 调整大小').fontSize(13).fontColor(MUTED)
+    Column({ space: 0 }) {
+      Row() {
+        this.menuTile($r('app.media.ime_split'), '拇指模式', () => { this.selectLayout('split'); })
+        this.menuTile($r('app.media.ime_standard'), '普通模式', () => { this.selectLayout('standard'); })
+      }
+      Row() {
+        this.menuTile($r('app.media.ime_floating'), '悬浮模式', () => { this.selectLayout('floating'); })
+        this.menuTile($r('app.media.ime_onehand'), '单手模式', () => { this.selectLayout('onehand'); })
+      }
     }.width('100%').padding({ top: 8, bottom: 8 })
   }
 
@@ -514,16 +603,50 @@ struct InputMethodPanel {
   }
 
   @Builder
-  menuTile(icon: Resource, label: string, action: () => void, available: boolean = true) {
+  menuTile(icon: Resource, label: string, action: () => void, available: boolean = true, note: string = '') {
     Button({ type: ButtonType.Normal }) {
-      Column({ space: 9 }) {
-        Image(icon).width(28).height(28).objectFit(ImageFit.Contain)
-        Text(label).fontSize(13).fontColor(INK).maxLines(1)
+      Column({ space: note ? 4 : 9 }) {
+        Image(icon).width(note ? 22 : 28).height(note ? 22 : 28).objectFit(ImageFit.Contain)
+        Text(label).fontSize(label.length > 4 ? 11 : 13).fontColor(INK).maxLines(1)
+        if (note) { Text(this.menuNote(label, note)).fontSize(10).fontColor(MUTED).maxLines(1) }
       }.width('100%').height('100%').justifyContent(FlexAlign.Center)
     }.width(this.menuTileSize()).height(this.menuTileSize()).margin(5).padding(4)
       .backgroundColor(KEY).borderRadius(12).pressMotion().focusable(false).enabled(available)
       .shadow({ radius: 1.25, color: KEY_SHADOW, offsetX: 0, offsetY: 2 })
       .accessibilityText(label).onClick(() => { action(); })
+  }
+
+  private menuNote(label: string, note: string): string {
+    if (label === '按键音') return this.keySound ? '已开启' : '已关闭';
+    if (label === '上滑输入') return this.swipeSymbols ? '已开启' : '已关闭';
+    return note;
+  }
+
+  @Builder
+  commonTool(index: number) {
+    if (index === 0) { this.menuTile($r('app.media.ime_settings'), '设置', () => { this.utility = 4; }) }
+    else if (index === 1) { this.menuTile($r('app.media.ime_clipboard'), '剪贴板', () => { this.utility = 5; }) }
+    else if (index === 2) { this.menuTile($r('app.media.ime_polish'), '润色模式', () => { this.utility = 6; }) }
+    else if (index === 3) { this.menuTile($r('app.media.ime_font'), '字体大小', () => { this.utility = 7; }) }
+    else if (index === 4) { this.menuTile($r('app.media.ime_sound'), '按键音', () => { inputSession.toggleKeyOption('keySound'); }, true, '状态') }
+    else if (index === 5) { this.menuTile($r('app.media.ime_tools'), '定制工具栏', () => { this.shortcutSlot = 0; this.utility = 3; }) }
+    else if (index === 6) { this.menuTile($r('app.media.ime_phrase'), '常用语', () => { this.utility = 8; }) }
+    else if (index === 7) { this.menuTile($r('app.media.ime_emoji'), '表情', () => { this.utility = 2; }) }
+    else if (index === 8) { this.menuTile($r('app.media.ime_camera'), '拍照输入', () => {}, false, '待接入') }
+    else if (index === 9) { this.menuTile($r('app.media.ime_language'), '繁体输入', () => {}, false, '待接入') }
+    else if (index === 10) { this.menuTile($r('app.media.ime_swipe'), '上滑输入', () => { inputSession.toggleKeyOption('swipeSymbols'); }, true, '状态') }
+    else { this.menuTile($r('app.media.ime_language'), '英文联想', () => {}, false, '待接入') }
+  }
+
+  @Builder
+  commonTools() {
+    Scroll() {
+      Column({ space: 0 }) {
+        Row() { ForEach([0, 1, 2, 3, 4, 5], (index: number) => { this.commonTool(index) }, (index: number) => index.toString()) }
+        Row() { ForEach([6, 7, 8, 9, 10, 11], (index: number) => { this.commonTool(index) }, (index: number) => index.toString()) }
+      }.width(Math.max(this.keyboardWidth, (this.menuTileSize() + 10) * 6))
+    }.width('100%').height((this.menuTileSize() + 10) * 2).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+      .align(Alignment.TopStart)
   }
 
   @Builder
@@ -659,32 +782,15 @@ struct InputMethodPanel {
       Scroll() {
         Column({ space: 10 }) {
           if (tab === 0) {
-            Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
-              this.menuTile($r('app.media.ime_microphone'), '语音输入', () => { this.voice(); },
-                this.connected && this.editorVerified && !this.password && !this.pendingCommit && this.voicePhase === 'idle')
-              this.menuTile($r('app.media.ime_emoji'), '表情', () => { this.utility = 2; })
-              this.menuTile($r('app.media.ime_settings'), '应用设置', () => { inputSession.settings(); })
-              this.menuTile($r('app.media.ime_chevron_down'), '收起键盘', () => { inputSession.hide(); })
-              this.menuTile($r('app.media.ime_tools'), '编辑工具栏', () => { this.shortcutSlot = 0; this.utility = 3; })
-            }.width('100%').padding(12)
+            this.commonTools()
           } else if (tab === 1) {
-            Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
-              this.menuTile($r('app.media.ime_language'), '中文拼音', () => { this.inputMode(true); },
-                this.connected && !this.password && !this.pendingCommit)
-              this.menuTile($r('app.media.ime_language'), '英文输入', () => { this.inputMode(false); },
-                this.connected && !this.pendingCommit)
-              this.menuTile($r('app.media.ime_number'), '数字键盘', () => { this.layer = 1; this.utility = 0; })
-              this.menuTile($r('app.media.ime_symbols'), '符号键盘', () => { this.layer = 2; this.symbolPage = 0; this.utility = 0; })
-              this.menuTile($r('app.media.ime_switch'), '切换输入法', () => { this.inputMethods(); })
-              this.menuTile($r('app.media.ime_cloud'), '云候选', () => { inputSession.toggleCloudCandidates(); })
-              this.menuTile($r('app.media.ime_dictionary'), '自动更新', () => { inputSession.togglePublicDictionaryUpdates(); })
-              this.menuTile($r('app.media.ime_refresh'), '检查词库', () => { inputSession.checkPublicDictionary(); })
+            Column({ space: 0 }) {
+              Row() {
+                this.menuTile($r('app.media.ime_keyboard'), '26键', () => { this.inputMode(true); }, this.connected && !this.password && !this.pendingCommit)
+                this.menuTile($r('app.media.ime_number'), '9键', () => {}, false, '待接入')
+              }
+              Row() { this.menuTile($r('app.media.ime_handwrite'), '手写输入法', () => {}, false, '待接入') }
             }.width('100%')
-            Text(this.cloudEnabled ? '云候选：开（Google）' : '云候选：关').fontSize(13).fontColor(INK).width('100%')
-            Text('开启后将当前拼音发送给 Google，密码框不查询').fontSize(12).fontColor(MUTED).width('100%')
-            Text(this.dictionaryAuto ? '公共词库自动更新：开' : '公共词库自动更新：关').fontSize(13).fontColor(INK).width('100%')
-            Text(this.dictionaryStatus).fontSize(12).fontColor(MUTED).width('100%')
-            Text('公共词库每周检查更新；学习词仅保存在本机').fontSize(12).fontColor(MUTED).width('100%')
           } else {
             this.layoutOptions()
           }
@@ -757,13 +863,14 @@ struct InputMethodPanel {
     if (this.symbolFeedback) return this.symbolFeedback;
     if (this.preedit) return this.preedit;
     if (this.connected && this.chinese && !this.rimeReady && this.status === '可输入') return '正在准备中文输入…';
-    if (this.status === '可输入' || this.status === 'Rime 拼音') return '长按或上滑按键，输入上方符号';
+    if (this.status === '可输入' || this.status === 'Rime 拼音') return this.swipeSymbols ? '长按或上滑按键，输入上方符号' : '长按按键，输入上方符号';
     return this.status;
   }
 
   build() {
     Column({ space: 6 }) {
       if (this.keyboardLayout === 'floating') { this.floatingHandle() }
+      Column({ space: 6 }) {
       Column({ space: 0 }) {
         if (this.previewId || this.symbolFeedback || this.preedit || this.pendingCommit ||
           (this.connected && this.voicePhase === 'idle' && this.utility === 0 && this.layer === 0 && this.rimeReady) ||
@@ -775,7 +882,7 @@ struct InputMethodPanel {
               .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
           }.height(14).width('100%').padding({ left: 8, right: 8 })
         }
-        if (this.utility === 3) { this.shortcutEditorHeader() }
+        if (this.utility >= 3) { this.shortcutEditorHeader() }
         else if (this.utility === 1) { this.toolTabs() }
         else if (this.commitNeedsConfirmation) { this.pendingBar() }
         else if (this.candidates.length > 0 && this.voicePhase === 'idle') { this.candidateBar() }
@@ -784,6 +891,11 @@ struct InputMethodPanel {
         .justifyContent(FlexAlign.End)
       if (this.voicePhase !== 'idle') { this.voicePanel() }
       else if (this.utility === 3) { this.shortcutEditor() }
+      else if (this.utility === 4) { this.keyboardSettings() }
+      else if (this.utility === 5) { this.clipboardPanel() }
+      else if (this.utility === 6) { this.polishPanel() }
+      else if (this.utility === 7) { this.fontPanel() }
+      else if (this.utility === 8) { this.phrasePanel() }
       else if (this.utility === 1) { this.tools() }
       else if (this.utility === 2) { this.emoji() }
       else if (this.expanded && this.candidates.length > 0) { this.expandedCandidates() }
@@ -798,7 +910,9 @@ struct InputMethodPanel {
         }.width(this.keyboardWidth)
           .layoutWeight(1).justifyContent(FlexAlign.End)
       }
+      }.width(this.keyboardWidth).layoutWeight(1)
     }.width('100%').height('100%').padding({ left: 6, right: 6, top: 4, bottom: 8 }).backgroundColor(BACKGROUND)
+      .alignItems(this.keyboardLayout === 'onehand' ? HorizontalAlign.End : HorizontalAlign.Center)
       .borderRadius(this.keyboardLayout === 'floating' ? 12 : 0).clip(true)
   }
 }

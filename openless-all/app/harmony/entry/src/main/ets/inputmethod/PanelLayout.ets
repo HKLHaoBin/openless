@@ -29,7 +29,7 @@ class PanelLayout {
     try {
       this.settings = await preferences.getPreferences(context, { name: 'ime_panel_layout' });
       const saved = await this.settings.get('mode', 'standard');
-      this.mode = saved === 'split' || saved === 'floating' ? saved : 'standard';
+      this.mode = saved === 'split' || saved === 'floating' || saved === 'onehand' ? saved : 'standard';
       this.scale = this.clamp(Number(await this.settings.get('scale', 1)), 0.8, 1.2);
       this.x = this.clamp(Number(await this.settings.get('x', 0.5)), 0, 1);
       this.y = this.clamp(Number(await this.settings.get('y', 0.7)), 0, 1);
@@ -67,7 +67,7 @@ class PanelLayout {
     const gaps = split ? 10 : 9;
     // Fill the panel width, but keep a compact row height. On a wide tablet
     // this deliberately produces wider keys instead of a taller keyboard.
-    const keyboardWidth = this.width / density - 12;
+    const keyboardWidth = this.mode === 'onehand' ? Math.min(420, this.width / density * 0.72) - 12 : this.width / density - 12;
     const keyWidth = (keyboardWidth - gaps * gap) / columns;
     const keyHeight = Math.max(12, Math.floor(Math.min(floating ? keyWidth : maxPanelVp,
       (maxPanelVp - 66 - (floating ? 26 : 0) - (rows - 1) * 7) / rows)));
@@ -96,7 +96,7 @@ class PanelLayout {
   }
 
   select(mode: string): void {
-    if (!['standard', 'split', 'floating'].includes(mode)) return;
+    if (!['standard', 'split', 'floating', 'onehand'].includes(mode)) return;
     console.info('[OpenLess IME] layout requested=' + mode + ' panel=' + !!this.panel);
     this.queue = this.queue.then(async (): Promise<void> => {
       const previous = this.mode;

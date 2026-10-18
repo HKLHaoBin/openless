@@ -54,7 +54,9 @@ function adaptiveGeometry(h) {
   const gap = h.state.get('keyboardLayout') === 'standard' ? 7 : 5;
   const width = h.state.get('keyboardWidth');
   assert.equal(width, (split ? 12 : 10) * keyWidth + (split ? 10 : 9) * gap);
-  assert.ok(Math.abs(width + 12 - h.panel.width / h.screen.densityPixels) < 0.01, 'keys must fill the panel width without outer blank bands');
+  const expectedWidth = h.state.get('keyboardLayout') === 'onehand' ?
+    Math.min(420, h.panel.width / h.screen.densityPixels * 0.72) : h.panel.width / h.screen.densityPixels;
+  assert.ok(Math.abs(width + 12 - expectedWidth) < 0.01, 'keys must fill the selected layout width');
   if (h.state.get('keyboardLayout') === 'floating') assert.ok(size <= keyWidth + 0.01);
   assert.ok(size >= 12);
   const rows = h.state.get('showNumberRow') ? 5 : 4;
@@ -75,6 +77,16 @@ assert.equal(h.state.get('keyboardLayout'), 'split');
 assert.equal(h.values.get('mode'), 'split');
 assert.equal(h.panel.height, standardHeight);
 adaptiveGeometry(h);
+h.layout.select('onehand');
+await h.layout.queue;
+assert.equal(h.state.get('keyboardLayout'), 'onehand');
+assert.equal(h.panel.height, standardHeight);
+assert.equal(h.panel.flag, 0);
+assert.ok(h.state.get('keyboardWidth') < h.panel.width / h.screen.densityPixels - 12);
+adaptiveGeometry(h);
+const restoredOnehand = await host(Object.fromEntries(h.values));
+assert.equal(restoredOnehand.state.get('keyboardLayout'), 'onehand');
+adaptiveGeometry(restoredOnehand);
 h.layout.select('floating');
 await h.layout.queue;
 assert.equal(h.panel.flag, 1);

@@ -3,6 +3,8 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { initializeRime, rimeRequest, RimeState, cloudCandidates, refreshPublicDictionary, PublicDictionaryInfo } from './RimeClient';
 import { preferences } from '@kit.ArkData';
 import { VoiceClient } from './VoiceClient';
+import { KeySound } from './KeySound';
+import { pasteboard } from '@kit.BasicServicesKit';
 
 class InputPanelState {
   connected: boolean = false;
@@ -13,6 +15,9 @@ class InputPanelState {
   candidates: string[] = [];
   candidatesLoading: boolean = false;
   toolbarActions: string[] = ['layout', 'emoji', 'voice', 'settings'];
+  keyFontSize: number = 22;
+  swipeSymbols: boolean = true;
+  keySound: boolean = false;
   rimeReady: boolean = false;
   page: number = 0;
   hasNext: boolean = false;
@@ -67,6 +72,7 @@ class InputSession {
   private candidateTimer: number = -1;
   private cloudChoices: string[] = [];
   private cloudSettings?: preferences.Preferences;
+  private sound?: KeySound;
 
   attach(context: InputMethodExtensionContext, keyboard: inputMethodEngine.KeyboardController,
     client: inputMethodEngine.InputClient): void {
@@ -84,7 +90,13 @@ class InputSession {
       const enabled = await settings.get('enabled', false);
       const publicUpdates = await settings.get('public_updates', true);
       const toolbar = await settings.get('toolbar_actions', 'layout,emoji,voice,settings');
+      const font = Number(await settings.get('key_font_size', 22));
+      const swipe = await settings.get('swipe_symbols', true);
+      const sound = await settings.get('key_sound', false);
       if (generation === this.generation) {
+        if ([20, 22, 24, 26].includes(font)) imeStorage.setOrCreate('keyFontSize', font);
+        imeStorage.setOrCreate('swipeSymbols', swipe !== false);
+        imeStorage.setOrCreate('keySound', sound === true);
         if (typeof toolbar === 'string') {
           const actions = toolbar.split(',');
           if (actions.length === 4 && actions.every((action: string) => this.toolbarActionAllowed(action))) {
@@ -320,6 +332,7 @@ class InputSession {
   }
 
   insert(text: string): void {
+    this.playKeySound();
     if (imeStorage.get<boolean>('chinese') && /^[a-z]$/i.test(text)) {
       this.rimeOperation('key', text.toLowerCase().charCodeAt(0).toString());
       return;
@@ -337,6 +350,7 @@ class InputSession {
   }
 
   insertSymbol(text: string): void {
+    this.playKeySound();
     if (!this.client) { this.symbolMessage('请先选择输入框'); return; }
     this.symbolMessage('正在输入「' + text + '」');
     if (imeStorage.get<boolean>('chinese')) { this.rimeOperation('literal', text, true); return; }
@@ -352,6 +366,7 @@ class InputSession {
   }
 
   backspace(): void {
+    this.playKeySound();
     // Check encoding inside the serial queue; fast typing may still be pending.
     this.rimeOperation('backspace', '');
   }
@@ -472,6 +487,49 @@ class InputSession {
     });
   }
 
+  setKeyFontSize(size: number): void {
+    if (![20, 22, 24, 26].includes(size)) return;
+    imeStorage.setOrCreate('keyFontSize', size);
+    this.cloudSettings?.put('key_font_size', size).then(() => this.cloudSettings?.flush()).catch(() => {});
+  }
+
+  toggleKeyOption(option: string): void {
+    if (option !== 'swipeSymbols' && option !== 'keySound') return;
+    const enabled = !imeStorage.get<boolean>(option);
+    imeStorage.setOrCreate(option, enabled);
+    this.cloudSettings?.put(option === 'swipeSymbols' ? 'swipe_symbols' : 'key_sound', enabled)
+      .then(() => this.cloudSettings?.flush()).catch(() => {});
+    if (option === 'keySound' && enabled) this.playKeySound();
+  }
+
+  private playKeySound(): void {
+    if (!imeStorage.get<boolean>('keySound') || !this.context) return;
+    if (!this.sound) this.sound = new KeySound();
+    this.sound.play(this.context);
+  }
+
+  pasteClipboard(): void {
+    if (!this.client || imeStorage.get<boolean>('pendingCommit')) return;
+    const generation = this.generation;
+    pasteboard.getSystemPasteboard().getData().then((data: pasteboard.PasteData) => {
+      if (generation !== this.generation) return;
+      const text = data.getPrimaryText();
+      if (text) this.insert(text); else imeStorage.setOrCreate('status', '剪贴板中没有文字');
+    }).catch(() => {
+      if (generation === this.generation) imeStorage.setOrCreate('status', '无法读取剪贴板，请重新点击系统粘贴按钮');
+    });
+  }
+
+  setPolishMode(mode: string): void {
+    if (!this.context || !['raw', 'light', 'structured', 'formal'].includes(mode)) return;
+    const generation = this.generation;
+    this.voice.setPolishMode(this.context, mode).then(() => {
+      if (generation === this.generation) imeStorage.setOrCreate('status', '已更新语音润色模式');
+    }).catch((error: Error) => {
+      if (generation === this.generation) imeStorage.setOrCreate('status', error.message);
+    });
+  }
+
   private rimeOperation(operation: string, argument: string, feedback: boolean = false): void {
     const generation = this.generation;
     const epoch = this.queueEpoch;
@@ -520,6 +578,7 @@ class InputSession {
     const displayed = imeStorage.get<string[]>('candidates') || [];
     const text = expectedText || displayed[index];
     if (text === undefined || !displayed.includes(text)) return;
+    this.playKeySound();
     const local = this.localCandidates.indexOf(text);
     if (local >= 0) this.rimeOperation(this.candidatesAppended ? 'select_absolute' : 'select',
       (this.candidatesAppended ? this.candidateBase + local : local).toString() + '@' + this.candidateRevision.toString());
@@ -556,7 +615,7 @@ class InputSession {
       if (generation === this.generation && epoch === this.queueEpoch) imeStorage.setOrCreate('candidatesLoading', false);
     });
   }
-  space(): void { this.rimeOperation('space', ''); }
+  space(): void { this.playKeySound(); this.rimeOperation('space', ''); }
   page(next: boolean): void { this.rimeOperation('key', next ? '65366' : '65365'); }
   toggleLanguage(): void {
     this.cloudEpoch++;
@@ -567,6 +626,7 @@ class InputSession {
   }
 
   enter(): void {
+    this.playKeySound();
     const action = this.action;
     const generation = this.generation;
     const epoch = this.queueEpoch;
