@@ -22,6 +22,7 @@ fn capsule_diag_backend_event_class(kind: &BackendEventKind) -> Option<&'static 
         BackendEventKind::DictationCompleted(_) => Some("dictation_completed"),
         BackendEventKind::SelectionVoiceStateChanged(_) => Some("selection_voice_state"),
         BackendEventKind::SelectionVoiceLevel(_) => Some("selection_voice_level"),
+        BackendEventKind::PreferencesChanged(_) => Some("preferences_changed"),
         _ => None,
     }
 }
@@ -67,9 +68,16 @@ pub fn start(app: AppHandle, backend: Arc<OpenLessBackend>) {
                     let backend_emit_ok = app.emit("backend:event", &event).is_ok();
                     #[cfg(target_os = "windows")]
                     if let Some(event_class) = capsule_diag_backend_event_class(&event.kind) {
+                        let is_preferences_changed =
+                            matches!(&event.kind, BackendEventKind::PreferencesChanged(_));
+                        let hypothesis_ids: &[&'static str] = if is_preferences_changed {
+                            &["H11"]
+                        } else {
+                            &["H3", "H4", "H6"]
+                        };
                         crate::tauri_coordinator_host::capsule_diag_record(
                             "P6",
-                            &["H3", "H4", "H6"],
+                            hypothesis_ids,
                             "backend_event_bridge",
                             if backend_emit_ok {
                                 "emitted"
@@ -82,6 +90,8 @@ pub fn start(app: AppHandle, backend: Arc<OpenLessBackend>) {
                                 "session_present": event.session_id.is_some(),
                                 "text_nonempty": capsule_diag_event_text_nonempty(&event.kind),
                                 "is_final": capsule_diag_event_is_final(&event.kind),
+                                "show_capsule": is_preferences_changed
+                                    .then(|| backend_for_events.get_preferences().show_capsule),
                             }),
                         );
                     }
