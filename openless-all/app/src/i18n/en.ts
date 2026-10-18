@@ -1582,7 +1582,11 @@ export const en: typeof zhCN = {
       polishStrategyScriptLabel: 'Polish strategy script',
       polishStrategyScriptDesc:
         'Define strategy(input) and return #{ action: "skip" }, #{ action: "polish" }, or #{ action: "request", temperature: 0.4, maxTokens: 400, reasoningEffort: "low" }. Missing language/confidence/model values are ().',
-      polishStrategyScriptPlaceholder: 'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+      polishStrategyScriptPlaceholder:
+        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+      polishStrategySkillCopy: 'Copy Agent skill',
+      polishStrategySkillCopied: 'Agent skill copied',
+      polishStrategySkillCopyFailed: 'Copy failed; check clipboard permissions',
       polishContextWindowLabel: 'Polish context window (minutes)',
       polishContextWindowDesc:
         'Use the last N minutes of polished transcripts as multi-turn context; 0 = disabled.',
