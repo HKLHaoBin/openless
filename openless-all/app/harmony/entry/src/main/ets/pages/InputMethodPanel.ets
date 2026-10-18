@@ -499,7 +499,13 @@ struct InputMethodPanel {
 
   @Builder
   toolTabs() {
-    Stack({ alignContent: Alignment.Center }) {
+    Row() {
+      Button({ type: ButtonType.Normal }) {
+        Image($r('app.media.ime_chevron_down')).width(22).height(22).rotate({ angle: 90 })
+      }.width(34).height(34).borderRadius(999).padding(0)
+        .backgroundColor(KEY).pressMotion().focusable(false).accessibilityText('返回键盘')
+        .onClick(() => { this.utility = 0; })
+      Blank().layoutWeight(1)
       Row({ space: 6 }) {
         ForEach(['常用功能', '输入方式', '键盘模式'], (label: string, index: number) => {
           Button(label, { type: ButtonType.Normal }).height(34)
@@ -511,11 +517,8 @@ struct InputMethodPanel {
             .accessibilityText(label).onClick(() => { this.toolTab = index; })
         }, (label: string) => label)
       }.justifyContent(FlexAlign.Center)
-      Button({ type: ButtonType.Normal }) {
-        Image($r('app.media.ime_chevron_down')).width(22).height(22).rotate({ angle: 90 })
-      }.width(34).height(34).align(Alignment.Start).borderRadius(999).padding(0)
-        .backgroundColor(KEY).pressMotion().focusable(false).accessibilityText('返回键盘')
-        .onClick(() => { this.utility = 0; })
+      Blank().layoutWeight(1)
+      Blank().width(34)
     }.width('100%').height(34)
   }
 
