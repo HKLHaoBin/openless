@@ -1,6 +1,6 @@
 import { inputMethodEngine, InputMethodExtensionContext } from '@kit.IMEKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { initializeRime, rimeRequest, RimeState, cloudCandidates } from './RimeClient';
+import { initializeRime, rimeRequest, RimeState, cloudCandidates, refreshPublicDictionary, PublicDictionaryInfo } from './RimeClient';
 import { preferences } from '@kit.ArkData';
 import { VoiceClient } from './VoiceClient';
 
@@ -24,6 +24,8 @@ class InputPanelState {
   cloudEnabled: boolean = false;
   symbolFeedback: string = '';
   keyboardWidth: number = 574;
+  dictionaryStatus: string = '公共词库：自动更新';
+  dictionaryAuto: boolean = true;
 }
 
 export const imeStorage: LocalStorage = new LocalStorage(new InputPanelState());
@@ -72,7 +74,12 @@ class InputSession {
       if (generation !== this.generation) return;
       this.cloudSettings = settings;
       const enabled = await settings.get('enabled', false);
-      if (generation === this.generation) imeStorage.setOrCreate('cloudEnabled', enabled === true);
+      const publicUpdates = await settings.get('public_updates', true);
+      if (generation === this.generation) {
+        imeStorage.setOrCreate('cloudEnabled', enabled === true);
+        imeStorage.setOrCreate('dictionaryAuto', publicUpdates === true);
+        if (imeStorage.get<boolean>('rimeReady')) this.checkPublicDictionary(false);
+      }
     }).catch(() => {});
     this.action = inputMethodEngine.ENTER_KEY_TYPE_UNSPECIFIED;
     this.resetObservation();
@@ -128,7 +135,7 @@ class InputSession {
     const epoch = this.queueEpoch;
     this.queue = this.queue.then(async (): Promise<void> => {
       if (generation !== this.generation || epoch !== this.queueEpoch) return;
-      await initializeRime(context.filesDir, context.resourceManager);
+      await initializeRime(context.filesDir, context.resourceManager, 'rime-user', context.cacheDir);
       if (generation !== this.generation || epoch !== this.queueEpoch) return;
       const state = await rimeRequest('create', '', learning ? 'learning' : 'private');
       if (generation !== this.generation || epoch !== this.queueEpoch) { await rimeRequest('destroy', state.session); return; }
@@ -136,6 +143,7 @@ class InputSession {
       imeStorage.setOrCreate('rimeReady', true);
       this.publish(state);
       console.info('[OpenLess IME] editor ready learning=' + learning);
+      this.checkPublicDictionary(false);
     }).catch(() => { if (generation === this.generation && epoch === this.queueEpoch) imeStorage.setOrCreate('status', '中文引擎加载失败，可切换英文'); });
   }
 
@@ -390,6 +398,26 @@ class InputSession {
     if (this.cloudSettings) {
       this.cloudSettings.put('enabled', enabled).then(() => this.cloudSettings?.flush()).catch(() => {});
     }
+  }
+
+  checkPublicDictionary(force: boolean = true): void {
+    if (!force && (!this.cloudSettings || !imeStorage.get<boolean>('dictionaryAuto'))) return;
+    const context = this.context;
+    if (!context) return;
+    imeStorage.setOrCreate('dictionaryStatus', '公共词库：正在检查');
+    refreshPublicDictionary(context.filesDir, context.cacheDir, force).then((info: PublicDictionaryInfo | undefined) => {
+      imeStorage.setOrCreate('dictionaryStatus', !info ? '公共词库：离线可用，稍后重试' : info.pending ?
+        '公共词库：已更新，下次启动生效' : '公共词库：已检查');
+    }).catch(() => { imeStorage.setOrCreate('dictionaryStatus', '公共词库：离线可用，稍后重试'); });
+  }
+
+  togglePublicDictionaryUpdates(): void {
+    const settings = this.cloudSettings;
+    if (!settings) return;
+    const enabled = !imeStorage.get<boolean>('dictionaryAuto');
+    imeStorage.setOrCreate('dictionaryAuto', enabled);
+    settings.put('public_updates', enabled).then(() => settings.flush()).catch(() => {});
+    if (enabled) this.checkPublicDictionary(false);
   }
 
   private rimeOperation(operation: string, argument: string, feedback: boolean = false): void {

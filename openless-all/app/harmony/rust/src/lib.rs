@@ -182,9 +182,32 @@ fn credential_key(args: &Value) -> Result<openless_core::CredentialKey, String> 
     .map_err(|e| e.to_string())
 }
 
+fn ime_dictionary_base(host: &Host) -> PathBuf {
+    let config = host.backend.config();
+    config
+        .data_dir
+        .parent()
+        .unwrap_or(&config.data_dir)
+        .join(openless_core::ime_dictionary::BUNDLED_DIRECTORY)
+}
+
 fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
     let b = &host.backend;
     let value = match command {
+        "ime_dictionary_select" => json!(openless_core::ime_dictionary::select(
+            &ime_dictionary_base(host)
+        )),
+        "ime_dictionary_reject" => json!(openless_core::ime_dictionary::reject(
+            &ime_dictionary_base(host)
+        )),
+        "ime_dictionary_update" => {
+            json!(host
+                .runtime
+                .block_on(openless_core::ime_dictionary::update(
+                    &ime_dictionary_base(host),
+                    args["force"].as_bool().unwrap_or(false)
+                ))?)
+        }
         "ime_cloud_candidates" => json!(host
             .runtime
             .block_on(openless_core::ime_cloud::query(required(&args, "pinyin")?))),

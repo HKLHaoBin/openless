@@ -10,8 +10,9 @@ const compiled = ts.transpileModule(stripImports(source), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
-function host() {
+function host({ selected = '', rejectSnapshot = false } = {}) {
   const files = new Map(), requests = [];
+  const initializationPaths = [], dictionaryCommands = [];
   let handle, calls = 0, fail = false;
   const expected = new TextEncoder().encode('dictionary-中文-contents');
   // Resource APIs may return a view into a larger buffer.
@@ -36,14 +37,24 @@ function host() {
   vm.runInNewContext(compiled, {
     exports, console, fs,
     util: { TextDecoder: { create: () => ({ decodeToString: bytes => new TextDecoder().decode(bytes) }) } },
-    nativeHost: { async rimeAsync(operation) { requests.push(operation); return '{"ok":true}'; } },
+    nativeHost: {
+      initBackend: () => '{"ok":true}',
+      async invokeAsync(command) {
+        dictionaryCommands.push(command);
+        return JSON.stringify({ ok: true, value: { data_path: command === 'ime_dictionary_select' ? selected : '/profile/rime-shared-1.17.0-ice-da1fbe60-v1' } });
+      },
+      async rimeAsync(operation, path) {
+        requests.push(operation); initializationPaths.push(path);
+        return JSON.stringify({ ok: !(rejectSnapshot && path === selected), error: 'invalid public dictionary fixture' });
+      },
+    },
   });
   const resources = {
     async getRawFileContent(name) {
       return name.endsWith('manifest.json') ? new TextEncoder().encode('["test.dict.yaml"]') : view;
     },
   };
-  return { exports, files, requests, resources, expected, writes: () => calls, failNext: () => { fail = true; } };
+  return { exports, files, requests, resources, expected, initializationPaths, dictionaryCommands, writes: () => calls, failNext: () => { fail = true; } };
 }
 
 const h = host();
@@ -63,4 +74,16 @@ assert.deepEqual(retry.requests, []);
 await retry.exports.initializeRime('/profile', retry.resources);
 assert.deepEqual(retry.files.get(path), Array.from(retry.expected));
 assert.deepEqual(retry.requests, ['initialize']);
+const base = '/profile/rime-shared-1.17.0-ice-da1fbe60-v1';
+const selected = base + '/public-updates-v1/' + 'a'.repeat(40);
+const updated = host({ selected });
+await updated.exports.initializeRime('/profile', updated.resources, 'rime-user', '/cache');
+assert.deepEqual(updated.initializationPaths, [selected]);
+const rollback = host({ selected, rejectSnapshot: true });
+await rollback.exports.initializeRime('/profile', rollback.resources, 'rime-user', '/cache');
+assert.deepEqual(rollback.initializationPaths, [selected, base]);
+assert.deepEqual(rollback.dictionaryCommands, ['ime_dictionary_select', 'ime_dictionary_reject']);
+const invalidPath = host({ selected: '/profile/rime-user' });
+await invalidPath.exports.initializeRime('/profile', invalidPath.resources, 'rime-user', '/cache');
+assert.deepEqual(invalidPath.initializationPaths, [base], 'public data selection must not redirect to the personal profile');
 console.log('Harmony Rime startup: shared initialization, asynchronous partial writes, atomic resources and failure retry passed');

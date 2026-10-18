@@ -263,7 +263,7 @@ export class HarmonyApi {
         case 'copy_text': await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, args.text)); break;
         case '__test_rime_roundtrip': {
           if (!this.context) throw new Error('应用上下文未就绪');
-          value = await testRime(this.context.filesDir, this.context.resourceManager);
+          value = await testRime(this.context.filesDir, this.context.resourceManager, this.context.cacheDir);
           break;
         }
         case 'open_external_url': await this.openExternal(args.url); break;

@@ -258,6 +258,11 @@ class OpenLessKeyboardSettingsActivity : Activity() {
             isChecked = prefs.getBoolean("cloud_pinyin_enabled", false)
             setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("cloud_pinyin_enabled", checked).apply() }
         })
+        content.addView(Switch(this).apply {
+            text = ui("每周更新公共词库（学习词仅保存在本机）", "Weekly public dictionaries (learned words stay on this device)")
+            isChecked = prefs.getBoolean("public_dictionary_updates", true)
+            setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("public_dictionary_updates", checked).apply() }
+        })
         content.addView(sectionLabel(ui("英文键盘", "English keyboard")))
         val englishSuggestionsRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         englishSuggestionsRow.addView(

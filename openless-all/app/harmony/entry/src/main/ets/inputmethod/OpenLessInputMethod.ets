@@ -58,7 +58,7 @@ export default class OpenLessInputMethod extends InputMethodExtensionAbility {
     display.on('change', this.onDisplayChange);
     // Prepare dictionaries in parallel with panel creation and editor attributes.
     // This creates no session and never enables learning or network queries.
-    initializeRime(this.context.filesDir, this.context.resourceManager).catch(() => {
+    initializeRime(this.context.filesDir, this.context.resourceManager, 'rime-user', this.context.cacheDir).catch(() => {
       console.warn('[OpenLess IME] dictionary prewarm failed; retry on input');
     });
     console.info('[OpenLess IME] created');

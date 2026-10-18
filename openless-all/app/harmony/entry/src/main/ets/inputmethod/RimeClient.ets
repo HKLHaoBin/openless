@@ -17,6 +17,29 @@ export interface RimeState {
 }
 let initialization: Promise<void> | undefined = undefined;
 let validated: boolean = false;
+let publicRefresh: Promise<PublicDictionaryInfo | undefined> | undefined = undefined;
+let nextPublicCheck: number = 0;
+let publicInfo: PublicDictionaryInfo | undefined = undefined;
+
+export interface PublicDictionaryInfo { data_path: string; revision: string; pending: boolean; checked: number; }
+interface DictionaryReply { ok: boolean; value?: PublicDictionaryInfo; }
+
+async function dictionaryOperation(filesDir: string, cacheDir: string, command: string, force: boolean = false): Promise<PublicDictionaryInfo | undefined> {
+  if (!cacheDir) return undefined;
+  const initialized: CloudReply = JSON.parse(nativeHost.initBackend(filesDir + '/openless', cacheDir + '/openless'));
+  if (!initialized.ok) return undefined;
+  const reply: DictionaryReply = JSON.parse(await nativeHost.invokeAsync(command, JSON.stringify({ force: force })));
+  return reply.ok ? reply.value : undefined;
+}
+
+export function refreshPublicDictionary(filesDir: string, cacheDir: string, force: boolean = false): Promise<PublicDictionaryInfo | undefined> {
+  if (publicRefresh) return publicRefresh;
+  if (!force && Date.now() < nextPublicCheck) return Promise.resolve(publicInfo);
+  publicRefresh = dictionaryOperation(filesDir, cacheDir, 'ime_dictionary_update', force).then((info: PublicDictionaryInfo | undefined) => {
+    publicInfo = info; return info;
+  }).finally(() => { nextPublicCheck = Date.now() + 86400000; publicRefresh = undefined; });
+  return publicRefresh;
+}
 
 export async function rimeRequest(operation: string, session: string = '', argument: string = ''): Promise<RimeState> {
   const state: RimeState = JSON.parse(await nativeHost.rimeAsync(operation, session, argument));
@@ -32,7 +55,7 @@ export async function cloudCandidates(filesDir: string, cacheDir: string, pinyin
   return reply.ok ? reply.value || [] : [];
 }
 
-export function initializeRime(filesDir: string, resources: resourceManager.ResourceManager, profile: string = 'rime-user'): Promise<void> {
+export function initializeRime(filesDir: string, resources: resourceManager.ResourceManager, profile: string = 'rime-user', cacheDir: string = ''): Promise<void> {
   if (initialization) return initialization;
   initialization = (async (): Promise<void> => {
     const shared = filesDir + '/rime-shared-1.17.0-ice-da1fbe60-v1';
@@ -57,17 +80,28 @@ export function initializeRime(filesDir: string, resources: resourceManager.Reso
       } finally { await fs.close(file); }
       await fs.rename(path + '.tmp', path);
     }
-    await rimeRequest('initialize', shared, filesDir + '/' + profile);
+    const selected = await dictionaryOperation(filesDir, cacheDir, 'ime_dictionary_select').catch(() => undefined);
+    let data = selected?.data_path || shared;
+    if (data !== shared && !data.startsWith(shared + '/public-updates-v1/')) data = shared;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { await rimeRequest('initialize', data, filesDir + '/' + profile); break; }
+      catch (error) {
+        if (data === shared) throw new Error((error as Error).message || 'Rime 字典加载失败');
+        const fallback = await dictionaryOperation(filesDir, cacheDir, 'ime_dictionary_reject').catch(() => undefined);
+        data = attempt === 1 ? shared : fallback?.data_path || shared;
+        if (data !== shared && !data.startsWith(shared + '/public-updates-v1/')) data = shared;
+      }
+    }
     console.info('[OpenLess Rime] initialized');
   })().catch((error: Error) => { initialization = undefined; throw error; });
   return initialization;
 }
 
-export async function testRime(filesDir: string, resources: resourceManager.ResourceManager): Promise<boolean> {
+export async function testRime(filesDir: string, resources: resourceManager.ResourceManager, cacheDir: string = ''): Promise<boolean> {
   if (validated) return true;
   // The private schema used below cannot learn. Keep initialization on the
   // real profile so a main-window probe cannot redirect future IME sessions.
-  await initializeRime(filesDir, resources);
+  await initializeRime(filesDir, resources, 'rime-user', cacheDir);
   let state = await rimeRequest('create', '', 'private');
   const id = state.session;
   try {

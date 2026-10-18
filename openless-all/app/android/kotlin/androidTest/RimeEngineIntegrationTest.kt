@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Before
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -12,6 +13,11 @@ import org.junit.runner.RunWith
 /** Real packaged JNI + dictionary test, using a non-learning disposable session. */
 @RunWith(AndroidJUnit4::class)
 class RimeEngineIntegrationTest {
+    @Before fun keepDictionaryTestsOffline() {
+        InstrumentationRegistry.getInstrumentation().targetContext
+            .getSharedPreferences("openless_ime_ui", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("public_dictionary_updates", false).commit()
+    }
     @Test fun externalCandidateUsesRevisionAndPendingCommitContract() {
         OpenLessRime.initialize(InstrumentationRegistry.getInstrumentation().targetContext)
         val session = OpenLessRime.request("create", "", "private").getString("session")

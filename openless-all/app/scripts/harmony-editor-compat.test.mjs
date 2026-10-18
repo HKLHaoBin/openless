@@ -29,6 +29,7 @@ function host(getEditorAttribute, clientOverrides = {}, queryCloud = async () =>
     exports, console, LocalStorage: Storage, VoiceClient: Voice,
     preferences: { getPreferences: async () => ({ get: async () => false, put: async () => {}, flush: async () => {} }) },
     cloudCandidates: queryCloud,
+    refreshPublicDictionary: async () => ({ pending: false, revision: 'test', checked: 1 }),
     setTimeout: (callback, delay) => {
       if (delay === 800) return setTimeout(callback, 20);
       if (delay === 150 || delay === 60) return setTimeout(callback, 1);

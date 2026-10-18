@@ -22,6 +22,8 @@ struct InputMethodPanel {
   @LocalStorageLink('candidates') candidates: string[] = [];
   @LocalStorageLink('cloudEnabled') cloudEnabled: boolean = false;
   @LocalStorageLink('symbolFeedback') symbolFeedback: string = '';
+  @LocalStorageLink('dictionaryStatus') dictionaryStatus: string = '公共词库：自动更新';
+  @LocalStorageLink('dictionaryAuto') dictionaryAuto: boolean = true;
   @LocalStorageLink('rimeReady') rimeReady: boolean = false;
   @LocalStorageLink('page') page: number = 0;
   @LocalStorageLink('hasNext') hasNext: boolean = false;
@@ -496,6 +498,11 @@ struct InputMethodPanel {
         Button(this.cloudEnabled ? '云候选：开（Google）' : '云候选：关').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
           .onClick(() => { inputSession.toggleCloudCandidates(); })
         Text('开启后将当前拼音发送给 Google，密码框不查询').fontSize(12).fontColor(MUTED)
+        Button(this.dictionaryAuto ? '公共词库自动更新：开' : '公共词库自动更新：关').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
+          .onClick(() => { inputSession.togglePublicDictionaryUpdates(); })
+        Button(this.dictionaryStatus).pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
+          .onClick(() => { inputSession.checkPublicDictionary(); })
+        Text('公共词库每周检查更新；学习词仅保存在本机').fontSize(12).fontColor(MUTED)
         Row({ space: 12 }) {
           Button('OpenLess 设置').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
             .onClick(() => { inputSession.settings(); })
