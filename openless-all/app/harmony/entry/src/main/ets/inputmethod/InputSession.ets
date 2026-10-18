@@ -91,6 +91,7 @@ class InputSession {
     this.keyboard = keyboard;
     this.client = client;
     this.cloudSettings = undefined;
+    this.clipboard = undefined;
     imeStorage.setOrCreate('cloudEnabled', false);
     preferences.getPreferences(context, { name: 'ime_cloud_candidates' }).then(async (settings: preferences.Preferences) => {
       if (generation !== this.generation) return;
