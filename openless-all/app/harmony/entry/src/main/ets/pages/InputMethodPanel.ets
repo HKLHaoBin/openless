@@ -102,7 +102,7 @@ struct InputMethodPanel {
 
   private swipeDistance(): number { return Math.max(22, Math.min(30, this.keyHeight * 0.48)); }
 
-  private keyGap(): number { return this.keyboardLayout === 'standard' ? 6 : 5; }
+  private keyGap(): number { return this.keyboardLayout === 'standard' ? 7 : 5; }
 
   private finishSymbol(id: string, mode: string): void {
     const symbol = this.symbolGesture.finish(id, this.keyContext(), mode);
@@ -643,7 +643,7 @@ struct InputMethodPanel {
       else if (this.expanded && this.candidates.length > 0) { this.expandedCandidates() }
       else if (this.layer === 1) { this.numberPad() }
       else {
-        Column({ space: 6 }) {
+        Column({ space: 7 }) {
           if (this.showNumberRow) { this.digitRow() }
           this.keyRow(0)
           this.keyRow(1)

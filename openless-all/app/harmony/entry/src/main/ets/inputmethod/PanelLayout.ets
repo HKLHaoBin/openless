@@ -56,21 +56,22 @@ class PanelLayout {
     if (this.geometry === geometry) return;
     this.geometry = '';
     // Keep all five rows visible in landscape as well as portrait.
-    const maxPanelVp = Math.floor(screen.height * 0.65 / density);
+    const requestedHeight = floating ? Math.round(304 * this.scale) : this.mode === 'split' ? 368 : 328;
+    const maxPanelVp = Math.min(requestedHeight, Math.floor(screen.height * 0.65 / density));
     const showNumberRow = !floating && maxPanelVp >= 300;
     const rows = showNumberRow ? 5 : 4;
     this.width = floating ? Math.round(Math.min(screen.width * 0.9, 400 * this.scale * density)) : screen.width;
     const split = this.mode === 'split';
-    const gap = this.mode === 'standard' ? 6 : 5;
+    const gap = this.mode === 'standard' ? 7 : 5;
     const columns = split ? 12 : 10;
     const gaps = split ? 10 : 9;
-    // Fill the panel width. Match height to width where possible, while keeping
-    // every row inside the available screen height in landscape.
+    // Fill the panel width, but keep a compact row height. On a wide tablet
+    // this deliberately produces wider keys instead of a taller keyboard.
     const keyboardWidth = this.width / density - 12;
     const keyWidth = (keyboardWidth - gaps * gap) / columns;
     const keyHeight = Math.max(12, Math.floor(Math.min(keyWidth,
-      (maxPanelVp - 66 - (floating ? 26 : 0) - (rows - 1) * 6) / rows)));
-    const fittedHeight = rows * keyHeight + (rows - 1) * 6 + 66 + (floating ? 26 : 0);
+      (maxPanelVp - 66 - (floating ? 26 : 0) - (rows - 1) * 7) / rows)));
+    const fittedHeight = rows * keyHeight + (rows - 1) * 7 + 66 + (floating ? 26 : 0);
     this.height = Math.round(Math.min(maxPanelVp, fittedHeight) * density);
     const flag = floating ? inputMethodEngine.PanelFlag.FLG_FLOATING : inputMethodEngine.PanelFlag.FLG_FIXED;
     if (flag !== this.flag) { panel.changeFlag(flag); this.flag = flag; }

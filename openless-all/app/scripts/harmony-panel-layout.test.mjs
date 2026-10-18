@@ -51,14 +51,14 @@ function adaptiveGeometry(h) {
   const size = h.state.get('keyHeight');
   const keyWidth = h.state.get('keyWidth');
   const split = h.state.get('keyboardLayout') === 'split';
-  const gap = h.state.get('keyboardLayout') === 'standard' ? 6 : 5;
+  const gap = h.state.get('keyboardLayout') === 'standard' ? 7 : 5;
   const width = h.state.get('keyboardWidth');
   assert.equal(width, (split ? 12 : 10) * keyWidth + (split ? 10 : 9) * gap);
   assert.ok(Math.abs(width + 12 - h.panel.width / h.screen.densityPixels) < 0.01, 'keys must fill the panel width without outer blank bands');
   assert.ok(size <= keyWidth + 0.01, 'narrow keys must not remain tall rectangles');
   assert.ok(size >= 12);
   const rows = h.state.get('showNumberRow') ? 5 : 4;
-  const fitted = rows * size + (rows - 1) * 6 + 66 + (h.state.get('keyboardLayout') === 'floating' ? 26 : 0);
+  const fitted = rows * size + (rows - 1) * 7 + 66 + (h.state.get('keyboardLayout') === 'floating' ? 26 : 0);
   assert.ok(Math.abs(h.panel.height / h.screen.densityPixels - fitted) < 0.5,
     'panel height must follow the fitted rows rather than leaving an empty band');
 }
