@@ -3157,6 +3157,7 @@ impl OpenLessBackend {
             .lock()
             .expect("voice activation handle lock poisoned")
             .take();
+        let had_previous_handle = previous.is_some();
         if let Some(previous) = previous {
             let _ = previous
                 .stop(crate::voice_activation::VoiceActivationStopReason::Disabled)
@@ -3166,17 +3167,31 @@ impl OpenLessBackend {
             || self.backend_shutdown_requested.load(Ordering::Acquire)
             || !self.snapshot().running
         {
-            self.events.publish(
-                None,
-                BackendEventKind::VoiceActivationStateChanged(
-                    crate::voice_activation::VoiceActivationStateSnapshot {
-                        phase: crate::voice_activation::VoiceActivationPhase::Disabled,
-                        activation_generation: generation,
-                        session_id: None,
-                        message: None,
-                    },
-                ),
-            );
+            // Do not add a synthetic event to the first startup transition when
+            // activation was never enabled. Existing subscribers expect
+            // BackendStarted to be the first startup event; later disable/error
+            // transitions still publish Disabled below when a visible state exists.
+            let should_publish_disabled = had_previous_handle
+                || self
+                    .events
+                    .latest_voice_activation_state()
+                    .map(|state| {
+                        state.phase != crate::voice_activation::VoiceActivationPhase::Disabled
+                    })
+                    .unwrap_or(false);
+            if should_publish_disabled {
+                self.events.publish(
+                    None,
+                    BackendEventKind::VoiceActivationStateChanged(
+                        crate::voice_activation::VoiceActivationStateSnapshot {
+                            phase: crate::voice_activation::VoiceActivationPhase::Disabled,
+                            activation_generation: generation,
+                            session_id: None,
+                            message: None,
+                        },
+                    ),
+                );
+            }
             return Ok(());
         }
         let Some(runtime) = self.deps.voice_activation_runtime.as_ref() else {
@@ -3303,23 +3318,33 @@ impl OpenLessBackend {
             + 1;
         self.voice_activation_handoff_generation
             .store(0, Ordering::Release);
+        let should_publish_disabled = handle.is_some()
+            || self
+                .events
+                .latest_voice_activation_state()
+                .map(|state| {
+                    state.phase != crate::voice_activation::VoiceActivationPhase::Disabled
+                })
+                .unwrap_or(false);
         if let Some(handle) = handle {
             handle
                 .stop(reason)
                 .await
                 .map_err(map_voice_activation_error)?;
         }
-        self.events.publish(
-            None,
-            BackendEventKind::VoiceActivationStateChanged(
-                crate::voice_activation::VoiceActivationStateSnapshot {
-                    phase: crate::voice_activation::VoiceActivationPhase::Disabled,
-                    activation_generation: next_generation,
-                    session_id: None,
-                    message: None,
-                },
-            ),
-        );
+        if should_publish_disabled {
+            self.events.publish(
+                None,
+                BackendEventKind::VoiceActivationStateChanged(
+                    crate::voice_activation::VoiceActivationStateSnapshot {
+                        phase: crate::voice_activation::VoiceActivationPhase::Disabled,
+                        activation_generation: next_generation,
+                        session_id: None,
+                        message: None,
+                    },
+                ),
+            );
+        }
         Ok(())
     }
 
@@ -3347,23 +3372,33 @@ impl OpenLessBackend {
             + 1;
         self.voice_activation_handoff_generation
             .store(0, Ordering::Release);
+        let should_publish_disabled = handle.is_some()
+            || self
+                .events
+                .latest_voice_activation_state()
+                .map(|state| {
+                    state.phase != crate::voice_activation::VoiceActivationPhase::Disabled
+                })
+                .unwrap_or(false);
         if let Some(handle) = handle {
             handle
                 .stop(reason)
                 .await
                 .map_err(map_voice_activation_error)?;
         }
-        self.events.publish(
-            None,
-            BackendEventKind::VoiceActivationStateChanged(
-                crate::voice_activation::VoiceActivationStateSnapshot {
-                    phase: crate::voice_activation::VoiceActivationPhase::Disabled,
-                    activation_generation: next_generation,
-                    session_id: None,
-                    message: None,
-                },
-            ),
-        );
+        if should_publish_disabled {
+            self.events.publish(
+                None,
+                BackendEventKind::VoiceActivationStateChanged(
+                    crate::voice_activation::VoiceActivationStateSnapshot {
+                        phase: crate::voice_activation::VoiceActivationPhase::Disabled,
+                        activation_generation: next_generation,
+                        session_id: None,
+                        message: None,
+                    },
+                ),
+            );
+        }
         Ok(true)
     }
 

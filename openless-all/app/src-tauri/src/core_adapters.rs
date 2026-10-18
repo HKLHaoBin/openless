@@ -2041,7 +2041,7 @@ impl openless_core::VoiceActivationHandle for TauriVoiceActivationHandle {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(target_os = "windows")]
 struct TauriNativeTranscriptionEngine {
     dependencies: TauriNativeAsrDependencies,
     model_store: Option<Arc<openless_core::ModelStore>>,
