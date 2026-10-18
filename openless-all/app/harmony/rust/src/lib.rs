@@ -29,7 +29,7 @@ fn capabilities() -> openless_core::shared_types::PlatformCapabilities {
         supports_tray: false,
         supports_local_asr: false,
         supports_local_qwen3_mlx: false,
-        supports_in_app_dictation: false,
+        supports_in_app_dictation: true,
         supports_auto_update: false,
         supports_voice_edit: false,
     }

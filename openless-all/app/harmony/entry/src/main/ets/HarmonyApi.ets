@@ -8,6 +8,7 @@ import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
 import nativeHost from 'libopenless_harmony.so';
 import { restoreHarmonyCredentials } from './CredentialVault';
 import { testRime } from './inputmethod/RimeClient';
+import { VoiceClient, VoiceResult } from './inputmethod/VoiceClient';
 
 interface Revisions { preferencesRevision: number; stylePackRevision: number; historyRevision: number; vocabularyRevision: number; }
 interface RevisionReply { ok: boolean; value: Revisions; }
@@ -19,6 +20,7 @@ interface SystemState { microphone: string; deviceCount: number; online: boolean
 interface Reply { ok: boolean; value?: Object | null; error?: string; }
 interface ArchiveReply { ok: boolean; value: string; error?: string; }
 interface DeviceInfo { name: string; isDefault: boolean; }
+interface DictationEvent { phase: string; level: number; error: string; }
 class CommandArgs { deviceName: string = ''; pane: string = ''; account: string = ''; provider?: string; value: string = ''; fileName: string = ''; message: string = ''; url: string = ''; id: string = ''; zipPath: string = ''; targetPath: string = ''; text: string = ''; }
 
 export class HarmonyApi {
@@ -151,6 +153,68 @@ export class HarmonyApi {
   private controller?: webview.WebviewController;
   private capturer?: audio.AudioCapturer;
   private lastLevelEvent: number = 0;
+  private voice: VoiceClient = new VoiceClient();
+  private voiceEpoch: number = 0;
+  private voicePhase: string = 'idle';
+  private voiceLevelAt: number = 0;
+
+  private publishVoice(phase: string, level: number = 0, error: string = ''): void {
+    this.voicePhase = phase;
+    const state: DictationEvent = { phase: phase, level: level, error: error };
+    this.controller?.runJavaScript("window.dispatchEvent(new CustomEvent('openless:harmony-dictation',{detail:" +
+      JSON.stringify(state) + '}))').catch(() => {});
+  }
+
+  private async startDictation(): Promise<void> {
+    if (!this.context) throw new Error('应用上下文未就绪');
+    if (this.voicePhase !== 'idle') throw new Error('请先结束当前录音');
+    const epoch = ++this.voiceEpoch;
+    this.publishVoice('starting');
+    try {
+      await this.stopMonitor();
+      if (epoch !== this.voiceEpoch) throw new Error('录音已取消');
+      if (this.microphoneStatus() !== 'granted' && await this.requestMicrophone() !== 'granted') {
+        throw new Error('未获得麦克风权限，请在权限页面授权');
+      }
+      if (epoch !== this.voiceEpoch) throw new Error('录音已取消');
+      await this.voice.start(this.context, (level: number) => {
+        if (epoch !== this.voiceEpoch || !['starting', 'recording'].includes(this.voicePhase) ||
+          Date.now() - this.voiceLevelAt < 100) return;
+        this.voiceLevelAt = Date.now();
+        this.publishVoice('recording', level);
+      }, (message: string) => {
+        if (epoch === this.voiceEpoch) { this.voiceEpoch++; this.publishVoice('idle', 0, message); }
+      });
+      if (epoch !== this.voiceEpoch) throw new Error('录音已取消');
+      this.publishVoice('recording');
+    } catch (error) {
+      if (epoch === this.voiceEpoch) { this.voiceEpoch++; this.publishVoice('idle', 0, String(error)); }
+      throw new Error((error as Error).message || String(error));
+    }
+  }
+
+  private async stopDictation(): Promise<VoiceResult> {
+    if (this.voicePhase !== 'recording') throw new Error('当前没有可停止的录音');
+    const epoch = this.voiceEpoch;
+    this.publishVoice('processing');
+    try {
+      const result = await this.voice.stop();
+      if (epoch !== this.voiceEpoch) throw new Error('录音已取消');
+      this.voiceEpoch++;
+      this.publishVoice('idle');
+      this.controller?.runJavaScript("window.dispatchEvent(new CustomEvent('openless:harmony-backend-change'))").catch(() => {});
+      return result;
+    } catch (error) {
+      if (epoch === this.voiceEpoch) { this.voiceEpoch++; this.publishVoice('idle', 0, String(error)); }
+      throw new Error((error as Error).message || String(error));
+    }
+  }
+
+  private async cancelDictation(): Promise<void> {
+    const epoch = ++this.voiceEpoch;
+    this.publishVoice('cancelling');
+    try { await this.voice.cancel(); } finally { if (epoch === this.voiceEpoch) this.publishVoice('idle'); }
+  }
 
   configure(context: common.UIAbilityContext, controller: webview.WebviewController): void {
     this.context = context;
@@ -214,6 +278,7 @@ export class HarmonyApi {
   }
 
   private async startMonitor(name: string): Promise<void> {
+    if (this.voicePhase !== 'idle') throw new Error('请先结束当前录音');
     await this.stopMonitor();
     if (this.microphoneStatus() !== 'granted' && await this.requestMicrophone() !== 'granted') {
       throw new Error('未获得麦克风权限，请在权限页面授权');
@@ -253,6 +318,9 @@ export class HarmonyApi {
       const args: CommandArgs = JSON.parse(argsJson);
       let value: Object | null = null;
       switch (command) {
+        case 'start_dictation': await this.startDictation(); break;
+        case 'stop_dictation': value = await this.stopDictation(); break;
+        case 'cancel_dictation': await this.cancelDictation(); break;
         case 'check_network': {
           const wire = await this.native('check_network', '{}');
           const reply: NetworkReply = JSON.parse(wire);
@@ -308,5 +376,7 @@ export class HarmonyApi {
     }
   }
 
-  async release(): Promise<void> { await this.stopMonitor(); }
+  async release(): Promise<void> {
+    try { await this.cancelDictation(); } finally { await this.stopMonitor(); }
+  }
 }

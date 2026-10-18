@@ -61,7 +61,7 @@ export function isDesktop(): boolean {
 
 export function inferPlatformCapabilities(): PlatformCapabilities {
   if (import.meta.env?.VITE_OPENLESS_PLATFORM === 'harmony') {
-    return { ...MOBILE_UNAVAILABLE, platform: 'harmony' };
+    return { ...MOBILE_UNAVAILABLE, platform: 'harmony', supportsInAppDictation: true };
   }
   if (isAndroid()) {
     return {

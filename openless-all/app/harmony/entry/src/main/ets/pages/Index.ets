@@ -36,6 +36,10 @@ struct Index {
     this.api.release().catch(() => {});
   }
 
+  onPageHide(): void {
+    this.api.release().catch(() => {});
+  }
+
   build() {
     Column() {
       if (this.startupError) {

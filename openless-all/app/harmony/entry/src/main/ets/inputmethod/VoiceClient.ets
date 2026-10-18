@@ -1,6 +1,5 @@
-import { abilityAccessCtrl } from '@kit.AbilityKit';
+import { abilityAccessCtrl, common } from '@kit.AbilityKit';
 import { audio } from '@kit.AudioKit';
-import { InputMethodExtensionContext } from '@kit.IMEKit';
 import nativeHost from 'libopenless_harmony.so';
 import { restoreHarmonyCredentials } from '../CredentialVault';
 
@@ -33,12 +32,12 @@ export class VoiceClient {
   private run?: VoiceRun;
   private cleanup: Promise<void> = Promise.resolve();
 
-  async setPolishMode(context: InputMethodExtensionContext, mode: string): Promise<void> {
+  async setPolishMode(context: common.Context, mode: string): Promise<void> {
     requireSuccess(nativeHost.initBackend(context.filesDir + '/openless', context.cacheDir + '/openless'));
     requireSuccess(await nativeHost.invokeAsync('set_default_polish_mode', JSON.stringify({ mode: mode })));
   }
 
-  async start(context: InputMethodExtensionContext, level: (value: number) => void,
+  async start(context: common.Context, level: (value: number) => void,
     failed: (message: string) => void): Promise<void> {
     if (this.run) throw new Error('录音尚未结束');
     const run = new VoiceRun();
@@ -54,7 +53,7 @@ export class VoiceClient {
     if (run.cancelled || this.run !== run) throw new Error('录音已取消');
   }
 
-  private async begin(run: VoiceRun, context: InputMethodExtensionContext,
+  private async begin(run: VoiceRun, context: common.Context,
     level: (value: number) => void, failed: (message: string) => void): Promise<void> {
     await this.cleanup;
     this.check(run);

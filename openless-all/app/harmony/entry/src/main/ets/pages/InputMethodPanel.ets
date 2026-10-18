@@ -582,12 +582,20 @@ struct InputMethodPanel {
           Text('语音').fontSize(10).fontColor(MUTED)
           Text('⎵').fontSize(28).fontColor(INK)
         }.width('100%').height('100%').justifyContent(FlexAlign.Center)
-      } else { Text(this.chinese ? '空格' : 'space').fontSize(15).fontColor(MUTED) }
+      } else {
+        Column({ space: 1 }) {
+          Text(this.chinese ? '空格' : 'space').fontSize(15).fontColor(MUTED)
+          if (!this.password) { Text('长按语音').fontSize(9).fontColor(MUTED) }
+        }.width('100%').height('100%').justifyContent(FlexAlign.Center)
+      }
     }.height(this.keyHeight).layoutWeight(weight).backgroundColor(KEY).keySurface().padding(0).pressMotion().focusable(false)
       .accessibilityText('空格，长按语音输入')
       .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady))
-      .onClick(() => { inputSession.space(); })
-      .gesture(LongPressGesture().onAction(() => { if (!this.password && this.voicePhase === 'idle') this.voice(); }))
+      .gesture(GestureGroup(GestureMode.Exclusive,
+        LongPressGesture({ duration: 450, repeat: false })
+          .onAction(() => { if (!this.password && this.voicePhase === 'idle') this.voice(); }),
+        TapGesture().onAction(() => { inputSession.space(); })
+      ))
   }
 
   @Builder
