@@ -21,6 +21,7 @@ class InputPanelState {
   voiceLevel: number = 0;
   pendingCommit: boolean = false;
   writeInFlight: boolean = false;
+  commitNeedsConfirmation: boolean = false;
   cloudEnabled: boolean = false;
   symbolFeedback: string = '';
   keyboardWidth: number = 574;
@@ -182,10 +183,14 @@ class InputSession {
         const ok = await operation(client);
         console.info('[OpenLess IME] ' + kind + ' result=' + ok);
         if (this.client === client && this.generation === generation && epoch === this.queueEpoch) {
+          if (!ok && imeStorage.get<boolean>('pendingCommit')) imeStorage.setOrCreate('commitNeedsConfirmation', true);
           imeStorage.setOrCreate('status', ok ? '可输入' : '输入未成功，请重新选择输入框');
         }
       } catch (error) {
-        if (this.client === client && this.generation === generation && epoch === this.queueEpoch) imeStorage.setOrCreate('status', '输入未成功，请重新选择输入框');
+        if (this.client === client && this.generation === generation && epoch === this.queueEpoch) {
+          if (imeStorage.get<boolean>('pendingCommit')) imeStorage.setOrCreate('commitNeedsConfirmation', true);
+          imeStorage.setOrCreate('status', '输入未成功，请重新选择输入框');
+        }
         console.error('[OpenLess IME] ' + kind + ' failed code=' + (error as BusinessError).code);
       }
     });
@@ -245,6 +250,9 @@ class InputSession {
       }).catch(() => observed);
       const ok = await Promise.race([sent, observed, deadline]);
       console.info('[OpenLess IME] write transport=async-observed result=' + ok);
+      if (!ok && writeId === this.writeId && imeStorage.get<boolean>('pendingCommit')) {
+        imeStorage.setOrCreate('commitNeedsConfirmation', true);
+      }
       return ok;
     } catch (error) {
       console.error('[OpenLess IME] write transport=async-observed' +
@@ -344,6 +352,7 @@ class InputSession {
     imeStorage.setOrCreate('preedit', '');
     imeStorage.setOrCreate('candidates', [] as string[]);
     imeStorage.setOrCreate('pendingCommit', false);
+    imeStorage.setOrCreate('commitNeedsConfirmation', false);
   }
 
   private publish(state: RimeState): void {
@@ -358,6 +367,8 @@ class InputSession {
     imeStorage.setOrCreate('page', state.page);
     imeStorage.setOrCreate('hasNext', state.hasNext);
     imeStorage.setOrCreate('pendingCommit', !!state.commit);
+    // A normal asynchronous commit is not an error recovery screen.
+    imeStorage.setOrCreate('commitNeedsConfirmation', false);
     imeStorage.setOrCreate('status', 'Rime 拼音');
     this.scheduleCloud();
   }
@@ -457,6 +468,7 @@ class InputSession {
     }).catch((error: Error) => {
       console.error('[OpenLess IME] operation=' + operation + ' failed code=' + (error as BusinessError).code);
       if (generation === this.generation && epoch === this.queueEpoch) {
+        if (imeStorage.get<boolean>('pendingCommit')) imeStorage.setOrCreate('commitNeedsConfirmation', true);
         imeStorage.setOrCreate('status', error.message);
         if (feedback) this.symbolMessage('未能确认，请检查输入框');
       }

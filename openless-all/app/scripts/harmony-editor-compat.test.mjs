@@ -79,6 +79,7 @@ normal.session.selectCandidate(0);
 await normal.drain();
 assert.equal(normal.acknowledgements(), 1);
 assert.equal(normal.state.get('pendingCommit'), false);
+assert.equal(normal.state.get('commitNeedsConfirmation'), false);
 
 let asyncWrites = 0, syncWrites = 0, asyncDeletes = 0;
 const bridge = host(async () => ({ inputPattern: 0, enterKeyType: 0, bundleName: 'com.droi.tong' }), {
@@ -169,6 +170,7 @@ noReceipt.session.selectCandidate(0);
 await noReceipt.drain();
 assert.equal(noReceipt.state.get('writeInFlight'), false, 'unresponsive IPC has a bounded UI wait');
 assert.equal(noReceipt.state.get('pendingCommit'), true);
+assert.equal(noReceipt.state.get('commitNeedsConfirmation'), true, 'only an unconfirmed completed attempt opens recovery');
 noReceipt.session.observeText('测试');
 noReceipt.session.observeSelection(2, 2);
 await noReceipt.pump();
@@ -192,6 +194,7 @@ await continuous.drain();
 continuous.session.selectCandidate(0);
 await continuous.drain();
 assert.equal(continuous.state.get('pendingCommit'), false, 'missing bridge replies must not lock the first commit');
+assert.equal(continuous.state.get('commitNeedsConfirmation'), false);
 for (let i = 0; i < 3; i++) continuous.session.selectCandidate(0);
 await continuous.drain();
 assert.equal(dispatchedWrites, 4, 'one and only one dispatch per selected word');
@@ -239,10 +242,12 @@ hanging.session.selectCandidate(0);
 await hanging.pump();
 assert.equal(hanging.state.get('pendingCommit'), true);
 assert.equal(hanging.state.get('writeInFlight'), true);
+assert.equal(hanging.state.get('commitNeedsConfirmation'), false, 'normal pending IPC must not flash the recovery controls');
 // Recovery must work while the original insertion promise is still unresolved.
 hanging.session.acknowledgePendingCommit();
 await hanging.drain();
 assert.equal(hanging.state.get('pendingCommit'), false);
+assert.equal(hanging.state.get('commitNeedsConfirmation'), false);
 hanging.session.selectCandidate(0);
 await hanging.drain();
 assert.equal(hangingAttempts, 2);

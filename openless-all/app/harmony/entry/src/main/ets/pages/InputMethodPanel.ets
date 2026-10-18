@@ -34,6 +34,7 @@ struct InputMethodPanel {
   @LocalStorageLink('voiceLevel') voiceLevel: number = 0;
   @LocalStorageLink('pendingCommit') pendingCommit: boolean = false;
   @LocalStorageLink('writeInFlight') writeInFlight: boolean = false;
+  @LocalStorageLink('commitNeedsConfirmation') commitNeedsConfirmation: boolean = false;
   @LocalStorageLink('keyboardLayout') keyboardLayout: string = 'standard';
   @LocalStorageLink('keyHeight') keyHeight: number = 52;
   @LocalStorageLink('keyWidth') keyWidth: number = 52;
@@ -50,6 +51,7 @@ struct InputMethodPanel {
   @State previewSymbol: string = '';
   @State previewArmed: boolean = false;
   private symbolGesture: SymbolGesture = new SymbolGesture();
+  private toolSwiper: SwiperController = new SwiperController();
 
   @Styles
   keySurface() {
@@ -527,33 +529,34 @@ struct InputMethodPanel {
       Row({ space: 6 }) {
         ForEach(['常用功能', '输入方式', '键盘模式'], (label: string, index: number) => {
           Button(label, { type: ButtonType.Normal }).height(34)
-            .width(Math.min(112, (this.keyboardWidth - 100) / 3)).fontSize(14)
+            .width(Math.min(112, (this.keyboardWidth - 108) / 3)).fontSize(14)
             .fontWeight(this.toolTab === index ? FontWeight.Medium : FontWeight.Regular)
             .fontColor(this.toolTab === index ? INK : MUTED)
             .backgroundColor(this.toolTab === index ? KEY : Color.Transparent)
             .borderRadius(999).padding(0).pressMotion().focusable(false)
-            .accessibilityText(label).onClick(() => { this.toolTab = index; })
+            .accessibilityText(label).onClick(() => { this.toolSwiper.changeIndex(index, true); })
         }, (label: string) => label)
-      }.justifyContent(FlexAlign.Center)
+      }.justifyContent(FlexAlign.Center).padding({ left: 4, right: 4 })
+        .backgroundColor(FUNCTION_KEY).borderRadius(999)
       Blank().layoutWeight(1)
       Blank().width(34)
     }.width('100%').height(34)
   }
 
   @Builder
-  tools() {
+  toolPage(tab: number) {
     Column({ space: 8 }) {
       Scroll() {
         Column({ space: 10 }) {
-          if (this.toolTab === 0) {
+          if (tab === 0) {
             Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
               this.menuTile($r('app.media.ime_microphone'), '语音输入', () => { this.voice(); },
                 this.connected && this.editorVerified && !this.password && !this.pendingCommit && this.voicePhase === 'idle')
               this.menuTile($r('app.media.ime_emoji'), '表情', () => { this.utility = 2; })
               this.menuTile($r('app.media.ime_settings'), '应用设置', () => { inputSession.settings(); })
               this.menuTile($r('app.media.ime_chevron_down'), '收起键盘', () => { inputSession.hide(); })
-            }.width('100%').padding(12).backgroundColor(FUNCTION_KEY).borderRadius(20)
-          } else if (this.toolTab === 1) {
+            }.width('100%').padding(12)
+          } else if (tab === 1) {
             Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
               this.menuTile($r('app.media.ime_language'), '中文拼音', () => { this.inputMode(true); },
                 this.connected && !this.password && !this.pendingCommit)
@@ -577,11 +580,16 @@ struct InputMethodPanel {
         }.width('100%').padding({ top: 4, bottom: 8 })
       }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
     }.width('100%').layoutWeight(1)
-      .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 48 })
-        .onActionEnd((event: GestureEvent) => {
-          if (Math.abs(event.offsetX) < 48 || Math.abs(event.offsetX) <= Math.abs(event.offsetY) * 1.3) return;
-          this.toolTab = Math.max(0, Math.min(2, this.toolTab + (event.offsetX < 0 ? 1 : -1)));
-        }))
+  }
+
+  @Builder
+  tools() {
+    Swiper(this.toolSwiper) {
+      this.toolPage(0)
+      this.toolPage(1)
+      this.toolPage(2)
+    }.width('100%').layoutWeight(1).index(this.toolTab).indicator(false).loop(false)
+      .duration(220).curve(Curve.EaseOut).onChange((index: number) => { this.toolTab = index; })
   }
 
   @Builder
@@ -652,8 +660,8 @@ struct InputMethodPanel {
               .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
           }.height(14).width('100%').padding({ left: 8, right: 8 })
         }
-        if (this.pendingCommit) { this.pendingBar() }
-        else if (this.utility === 1) { this.toolTabs() }
+        if (this.utility === 1) { this.toolTabs() }
+        else if (this.commitNeedsConfirmation) { this.pendingBar() }
         else if (this.candidates.length > 0 && this.voicePhase === 'idle') { this.candidateBar() }
         else { this.keyboardToolbar() }
       }.height(48).width(this.keyboardWidth)
