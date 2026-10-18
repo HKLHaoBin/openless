@@ -1,7 +1,7 @@
 import { inputMethod } from '@kit.IMEKit';
 import { imeStorage, inputSession } from '../inputmethod/InputSession';
 import { panelLayout } from '../inputmethod/PanelLayout';
-import { SymbolGesture, letterSymbol, digitSymbol, symbolRows } from '../inputmethod/SymbolGesture';
+import { SymbolGesture, letterSymbol, digitSymbol, symbolRows, localizedSymbol, liveSymbolHint } from '../inputmethod/SymbolGesture';
 
 const BACKGROUND: Resource = $r('app.color.ime_panel_background');
 const KEY: Resource = $r('app.color.ime_key_background');
@@ -85,8 +85,9 @@ struct InputMethodPanel {
   }
 
   private armSymbol(id: string, symbol: string, mode: string): void {
-    if (this.symbolGesture.arm(id, symbol, this.keyContext(), mode)) {
-      this.previewId = id; this.previewSymbol = symbol; this.previewArmed = true;
+    const current = liveSymbolHint(id, symbol, this.chinese);
+    if (this.symbolGesture.arm(id, current, this.keyContext(), mode)) {
+      this.previewId = id; this.previewSymbol = current; this.previewArmed = true;
     }
   }
 
@@ -110,7 +111,7 @@ struct InputMethodPanel {
   }
 
   private insertSymbol(symbol: string): void {
-    inputSession.insertSymbol(symbol);
+    inputSession.insertSymbol(localizedSymbol(symbol, this.chinese));
     if (this.uppercase && !this.capsLock) this.uppercase = false;
   }
 
@@ -125,11 +126,11 @@ struct InputMethodPanel {
     Stack({ alignContent: Alignment.Top }) {
       Button({ type: ButtonType.Normal }) {
         Stack({ alignContent: Alignment.Center }) {
-          Text(letter && this.chinese ? key.toUpperCase() : key).fontSize(letter ? 22 : 24)
+          Text(letter ? (this.chinese ? key.toUpperCase() : key) : localizedSymbol(key, this.chinese)).fontSize(letter ? 22 : 24)
             .fontColor(this.previewId === id && this.previewArmed ? '#FFFFFF' : INK)
           if (hint) {
             Column() {
-              Text(hint).fontSize(10).fontColor(this.previewId === id && this.previewArmed ? '#FFFFFF' : MUTED)
+              Text(liveSymbolHint(id, hint, this.chinese)).fontSize(10).fontColor(this.previewId === id && this.previewArmed ? '#FFFFFF' : MUTED)
                 .height(13).width('100%').textAlign(TextAlign.End)
             }.width('100%').height('100%').padding({ top: 3, right: 6 })
               .hitTestBehavior(HitTestMode.None)
@@ -138,7 +139,7 @@ struct InputMethodPanel {
       }.width('100%').height('100%').keySurface().padding(0)
         .backgroundColor(this.previewId === id && this.previewArmed ? ACCENT : KEY)
         .enabled(this.connected && !this.pendingCommit && (!this.chinese || this.rimeReady)).pressMotion().focusable(false)
-        .accessibilityText(hint ? key + '，长按或上滑输入' + hint : key)
+        .accessibilityText(hint ? localizedSymbol(key, this.chinese) + '，长按或上滑输入' + liveSymbolHint(id, hint, this.chinese) : localizedSymbol(key, this.chinese))
         .onTouch((event: TouchEvent) => {
           if (event.type === TouchType.Down) this.symbolGesture.begin(id, this.keyContext());
           else if (event.type === TouchType.Cancel) this.cancelSymbol(id);
@@ -588,7 +589,7 @@ struct InputMethodPanel {
       else if (this.layer === 1) { this.numberPad() }
       else {
         Column({ space: 6 }) {
-          if (this.showNumberRow && this.layer === 0) { this.digitRow() }
+          if (this.showNumberRow) { this.digitRow() }
           this.keyRow(0)
           this.keyRow(1)
           this.keyRow(2)

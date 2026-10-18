@@ -8,7 +8,7 @@ const exports = {};
 vm.runInNewContext(ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText, { exports });
-const { SymbolGesture, letterSymbol, digitSymbol, symbolRows } = exports;
+const { SymbolGesture, letterSymbol, digitSymbol, symbolRows, localizedSymbol, liveSymbolHint } = exports;
 const gesture = new SymbolGesture();
 const field = 'editor1:zh:standard';
 gesture.begin('a', field);
@@ -72,4 +72,13 @@ assert.equal(symbolRows(1, true)[1].slice(0, 6).join(''), '【】｛｝《》');
 assert.equal(symbolRows(1, false)[1].slice(0, 6).join(''), '[]{}<>');
 assert.equal(symbolRows(1, true)[2][0], '……');
 assert.equal(symbolRows(1, false)[2][0], '...');
+for (const [en, zh] of [[',', '，'], ['.', '。'], ['?', '？'], ['!', '！'], ['(', '（'], [')', '）'], ['$', '￥']]) {
+  assert.equal(localizedSymbol(zh, false), en, 'old Chinese builder argument must follow the live English mode');
+  assert.equal(localizedSymbol(en, true), zh, 'old English builder argument must follow the live Chinese mode');
+  assert.equal(localizedSymbol(en, false), en);
+  assert.equal(localizedSymbol(zh, true), zh);
+}
+assert.equal(localizedSymbol("'", true), "'", 'Rime syllable delimiter remains ASCII');
+assert.equal(liveSymbolHint('digit:6', '……', false), '^');
+assert.equal(liveSymbolHint('digit:6', '^', true), '……');
 console.log('Harmony symbol gestures: one-shot release, arbitration, cancellation, editor/language changes and split mapping passed');

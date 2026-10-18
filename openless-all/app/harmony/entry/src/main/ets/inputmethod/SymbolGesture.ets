@@ -87,3 +87,19 @@ export function symbolRows(page: number, chinese: boolean): string[][] {
     ['@', '#', '%', '&', '*', '+', '/']
   ];
 }
+
+// Builder event closures can retain their initial label. Resolve punctuation
+// against the live language both while rendering and when dispatching a press.
+export function localizedSymbol(text: string, chinese: boolean): string {
+  const english: string[] = [',', '.', '?', '!', ':', ';', '(', ')', '[', ']', '{', '}', '<', '>', '$', '~', '...', '--', '-', '_', '"'];
+  const full: string[] = ['，', '。', '？', '！', '：', '；', '（', '）', '【', '】', '｛', '｝', '《', '》', '￥', '～', '……', '——', '—', '＿', '“'];
+  const index = (chinese ? english : full).indexOf(text);
+  if (index >= 0) return (chinese ? full : english)[index];
+  if (!chinese && text === '”') return '"';
+  if (!chinese && text === '…') return '...';
+  return text;
+}
+
+export function liveSymbolHint(id: string, hint: string, chinese: boolean): string {
+  return id.startsWith('digit:') ? digitSymbol(id.slice(6), chinese) : localizedSymbol(hint, chinese);
+}
