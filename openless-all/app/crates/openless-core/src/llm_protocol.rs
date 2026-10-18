@@ -278,7 +278,7 @@ pub(crate) fn request_body(
                     // override this model capability with low/medium/none.
                     Some("high")
                 } else {
-                    config.reasoning_effort.as_deref().or_else(|| {
+                    config.reasoning_effort.as_deref().or({
                         if config.thinking_enabled {
                             Some("medium")
                         } else {

@@ -17,19 +17,10 @@ const MAX_COLLECTION_ITEMS: usize = 256;
 const MAX_OUTPUT_TOKENS: u32 = 1_000_000;
 
 /// A strategy configured for one captured dictation session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PolishStrategyConfig {
     pub enabled: bool,
     pub script: String,
-}
-
-impl Default for PolishStrategyConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            script: String::new(),
-        }
-    }
 }
 
 /// Metadata made available to the user policy after ASR completes.
