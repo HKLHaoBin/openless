@@ -47,20 +47,22 @@ async function host(saved = {}) {
 }
 
 const h = await host();
-function squareGeometry(h) {
+function adaptiveGeometry(h) {
   const size = h.state.get('keyHeight');
+  const keyWidth = h.state.get('keyWidth');
   const split = h.state.get('keyboardLayout') === 'split';
   const gap = h.state.get('keyboardLayout') === 'standard' ? 6 : 5;
   const width = h.state.get('keyboardWidth');
-  assert.equal(width, (split ? 12 : 10) * size + (split ? 10 : 9) * gap);
-  assert.ok(width + 12 <= h.panel.width / h.screen.densityPixels, 'square grid must fit the native panel');
+  assert.equal(width, (split ? 12 : 10) * keyWidth + (split ? 10 : 9) * gap);
+  assert.ok(Math.abs(width + 12 - h.panel.width / h.screen.densityPixels) < 0.01, 'keys must fill the panel width without outer blank bands');
+  assert.ok(size <= keyWidth + 0.01, 'narrow keys must not remain tall rectangles');
   assert.ok(size >= 12);
   const rows = h.state.get('showNumberRow') ? 5 : 4;
   const fitted = rows * size + (rows - 1) * 6 + 66 + (h.state.get('keyboardLayout') === 'floating' ? 26 : 0);
   assert.ok(Math.abs(h.panel.height / h.screen.densityPixels - fitted) < 0.5,
-    'panel height must follow the square grid rather than leaving an empty band');
+    'panel height must follow the fitted rows rather than leaving an empty band');
 }
-squareGeometry(h);
+adaptiveGeometry(h);
 assert.equal(h.state.get('keyboardLayout'), 'standard');
 assert.equal(h.state.get('showNumberRow'), true);
 const initialResizes = h.panel.resizes;
@@ -70,13 +72,13 @@ h.layout.select('split');
 await h.layout.queue;
 assert.equal(h.state.get('keyboardLayout'), 'split');
 assert.equal(h.values.get('mode'), 'split');
-squareGeometry(h);
+adaptiveGeometry(h);
 h.layout.select('floating');
 await h.layout.queue;
 assert.equal(h.panel.flag, 1);
 assert.ok(h.panel.width < h.screen.width);
 assert.equal(h.state.get('showNumberRow'), false);
-squareGeometry(h);
+adaptiveGeometry(h);
 const originalWidth = h.panel.width;
 h.layout.resize(0.1);
 await h.layout.queue;
@@ -94,12 +96,13 @@ assert.equal(restored.panel.flag, 1);
 assert.equal(restored.panel.width, h.panel.width);
 assert.equal(restored.panel.x, h.panel.x);
 assert.equal(restored.panel.y, h.panel.y);
-squareGeometry(restored);
+adaptiveGeometry(restored);
 
 // Landscape must fit keys without retaining an oversized portrait number row.
 Object.assign(h.screen, { width: 2560, height: 720 });
 h.layout.select('standard');
 await h.layout.queue;
+adaptiveGeometry(h);
 assert.equal(h.panel.flag, 0);
 assert.equal(h.state.get('showNumberRow'), false);
 assert.ok(h.state.get('keyHeight') * 4 + 18 + 66 <= h.panel.height / h.screen.densityPixels);

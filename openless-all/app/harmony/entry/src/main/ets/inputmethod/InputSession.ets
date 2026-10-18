@@ -24,6 +24,7 @@ class InputPanelState {
   cloudEnabled: boolean = false;
   symbolFeedback: string = '';
   keyboardWidth: number = 574;
+  keyWidth: number = 52;
   dictionaryStatus: string = '公共词库：自动更新';
   dictionaryAuto: boolean = true;
 }

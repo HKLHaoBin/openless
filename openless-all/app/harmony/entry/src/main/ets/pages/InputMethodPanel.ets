@@ -36,12 +36,14 @@ struct InputMethodPanel {
   @LocalStorageLink('writeInFlight') writeInFlight: boolean = false;
   @LocalStorageLink('keyboardLayout') keyboardLayout: string = 'standard';
   @LocalStorageLink('keyHeight') keyHeight: number = 52;
+  @LocalStorageLink('keyWidth') keyWidth: number = 52;
   @LocalStorageLink('keyboardWidth') keyboardWidth: number = 574;
   @LocalStorageLink('showNumberRow') showNumberRow: boolean = true;
   @State uppercase: boolean = false;
   @State capsLock: boolean = false;
   @State layer: number = 0;
   @State utility: number = 0;
+  @State toolTab: number = 0;
   @State expanded: boolean = false;
   @State symbolPage: number = 0;
   @State previewId: string = '';
@@ -167,7 +169,7 @@ struct InputMethodPanel {
           .shadow({ radius: 8, color: '#33000000', offsetY: 2 }).translate({ y: -50 })
           .hitTestBehavior(HitTestMode.None)
       }
-    }.height(this.keyHeight).width(this.keyHeight * weight).zIndex(this.previewId === id ? 10 : 0)
+    }.height(this.keyHeight).width(this.keyWidth * weight).zIndex(this.previewId === id ? 10 : 0)
   }
 
   private insert(text: string): void {
@@ -200,6 +202,16 @@ struct InputMethodPanel {
     inputSession.startVoice();
   }
 
+  private openTools(tab: number): void {
+    if (this.utility === 1 && this.toolTab === tab) this.utility = 0;
+    else { this.toolTab = tab; this.utility = 1; this.expanded = false; }
+  }
+
+  private inputMode(chinese: boolean): void {
+    if (this.chinese !== chinese) this.language();
+    this.layer = 0; this.utility = 0; this.expanded = false;
+  }
+
   @Builder
   toolbarButton(icon: Resource, description: string, action: () => void) {
     Button({ type: ButtonType.Normal }) {
@@ -212,8 +224,8 @@ struct InputMethodPanel {
   @Builder
   keyboardToolbar() {
     Row({ space: 6 }) {
-      this.toolbarButton($r('app.media.ime_tools'), '输入法工具', () => { this.utility = this.utility === 1 ? 0 : 1; })
-      this.toolbarButton($r('app.media.ime_keyboard'), '键盘布局', () => { this.utility = this.utility === 3 ? 0 : 3; })
+      this.toolbarButton($r('app.media.ime_tools'), '输入法工具', () => { this.openTools(0); })
+      this.toolbarButton($r('app.media.ime_keyboard'), '键盘布局', () => { this.openTools(2); })
       this.toolbarButton($r('app.media.ime_emoji'), '表情', () => { this.utility = this.utility === 2 ? 0 : 2; })
       Button({ type: ButtonType.Normal }) {
         Image($r('app.media.ime_microphone')).width(25).height(25).objectFit(ImageFit.Contain)
@@ -249,7 +261,7 @@ struct InputMethodPanel {
         Image($r('app.media.ime_tools')).width(25).height(25)
       }.width(38).height(32).padding(0).borderRadius(12)
         .backgroundColor(Color.Transparent).pressMotion().focusable(false)
-        .accessibilityText('输入法工具').onClick(() => { this.utility = this.utility === 1 ? 0 : 1; })
+        .accessibilityText('输入法工具').onClick(() => { this.openTools(0); })
       Scroll() {
         Row({ space: 2 }) {
           ForEach(this.candidates, (candidate: string, index: number) => {
@@ -374,9 +386,8 @@ struct InputMethodPanel {
   }
 
   @Builder
-  layoutChooser() {
+  layoutOptions() {
     Column({ space: 14 }) {
-      Text('键盘布局').fontSize(17).fontColor(INK)
       Row({ space: 10 }) {
         ForEach(['standard', 'split', 'floating'], (mode: string, index: number) => {
           Button(['标准键盘', '分离键盘', '悬浮键盘'][index], { type: ButtonType.Normal })
@@ -387,9 +398,7 @@ struct InputMethodPanel {
         }, (mode: string) => mode)
       }.width('100%')
       Text('悬浮键盘可拖动顶部横条，使用 − / + 调整大小').fontSize(13).fontColor(MUTED)
-      Button('返回键盘').pressMotion().focusable(false).fontColor(ACCENT).backgroundColor(KEY)
-        .onClick(() => { this.utility = 0; })
-    }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).padding(8)
+    }.width('100%').padding({ top: 8, bottom: 8 })
   }
 
   @Builder
@@ -489,30 +498,69 @@ struct InputMethodPanel {
   }
 
   @Builder
+  toolTabs() {
+    Row({ space: 6 }) {
+        ForEach(['常用功能', '输入方式', '键盘模式'], (label: string, index: number) => {
+          Button(label, { type: ButtonType.Normal }).height(36).layoutWeight(1).fontSize(14)
+            .fontWeight(this.toolTab === index ? FontWeight.Medium : FontWeight.Regular)
+            .fontColor(this.toolTab === index ? INK : MUTED)
+            .backgroundColor(this.toolTab === index ? KEY : Color.Transparent)
+            .borderRadius(10).padding(0).pressMotion().focusable(false)
+            .accessibilityText(label).onClick(() => { this.toolTab = index; })
+        }, (label: string) => label)
+    }.width('100%').height(34)
+  }
+
+  @Builder
   tools() {
-    Scroll() {
-      Column({ space: 8 }) {
-        Text('键盘工具').fontSize(17).fontWeight(FontWeight.Medium).fontColor(INK)
-        Button('键盘布局').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
-          .onClick(() => { this.utility = 3; })
-        Button(this.cloudEnabled ? '云候选：开（Google）' : '云候选：关').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
-          .onClick(() => { inputSession.toggleCloudCandidates(); })
-        Text('开启后将当前拼音发送给 Google，密码框不查询').fontSize(12).fontColor(MUTED)
-        Button(this.dictionaryAuto ? '公共词库自动更新：开' : '公共词库自动更新：关').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
-          .onClick(() => { inputSession.togglePublicDictionaryUpdates(); })
-        Button(this.dictionaryStatus).pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
-          .onClick(() => { inputSession.checkPublicDictionary(); })
-        Text('公共词库每周检查更新；学习词仅保存在本机').fontSize(12).fontColor(MUTED)
-        Row({ space: 12 }) {
-          Button('OpenLess 设置').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
-            .onClick(() => { inputSession.settings(); })
-          Button('切换输入法').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
-            .onClick(() => { this.inputMethods(); })
-        }
-        Button('返回键盘').pressMotion().focusable(false).fontColor(ACCENT).backgroundColor(KEY)
-          .onClick(() => { this.utility = 0; })
-      }.width('100%').padding({ top: 8, bottom: 8 })
-    }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
+    Column({ space: 8 }) {
+      Scroll() {
+        Column({ space: 10 }) {
+          if (this.toolTab === 0) {
+            Row({ space: 10 }) {
+              Button('语音输入').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+                .enabled(this.connected && this.editorVerified && !this.password && !this.pendingCommit && this.voicePhase === 'idle')
+                .onClick(() => { this.voice(); })
+              Button('表情').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+                .onClick(() => { this.utility = 2; })
+            }.width('100%')
+            Row({ space: 10 }) {
+              Button('应用设置').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+                .onClick(() => { inputSession.settings(); })
+              Button('收起键盘').height(48).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+                .onClick(() => { inputSession.hide(); })
+            }.width('100%')
+          } else if (this.toolTab === 1) {
+            Row({ space: 10 }) {
+              Button('中文拼音').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+                .enabled(this.connected && !this.password && !this.pendingCommit).onClick(() => { this.inputMode(true); })
+              Button('英文输入').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+                .enabled(this.connected && !this.pendingCommit).onClick(() => { this.inputMode(false); })
+            }.width('100%')
+            Row({ space: 10 }) {
+              Button('数字键盘').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+                .onClick(() => { this.layer = 1; this.utility = 0; })
+              Button('符号键盘').height(44).layoutWeight(1).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+                .onClick(() => { this.layer = 2; this.symbolPage = 0; this.utility = 0; })
+            }.width('100%')
+            Button('切换系统输入法').width('100%').height(40).fontColor(INK).backgroundColor(KEY).keySurface().pressMotion().focusable(false)
+              .onClick(() => { this.inputMethods(); })
+            Button(this.cloudEnabled ? '云候选：开（Google）' : '云候选：关').width('100%').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
+              .onClick(() => { inputSession.toggleCloudCandidates(); })
+            Text('开启后将当前拼音发送给 Google，密码框不查询').fontSize(12).fontColor(MUTED).width('100%')
+            Button(this.dictionaryAuto ? '公共词库自动更新：开' : '公共词库自动更新：关').width('100%').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
+              .onClick(() => { inputSession.togglePublicDictionaryUpdates(); })
+            Button(this.dictionaryStatus).width('100%').pressMotion().focusable(false).fontColor(INK).backgroundColor(KEY)
+              .onClick(() => { inputSession.checkPublicDictionary(); })
+            Text('公共词库每周检查更新；学习词仅保存在本机').fontSize(12).fontColor(MUTED).width('100%')
+          } else {
+            this.layoutOptions()
+          }
+        }.width('100%').padding({ top: 4, bottom: 8 })
+      }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
+      Button('返回键盘', { type: ButtonType.Normal }).width('100%').height(36).fontColor(INK).backgroundColor(KEY)
+        .borderRadius(10).pressMotion().focusable(false).onClick(() => { this.utility = 0; })
+    }.width('100%').layoutWeight(1)
   }
 
   @Builder
@@ -584,6 +632,7 @@ struct InputMethodPanel {
           }.height(14).width('100%').padding({ left: 8, right: 8 })
         }
         if (this.pendingCommit) { this.pendingBar() }
+        else if (this.utility === 1) { this.toolTabs() }
         else if (this.candidates.length > 0 && this.voicePhase === 'idle') { this.candidateBar() }
         else { this.keyboardToolbar() }
       }.height(48).width(this.keyboardWidth)
@@ -591,7 +640,6 @@ struct InputMethodPanel {
       if (this.voicePhase !== 'idle') { this.voicePanel() }
       else if (this.utility === 1) { this.tools() }
       else if (this.utility === 2) { this.emoji() }
-      else if (this.utility === 3) { this.layoutChooser() }
       else if (this.expanded && this.candidates.length > 0) { this.expandedCandidates() }
       else if (this.layer === 1) { this.numberPad() }
       else {
