@@ -292,6 +292,14 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var clipboardHistoryMode = false
     private var clipboardHistoryCategory = OpenLessClipboardHistory.Category.ALL
     private var shiftState = ShiftState.OFF
+    // SHIFT_ONCE that updateAutoShift() turned on for a sentence start, as
+    // opposed to the user's own Shift tap — only this kind is turned back off
+    // when the caret leaves the sentence start.
+    private var autoShift = false
+    // The space selectEnglishCandidate() appended, still right before the
+    // caret: sentence punctuation typed next takes its place ("word, ").
+    private var englishAutoSpacePending = false
+    private var lastEnglishSpaceAt = 0L
     private var state = "idle"
     private var currentMessage = "点击开始说话"
     private var status: TextView? = null
@@ -318,6 +326,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     // view tree away via refreshInputView() and would otherwise leave
     // stale View keys behind.
     private val englishSwipeSymbols = HashMap<View, String>()
+    // The letter keys and Shift key of the English panel on screen, so a
+    // Shift change can relabel them in place (applyShiftState()) instead of
+    // rebuilding the whole keyboard. Entries from an older panel are simply
+    // no longer attached to the window and get skipped.
+    private val englishLetterKeys = ArrayList<Pair<View, TextView>>()
+    private var englishShiftKey: ShiftKeyView? = null
+    // Binding behind each reusable candidate view in englishCandidateRow —
+    // see populateLatinCandidateRow().
+    private val latinCandidateSlots = java.util.WeakHashMap<View, LatinCandidateSlot>()
     private var voiceButton: VoiceButton? = null
     // Silence-detection for the main voice panel: if the mic capture never
     // reports a meaningful level for a while after recording starts, the
@@ -548,8 +565,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         rimePinyinController.clear()
         latinInputMode = latinInputMode.toggled()
         saveLatinInputMode(latinInputMode)
+        englishAutoSpacePending = false
         refreshLatinCandidateBar()
         performKeyHaptic()
+        updateAutoShift(refresh = false)
         refreshInputView()
     }
 
@@ -1258,6 +1277,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         clipboardHistoryMode = false
         clipboardHistoryCategory = OpenLessClipboardHistory.Category.ALL
         shiftState = ShiftState.OFF
+        autoShift = false
+        englishAutoSpacePending = false
+        updateAutoShift(refresh = false)
         if (slideDirection != null) refreshInputView(slideDirection) else refreshInputView()
     }
 
@@ -1413,7 +1435,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             }
             finalizeEnglishComposingWord()
             rimePinyinController.clear()
-            currentInputConnection?.commitText(" ", 1)
+            commitEnglishSpace()
         }, swipeUpAction = { commitEnglishChar(".") }, swipePreview = ".", longPressAction = { toggleLatinInputMode() }).apply {
             // Same size as Return (17sp — keyboardKey()'s own special case
             // for that label), per real-device feedback.
@@ -1565,7 +1587,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      *   add straight into the same now-fresh map without re-clearing it.
      */
     private fun addEnglishCharRow(parent: LinearLayout, keys: List<String>, swipeSymbols: List<String>? = null) {
-        if (swipeSymbols != null) englishSwipeSymbols.clear()
+        if (swipeSymbols != null) {
+            englishSwipeSymbols.clear()
+            englishLetterKeys.clear()
+        }
         val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
         keys.forEachIndexed { index, key ->
             row.addView(buildEnglishCharKey(key, 1f, swipeSymbol = swipeSymbols?.getOrNull(index)))
@@ -1596,7 +1621,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun handleEnglishBottomModeToggle() {
         englishLayer = if (englishLayer == EnglishLayer.LETTERS) EnglishLayer.NUMBERS else EnglishLayer.LETTERS
         shiftState = ShiftState.OFF
+        autoShift = false
         finalizeEnglishComposingWord()
+        updateAutoShift(refresh = false)
         refreshInputView()
     }
 
@@ -1607,13 +1634,64 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     private fun cycleEnglishShift() {
-        // Cycles lowercase -> capitalize-next -> caps-lock -> lowercase.
-        shiftState = when (shiftState) {
-            ShiftState.OFF -> ShiftState.SHIFT_ONCE
-            ShiftState.SHIFT_ONCE -> ShiftState.CAPS_LOCK
-            ShiftState.CAPS_LOCK -> ShiftState.OFF
+        // Cycles lowercase -> capitalize-next -> caps-lock -> lowercase. A
+        // capital turned on for a sentence start goes straight back off: the
+        // user tapping Shift there wants lowercase, not caps lock.
+        shiftState = when {
+            autoShift && shiftState == ShiftState.SHIFT_ONCE -> ShiftState.OFF
+            shiftState == ShiftState.OFF -> ShiftState.SHIFT_ONCE
+            shiftState == ShiftState.SHIFT_ONCE -> ShiftState.CAPS_LOCK
+            else -> ShiftState.OFF
         }
-        refreshInputView()
+        autoShift = false
+        applyShiftState()
+    }
+
+    /**
+     * Turns a one-shot capital on at a sentence start (see
+     * EnglishAutoText.isSentenceStart) and back off once the caret leaves
+     * it — but only a capital it turned on itself; the user's own Shift or
+     * caps lock is never overridden. Pass refresh = false when the caller
+     * rebuilds the input view anyway.
+     */
+    private fun updateAutoShift(refresh: Boolean = true) {
+        if (shiftState == ShiftState.CAPS_LOCK || (shiftState == ShiftState.SHIFT_ONCE && !autoShift)) return
+        val applies = inputMode == InputMode.ENGLISH &&
+            latinInputMode == LatinInputMode.ENGLISH &&
+            englishLayer == EnglishLayer.LETTERS &&
+            EnglishAutoText.allowsAutoCapitals(currentInputEditorInfo?.inputType ?: 0)
+        val wanted = applies && currentInputConnection
+            ?.getTextBeforeCursor(EnglishAutoText.SENTENCE_LOOKBEHIND, 0)
+            ?.let { EnglishAutoText.isSentenceStart(it) } == true
+        val next = when {
+            wanted && shiftState == ShiftState.OFF -> ShiftState.SHIFT_ONCE
+            !wanted && autoShift -> ShiftState.OFF
+            else -> return
+        }
+        shiftState = next
+        autoShift = next == ShiftState.SHIFT_ONCE
+        if (refresh) applyShiftState()
+    }
+
+    /** Space on the English/pinyin keyboard; in English mode a second quick tap after a word turns "word " into "word. ". */
+    private fun commitEnglishSpace() {
+        val connection = currentInputConnection ?: return
+        englishAutoSpacePending = false
+        val now = android.os.SystemClock.uptimeMillis()
+        val quickSecondTap = now - lastEnglishSpaceAt < DOUBLE_SPACE_WINDOW_MS
+        lastEnglishSpaceAt = now
+        if (quickSecondTap &&
+            latinInputMode == LatinInputMode.ENGLISH &&
+            !ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0) &&
+            EnglishAutoText.doubleSpaceMakesFullStop(connection.getTextBeforeCursor(2, 0) ?: "")
+        ) {
+            // A third quick tap is a plain space again, not another stop.
+            lastEnglishSpaceAt = 0L
+            connection.deleteSurroundingText(1, 0)
+            connection.commitText(". ", 1)
+            return
+        }
+        connection.commitText(" ", 1)
     }
 
     /** Backspace on the English keyboard: same field edit as everywhere else, plus keeping englishComposingWord (and therefore the candidate bar) in sync. In Pinyin mode, deletes from the (never-committed) encoding instead — falls back to the normal field edit only once the encoding is already empty (plan 3.3: "编码为空时 Backspace 恢复现有普通删除"). */
@@ -1622,6 +1700,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             rimePinyinController.backspace({ renderPinyinCandidates(it) }, { deleteBackward() })
             return
         }
+        englishAutoSpacePending = false
         deleteBackward()
         if (englishComposingWord.isNotEmpty()) {
             englishComposingWord.deleteCharAt(englishComposingWord.length - 1)
@@ -1682,6 +1761,84 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             setPadding(dp(11), 0, dp(11), 0)
             styleCandidateFirstState(this, isFirst)
         }
+    }
+
+    /** What a reusable candidate view in englishCandidateRow does when tapped, swapped on every reuse. */
+    private class LatinCandidateSlot(val hasLongPress: Boolean) {
+        var action: () -> Unit = {}
+        var longPress: () -> Unit = {}
+    }
+
+    private class LatinCandidate(val label: String, val longPress: (() -> Unit)?, val action: () -> Unit)
+
+    private var pinyinEncodingLabel: TextView? = null
+
+    /**
+     * Fills englishCandidateRow with [candidates] (after an optional
+     * non-clickable [leadingLabel], pinyin's in-progress encoding), reusing
+     * the candidate views already there — same idea as the stroke row's
+     * populateCandidateRow(): this runs on every keystroke, and creating a
+     * dozen keyboardKey() views each time was the costly part. A view's tap
+     * and long-press go through its LatinCandidateSlot, so reusing it only
+     * swaps the slot's actions; keyboardKey()'s own long-press handling
+     * (including swallowing the tap that ends a long press) stays intact.
+     * Only a view of the same kind is reused — whether it has a long press
+     * is fixed when keyboardKey() builds it.
+     */
+    private fun populateLatinCandidateRow(candidates: List<LatinCandidate>, leadingLabel: String? = null) {
+        val row = englishCandidateRow ?: return
+        val firstIsLabel = row.childCount > 0 && row.getChildAt(0) === pinyinEncodingLabel
+        var offset = 0
+        if (leadingLabel != null) {
+            val label = if (firstIsLabel) pinyinEncodingLabel!! else TextView(this).apply {
+                textSize = 16f
+                setSingleLine(true)
+                gravity = android.view.Gravity.CENTER
+                setTextColor(tone(Color.rgb(180, 180, 180), Color.rgb(120, 120, 125)))
+                setPadding(dp(9), 0, dp(9), 0)
+                isClickable = false
+            }.also {
+                pinyinEncodingLabel = it
+                row.addView(it, 0, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            }
+            label.text = leadingLabel
+            offset = 1
+        } else if (firstIsLabel) {
+            row.removeViewAt(0)
+        }
+        candidates.forEachIndexed { index, candidate ->
+            val position = offset + index
+            val existing = row.getChildAt(position) as? TextView
+            val existingSlot = existing?.let { latinCandidateSlots[it] }
+            val view: TextView
+            val slot: LatinCandidateSlot
+            if (existing != null && existingSlot != null && existingSlot.hasLongPress == (candidate.longPress != null)) {
+                view = existing
+                slot = existingSlot
+            } else {
+                val fresh = LatinCandidateSlot(candidate.longPress != null)
+                slot = fresh
+                view = candidateItemView(
+                    candidate.label,
+                    isFirst = index == 0,
+                    onLongPress = if (fresh.hasLongPress) ({ fresh.longPress() }) else null,
+                    action = { fresh.action() },
+                )
+                latinCandidateSlots[view] = fresh
+                if (existing != null || position < row.childCount) row.removeViewAt(position)
+                row.addView(view, position, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            }
+            slot.action = candidate.action
+            candidate.longPress?.let { slot.longPress = it }
+            if (view.text.toString() != candidate.label) view.text = candidate.label
+            view.contentDescription = candidate.label
+            styleCandidateFirstState(view, index == 0)
+        }
+        while (row.childCount > offset + candidates.size) row.removeViewAt(row.childCount - 1)
+        // Shared with the stroke panel's own candidate row (only one of the
+        // two is ever visible at a time) — see showCandidateOverlay().
+        candidateOverlayEntries = candidates.map { it.label to it.action }
+        if (candidates.isEmpty()) englishExpandCandidatesButton?.visibility = View.GONE
     }
 
     /**
@@ -2412,7 +2569,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 StrokeActionView(this, graphicActionCode, graphicRotation)
             }
             label == "←" || label == "↵" -> ActionSymbolView(this, label, isDarkTheme)
-            label == "⇧" -> ShiftKeyView(this, shiftState, isDarkTheme)
+            label == "⇧" -> ShiftKeyView(this, shiftState, isDarkTheme).also { englishShiftKey = it }
             midDivider -> MidDividerTextView(this, tone(Color.rgb(100, 100, 100), Color.rgb(205, 205, 209)))
             else -> TextView(this)
         }
@@ -2724,11 +2881,36 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      *   This is a dedicated builder, not a keyboardKey() variant, precisely
      *   so none of this touch handling can affect any other panel's keys.
      */
-    private fun buildEnglishCharKey(baseChar: String, weight: Float, swipeSymbol: String? = null): View {
-        fun charFor(view: View): String {
-            val base = view.tag as? String ?: return ""
-            return if (shiftState != ShiftState.OFF && base.length == 1 && base[0].isLetter()) base.uppercase() else base
+    /** What a char key types right now: its base character, uppercased for a letter while Shift is on. */
+    private fun englishCharFor(view: View): String {
+        val base = view.tag as? String ?: return ""
+        return if (shiftState != ShiftState.OFF && base.length == 1 && base[0].isLetter()) base.uppercase() else base
+    }
+
+    /**
+     * Shows the current shiftState on the English panel: relabels the letter
+     * keys and redraws Shift in place. Typing already reads shiftState at the
+     * moment of the tap (englishCharFor), so only the labels were stale —
+     * rebuilding the whole keyboard for that ran on every sentence start and
+     * every capital. Falls back to a rebuild when that panel isn't on screen.
+     */
+    private fun applyShiftState() {
+        val keys = englishLetterKeys.filter { it.first.isAttachedToWindow }
+        val shiftKey = englishShiftKey?.takeIf { it.isAttachedToWindow }
+        if (keys.isEmpty() || shiftKey == null) {
+            refreshInputView()
+            return
         }
+        keys.forEach { (key, letter) ->
+            val char = englishCharFor(key)
+            letter.text = char
+            key.contentDescription = char
+        }
+        shiftKey.state = shiftState
+    }
+
+    private fun buildEnglishCharKey(baseChar: String, weight: Float, swipeSymbol: String? = null): View {
+        fun charFor(view: View): String = englishCharFor(view)
         val letterView = TextView(this).apply {
             textSize = 22f
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
@@ -2745,6 +2927,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             tag = baseChar
             if (swipeSymbol != null) englishSwipeSymbols[this] = swipeSymbol
             letterView.text = charFor(this)
+            if (baseChar.length == 1 && baseChar[0].isLetter()) englishLetterKeys += this to letterView
             addView(letterView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             if (swipeSymbol != null) {
                 addView(
@@ -2936,16 +3119,26 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 // encoding buffer in Pinyin mode; see
                 // RimePinyinController's own doc comment.
                 rimePinyinController.appendLetter(char[0]) { renderPinyinCandidates(it) }
-                if (shiftState == ShiftState.SHIFT_ONCE) {
-                    shiftState = ShiftState.OFF
-                    refreshInputView()
-                }
+                consumeShiftOnce()
                 return
             }
             rimePinyinController.insertLiteral(char) { renderPinyinCandidates(it) }
             return
         }
-        if (currentInputConnection?.commitText(char, 1) != true) return
+        val connection = currentInputConnection ?: return
+        if (englishAutoSpacePending && EnglishAutoText.swallowsAutoSpace(char) &&
+            connection.getTextBeforeCursor(1, 0)?.toString() == " "
+        ) {
+            // "word " + "," -> "word, ": the mark takes the candidate's space,
+            // and the space after it is again one punctuation may take ("?!").
+            connection.deleteSurroundingText(1, 0)
+            if (!connection.commitText("$char ", 1)) return
+            finalizeEnglishComposingWord()
+            consumeShiftOnce()
+            return
+        }
+        englishAutoSpacePending = false
+        if (!connection.commitText(char, 1)) return
         if (personalizedLearningAllowed() && char.length == 1 && char[0].isLetter()) {
             englishComposingWord.append(char.lowercase())
             updateEnglishCandidates()
@@ -2956,10 +3149,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             // benefit for that particular boundary.
             finalizeEnglishComposingWord()
         }
-        if (shiftState == ShiftState.SHIFT_ONCE) {
-            shiftState = ShiftState.OFF
-            refreshInputView()
-        }
+        consumeShiftOnce()
+    }
+
+    /** A one-shot capital (the user's or updateAutoShift()'s) is spent by the character just typed. */
+    private fun consumeShiftOnce() {
+        if (shiftState != ShiftState.SHIFT_ONCE) return
+        shiftState = ShiftState.OFF
+        autoShift = false
+        applyShiftState()
     }
 
     /** Ends the current word: records it for user-frequency learning (if long enough to be a real word) and clears the tracking buffer. */
@@ -3072,25 +3270,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     private fun renderEnglishCandidates(words: List<String>) {
-        val row = englishCandidateRow ?: return
-        row.removeAllViews()
-        val overlayEntries = mutableListOf<Pair<String, () -> Unit>>()
-        words.forEachIndexed { index, word ->
-            row.addView(
-                candidateItemView(
-                    word,
-                    isFirst = index == 0,
-                    action = { selectEnglishCandidate(word) },
-                    onLongPress = { forgetEnglishCandidate(word) },
-                ),
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT),
-            )
-            overlayEntries.add(word to { selectEnglishCandidate(word) })
-        }
-        // Shared with the stroke panel's own candidate row (only one of the
-        // two is ever visible at a time) — see showCandidateOverlay().
-        candidateOverlayEntries = overlayEntries
-        if (words.isEmpty()) englishExpandCandidatesButton?.visibility = View.GONE
+        populateLatinCandidateRow(
+            words.map { word -> LatinCandidate(word, longPress = { forgetEnglishCandidate(word) }) { selectEnglishCandidate(word) } },
+        )
     }
 
     /**
@@ -3114,6 +3296,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             }
         }
         if (!connection.commitText("$word ", 1)) return
+        englishAutoSpacePending = true
         englishCandidateProvider.recordCommit(word)
         englishComposingWord.clear()
         updateEnglishCandidates()
@@ -3145,37 +3328,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * or container so the fixed 300dp panel height is never touched.
      */
     private fun renderPinyinCandidates(candidates: List<String>) {
-        val row = englishCandidateRow ?: return
-        row.removeAllViews()
-        val encoding = rimePinyinController.currentEncoding()
-        if (encoding.isNotEmpty()) {
-            val label = TextView(this).apply {
-                text = encoding
-                textSize = 16f
-                setSingleLine(true)
-                gravity = android.view.Gravity.CENTER
-                setTextColor(tone(Color.rgb(180, 180, 180), Color.rgb(120, 120, 125)))
-                setPadding(dp(9), 0, dp(9), 0)
-                isClickable = false
-            }
-            row.addView(label, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        }
-        val overlayEntries = mutableListOf<Pair<String, () -> Unit>>()
-        candidates.forEachIndexed { index, char ->
-            row.addView(
-                candidateItemView(
-                    char,
-                    isFirst = index == 0,
-                    action = { selectPinyinCandidate(char) },
-                ),
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT),
-            )
-            overlayEntries.add(char to { selectPinyinCandidate(char) })
-        }
-        // Shared with the English/stroke candidate rows (only one of the
-        // three is ever visible at a time) — see showCandidateOverlay().
-        candidateOverlayEntries = overlayEntries
-        if (candidates.isEmpty()) englishExpandCandidatesButton?.visibility = View.GONE
+        populateLatinCandidateRow(
+            candidates.map { char -> LatinCandidate(char, longPress = null) { selectPinyinCandidate(char) } },
+            leadingLabel = rimePinyinController.currentEncoding().takeIf { it.isNotEmpty() },
+        )
     }
 
     /** Candidate tap is the ONLY way a pinyin candidate reaches the field — see toggleLatinInputMode()'s doc comment on why Space deliberately never does this. */
@@ -3210,23 +3366,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     /** Same row/candidateItemView() machinery as renderPinyinCandidates(), but no encoding label (there's no in-progress encoding here) and suffix-based commit (see selectPinyinAssociation()) instead of committing the whole label — mirrors StrokeInputController.refreshAssociations() exactly. */
     private fun renderPinyinAssociations(candidates: List<StrokePhraseRepository.Candidate>) {
-        val row = englishCandidateRow ?: return
-        row.removeAllViews()
-        val overlayEntries = mutableListOf<Pair<String, () -> Unit>>()
-        candidates.forEachIndexed { index, candidate ->
-            val displayText = outputScript(candidate.text)
-            row.addView(
-                candidateItemView(
-                    displayText,
-                    isFirst = index == 0,
-                    action = { selectPinyinAssociation(candidate) },
-                ),
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT),
-            )
-            overlayEntries.add(displayText to { selectPinyinAssociation(candidate) })
-        }
-        candidateOverlayEntries = overlayEntries
-        if (candidates.isEmpty()) englishExpandCandidatesButton?.visibility = View.GONE
+        populateLatinCandidateRow(
+            candidates.map { candidate -> LatinCandidate(outputScript(candidate.text), longPress = null) { selectPinyinAssociation(candidate) } },
+        )
     }
 
     /**
@@ -3297,6 +3439,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         refreshLanguage()
         strokeController.resetForNewInputSession()
         englishLayer = EnglishLayer.LETTERS
+        // An automatic capital belonged to the old field's sentence start;
+        // onStartInputView() works out the new field's.
+        if (autoShift) shiftState = ShiftState.OFF
+        autoShift = false
+        englishAutoSpacePending = false
         englishComposingWord.clear()
         englishCandidateQueryEpoch++
         rimePinyinController.clear()
@@ -3305,6 +3452,10 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         rimePinyinController.bindCommit { text ->
             if (ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) false
             else if (currentInputConnection?.commitText(text, 1) == true) {
+                // Typing an offered association out by hand counts as picking it.
+                if (personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(this)) {
+                    strokeController.phraseRepository.recordTypedContinuation(rimePinyinController.associationContext(), text)
+                }
                 rimePinyinController.recordCommittedText(text)
                 performKeyHaptic()
                 true
@@ -3338,7 +3489,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // view is still the old footprint — rebuild when they diverge so the
         // next focus actually shows what the settings preview promised.
         val key = keyboardFootprintKey()
-        if (appliedKeyboardFootprintKey != key) {
+        val rebuild = appliedKeyboardFootprintKey != key
+        updateAutoShift(refresh = !rebuild)
+        if (rebuild) {
             appliedKeyboardFootprintKey = key
             refreshInputView()
         }
@@ -3418,6 +3571,31 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // Selecting another span must not discard the user's pending undo/redo.
         if (newSelStart < 0 || newSelStart != newSelEnd) return
         invalidateDictationResultIfTextChanged()
+        if (newSelStart == 0) clearCandidatesIfFieldEmptied()
+        updateAutoShift()
+    }
+
+    /**
+     * The host cleared the whole field without restarting input — a chat
+     * app's send button does exactly this. Associations (and an English word
+     * being typed) refer to text that is gone, so they must not linger in the
+     * candidate row; the stroke panel also drops a half-typed code and its
+     * code row. A pinyin encoding still being composed is left alone.
+     */
+    private fun clearCandidatesIfFieldEmptied() {
+        val connection = currentInputConnection ?: return
+        val before = connection.getTextBeforeCursor(1, 0) ?: return
+        val after = connection.getTextAfterCursor(1, 0) ?: return
+        if (before.isNotEmpty() || after.isNotEmpty()) return
+        strokeController.clearAfterFieldEmptied()
+        rimePinyinController.resetAssociationContext()
+        if (inputMode != InputMode.ENGLISH) return
+        if (latinInputMode == LatinInputMode.PINYIN) {
+            if (rimePinyinController.isEmpty()) renderPinyinAssociations(emptyList())
+        } else if (englishComposingWord.isNotEmpty()) {
+            englishComposingWord.clear()
+            updateEnglishCandidates()
+        }
     }
 
     internal fun toggleDictation(initialCloud: Boolean = false) {
@@ -5672,9 +5850,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      */
     private class ShiftKeyView(
         context: android.content.Context,
-        private val state: ShiftState,
+        initialState: ShiftState,
         private val darkTheme: Boolean,
     ) : TextView(context) {
+        var state: ShiftState = initialState
+            set(value) {
+                if (field == value) return
+                field = value
+                invalidate()
+            }
         private val mutedColor = if (darkTheme) Color.rgb(190, 190, 190) else Color.rgb(120, 120, 125)
         private val activeColor = if (darkTheme) Color.rgb(245, 245, 245) else Color.rgb(30, 30, 34)
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -6140,6 +6324,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // keystroke; comfortably more than can fit on screen at once so
         // scrolling actually reveals more real options.
         private const val ENGLISH_CANDIDATE_QUERY_LIMIT = 10
+        private const val DOUBLE_SPACE_WINDOW_MS = 500L
         // buildClipboardView()'s "recent clips" strip. Originally 92dp for
         // 4 equal-weight rows + 5 divider lines (dp(1) each), raised ~1.2x
         // to 109dp per user request: (92-5)/4=21.75dp/row * 1.2 = 26.1,

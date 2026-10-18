@@ -180,6 +180,8 @@ internal class RimePinyinController(context: Context) {
         if (confirmedText.length > StrokeInputController.MAX_ASSOCIATION_CONTEXT)
             confirmedText.delete(0, confirmedText.length - StrokeInputController.MAX_ASSOCIATION_CONTEXT)
     }
+    /** What was committed just before the next commit, for StrokePhraseRepository.recordTypedContinuation(). */
+    fun associationContext(): String = confirmedText.toString()
     fun resetAssociationContext() { confirmedText.clear(); associationEpoch++ }
     fun queryAssociations(repository: StrokePhraseRepository, update: (List<StrokePhraseRepository.Candidate>) -> Unit) {
         val text = confirmedText.toString()

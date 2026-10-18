@@ -47,9 +47,9 @@ internal class StrokePhraseRepository(context: Context) {
         executor.execute {
             val startedAt = android.os.SystemClock.elapsedRealtime()
             ensureLoaded()
-            val result = findLongestSuffix(prefix).sortedWith(compareByDescending<Candidate> {
-                it.baseWeight + userFrequency.score(it.matchedPrefix.ifEmpty { prefix }, it.text).toInt()
-            })
+            val result = rankAssociations(findLongestSuffix(prefix)) {
+                userFrequency.score(it.matchedPrefix.ifEmpty { prefix }, it.text)
+            }
             // Temporary-diagnostic-grade, not removed after: cheap (one
             // log line per commit) and directly answers "is this slow
             // because of the cold trie build, the query itself, or is it
@@ -68,6 +68,22 @@ internal class StrokePhraseRepository(context: Context) {
     /** Records that `candidate` was committed after `context`, off the caller's thread. */
     fun recordUsage(context: String, candidate: String) {
         executor.execute { userFrequency.record(context, candidate) }
+    }
+
+    /**
+     * [word] was typed (not picked from the association row) right after
+     * [contextBefore]. If that is exactly one of the associations the row
+     * offered for [contextBefore], count it as a pick of that association —
+     * under the same (matched prefix, phrase) key a tap would have used, so
+     * typing a phrase out by hand trains the row too. Off the caller's thread.
+     */
+    fun recordTypedContinuation(contextBefore: String, word: String) {
+        if (contextBefore.isEmpty() || word.isEmpty()) return
+        executor.execute {
+            ensureLoaded()
+            val hit = typedContinuation(contextBefore, word, ::find) ?: return@execute
+            userFrequency.record(hit.matchedPrefix, hit.text)
+        }
     }
 
     fun shutdown() = executor.shutdownNow()
@@ -151,13 +167,7 @@ internal class StrokePhraseRepository(context: Context) {
         return result
     }
 
-    private fun findLongestSuffix(prefix: String): List<Candidate> {
-        for (length in prefix.length downTo 1) {
-            val result = find(prefix.takeLast(length))
-            if (result.isNotEmpty()) return result
-        }
-        return emptyList()
-    }
+    private fun findLongestSuffix(prefix: String): List<Candidate> = longestSuffixExtensions(prefix, ::find)
 
     private companion object {
         const val NODE_TOP_N = 12
@@ -170,3 +180,51 @@ internal class StrokePhraseRepository(context: Context) {
 
     private val userFrequency = StrokeUserFrequency(context)
 }
+
+/**
+ * Association candidates for [context]: the phrases under its longest
+ * trailing substring that [lookup] knows, minus the phrase that substring
+ * already completes. Every phrase sits in the trie node of its own last
+ * character too, so once a whole phrase is on screen the lookup returns it
+ * again — a candidate with nothing left to commit, which tapping can't
+ * clear. When that phrase is all there is, the result is empty rather than
+ * a retry with a shorter substring: the row should clear, not jump to
+ * phrases that only share the last character or two.
+ */
+internal fun longestSuffixExtensions(
+    context: String,
+    lookup: (String) -> List<StrokePhraseRepository.Candidate>,
+): List<StrokePhraseRepository.Candidate> {
+    for (length in context.length downTo 1) {
+        val result = lookup(context.takeLast(length))
+        if (result.isNotEmpty()) return result.filter { it.text != it.matchedPrefix }
+    }
+    return emptyList()
+}
+
+/**
+ * Order for the association row: phrases the user has picked before (a
+ * positive [userScore]) first, by that score, then the rest by corpus
+ * weight. Corpus weights run from 1 to several hundred thousand while a
+ * user score stays in the hundreds, so adding the two — the old order —
+ * let a habit move only rare phrases; same reasoning as the stroke
+ * candidate order in StrokeInputRepository.searchAsync().
+ */
+internal fun rankAssociations(
+    candidates: List<StrokePhraseRepository.Candidate>,
+    userScore: (StrokePhraseRepository.Candidate) -> Double,
+): List<StrokePhraseRepository.Candidate> = candidates
+    .map { it to userScore(it) }
+    .sortedWith(
+        compareByDescending<Pair<StrokePhraseRepository.Candidate, Double>> { it.second }
+            .thenByDescending { it.first.baseWeight },
+    )
+    .map { it.first }
+
+/** The association offered for [contextBefore] that [word], typed right after it, completes exactly — or null. */
+internal fun typedContinuation(
+    contextBefore: String,
+    word: String,
+    lookup: (String) -> List<StrokePhraseRepository.Candidate>,
+): StrokePhraseRepository.Candidate? =
+    longestSuffixExtensions(contextBefore, lookup).firstOrNull { it.text == it.matchedPrefix + word }
