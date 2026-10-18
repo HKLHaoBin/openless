@@ -943,23 +943,6 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         BackendError,
     > {
         let (selection, target) = crate::selection::resolve_selection_workspace_capture();
-        let target_captured = crate::selection::selection_insertion_target_is_captured(&target);
-        crate::selection::emit_preview_debug_probe(
-            "P1",
-            &["H1", "H2", "H3", "H5"],
-            "capture_admission",
-            match (selection.as_ref(), target_captured) {
-                (Some(selection), true) if !selection.omits_middle => "accepted",
-                (Some(_), true) => "rejected_truncated",
-                (Some(_), false) => "rejected_target",
-                (None, _) => "rejected_selection",
-            },
-            serde_json::json!({
-                "target_captured": target_captured,
-                "source_chars": selection.as_ref().map(|value| value.text.chars().count()).unwrap_or(0),
-                "omits_middle": selection.as_ref().is_some_and(|value| value.omits_middle),
-            }),
-        );
         let selection = selection.ok_or_else(|| {
             BackendError::new(
                 BackendErrorCode::InvalidArgument,
@@ -997,33 +980,11 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         replacement_text: &str,
         reactivate: bool,
     ) -> Result<InsertOutcome, BackendError> {
-        let path = if reactivate { "preview" } else { "direct" };
-        crate::selection::emit_preview_debug_probe(
-            "P2",
-            &["H1", "H3"],
-            "apply_start",
-            "started",
-            serde_json::json!({
-                "path": path,
-                "source_chars": source_text.chars().count(),
-                "replacement_chars": replacement_text.chars().count(),
-            }),
-        );
-        if reactivate {
-            let restored = crate::selection::reactivate_selection_insertion_target(target);
-            crate::selection::emit_preview_debug_probe(
-                "P2",
-                &["H1", "H3"],
-                "target_reactivation",
-                if restored { "success" } else { "failed" },
-                serde_json::json!({ "path": path }),
-            );
-            if !restored {
-                return Err(BackendError::new(
-                    BackendErrorCode::Platform,
-                    "selectionPolishTargetUnavailable",
-                ));
-            }
+        if reactivate && !crate::selection::reactivate_selection_insertion_target(target) {
+            return Err(BackendError::new(
+                BackendErrorCode::Platform,
+                "selectionPolishTargetUnavailable",
+            ));
         }
         if crate::selection::is_truncated_selection_stand_in(source_text) {
             return Err(BackendError::new(
@@ -1032,13 +993,6 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             ));
         }
         let validation = crate::selection::validate_selection_insertion_target(target, source_text);
-        crate::selection::emit_preview_debug_probe(
-            "P2",
-            &["H1", "H3"],
-            "selection_validation",
-            validation.error_code().unwrap_or("valid"),
-            serde_json::json!({ "path": path }),
-        );
         if let Some(code) = validation.error_code() {
             let error_code = match validation {
                 crate::selection::SelectionInsertionTargetValidation::TargetUnavailable => {
@@ -1064,23 +1018,11 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
             ));
         }
         let preferences = self.preferences()?;
-        let mapped = map_insert_status(crate::insertion::TextInserter::new().insert(
+        map_insert_status(crate::insertion::TextInserter::new().insert(
             replacement_text,
             preferences.restore_clipboard_after_paste,
             preferences.paste_shortcut,
-        ));
-        crate::selection::emit_preview_debug_probe(
-            "P3",
-            &["H2", "H5"],
-            "insertion_result",
-            if mapped.is_ok() { "success" } else { "failed" },
-            serde_json::json!({
-                "path": path,
-                "source_chars": source_text.chars().count(),
-                "replacement_chars": replacement_text.chars().count(),
-            }),
-        );
-        mapped
+        ))
     }
 }
 
