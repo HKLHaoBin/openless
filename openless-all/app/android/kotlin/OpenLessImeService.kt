@@ -298,7 +298,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var autoShift = false
     // The space selectEnglishCandidate() appended, still right before the
     // caret: sentence punctuation typed next takes its place ("word, ").
-    private var englishAutoSpacePending = false
+    private data class EnglishEditAnchor(val connection: android.view.inputmethod.InputConnection, val offset: Int)
+    private var englishAutoSpace: EnglishEditAnchor? = null
+    private var lastEnglishSpace: EnglishEditAnchor? = null
     private var lastEnglishSpaceAt = 0L
     private var state = "idle"
     private var currentMessage = "点击开始说话"
@@ -565,7 +567,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         rimePinyinController.clear()
         latinInputMode = latinInputMode.toggled()
         saveLatinInputMode(latinInputMode)
-        englishAutoSpacePending = false
+        clearEnglishAutoText()
         refreshLatinCandidateBar()
         performKeyHaptic()
         updateAutoShift(refresh = false)
@@ -1278,7 +1280,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         clipboardHistoryCategory = OpenLessClipboardHistory.Category.ALL
         shiftState = ShiftState.OFF
         autoShift = false
-        englishAutoSpacePending = false
+        clearEnglishAutoText()
         updateAutoShift(refresh = false)
         if (slideDirection != null) refreshInputView(slideDirection) else refreshInputView()
     }
@@ -1673,34 +1675,63 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (refresh) applyShiftState()
     }
 
+    private fun englishEditAnchor(connection: android.view.inputmethod.InputConnection): EnglishEditAnchor? {
+        val extracted = connection.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0) ?: return null
+        if (extracted.selectionStart < 0 || extracted.selectionStart != extracted.selectionEnd) return null
+        return EnglishEditAnchor(connection, extracted.startOffset + extracted.selectionStart)
+    }
+
+    private fun clearEnglishAutoText() {
+        englishAutoSpace = null
+        lastEnglishSpace = null
+        lastEnglishSpaceAt = 0L
+    }
+
+    private fun invalidateEnglishAutoTextSelection(start: Int, end: Int) {
+        if (start != end || start < 0) {
+            clearEnglishAutoText()
+            return
+        }
+        if (englishAutoSpace?.offset != start) englishAutoSpace = null
+        if (lastEnglishSpace?.offset != start) {
+            lastEnglishSpace = null
+            lastEnglishSpaceAt = 0L
+        }
+    }
+
     /** Space on the English/pinyin keyboard; in English mode a second quick tap after a word turns "word " into "word. ". */
     private fun commitEnglishSpace() {
         val connection = currentInputConnection ?: return
-        englishAutoSpacePending = false
         val now = android.os.SystemClock.uptimeMillis()
-        val quickSecondTap = now - lastEnglishSpaceAt < DOUBLE_SPACE_WINDOW_MS
-        lastEnglishSpaceAt = now
+        val position = englishEditAnchor(connection)
+        val elapsed = now - lastEnglishSpaceAt
+        val quickSecondTap = lastEnglishSpace != null && lastEnglishSpace == position &&
+            elapsed >= 0L && elapsed < DOUBLE_SPACE_WINDOW_MS
+        clearEnglishAutoText()
         if (quickSecondTap &&
             latinInputMode == LatinInputMode.ENGLISH &&
             !ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0) &&
             EnglishAutoText.doubleSpaceMakesFullStop(connection.getTextBeforeCursor(2, 0) ?: "")
         ) {
-            // A third quick tap is a plain space again, not another stop.
-            lastEnglishSpaceAt = 0L
-            connection.deleteSurroundingText(1, 0)
-            connection.commitText(". ", 1)
+            if (connection.deleteSurroundingText(1, 0)) connection.commitText(". ", 1)
             return
         }
-        connection.commitText(" ", 1)
+        if (connection.commitText(" ", 1)) {
+            lastEnglishSpace = englishEditAnchor(connection)
+            lastEnglishSpaceAt = now
+        }
     }
 
     /** Backspace on the English keyboard: same field edit as everywhere else, plus keeping englishComposingWord (and therefore the candidate bar) in sync. In Pinyin mode, deletes from the (never-committed) encoding instead — falls back to the normal field edit only once the encoding is already empty (plan 3.3: "编码为空时 Backspace 恢复现有普通删除"). */
     private fun englishDeleteBackward() {
         if (latinInputMode == LatinInputMode.PINYIN) {
-            rimePinyinController.backspace({ renderPinyinCandidates(it) }, { deleteBackward() })
+            rimePinyinController.backspace({ renderPinyinCandidates(it) }, {
+                rimePinyinController.associationLearning.reset()
+                deleteBackward()
+            })
             return
         }
-        englishAutoSpacePending = false
+        clearEnglishAutoText()
         deleteBackward()
         if (englishComposingWord.isNotEmpty()) {
             englishComposingWord.deleteCharAt(englishComposingWord.length - 1)
@@ -3126,18 +3157,16 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             return
         }
         val connection = currentInputConnection ?: return
-        if (englishAutoSpacePending && EnglishAutoText.swallowsAutoSpace(char) &&
-            connection.getTextBeforeCursor(1, 0)?.toString() == " "
-        ) {
-            // "word " + "," -> "word, ": the mark takes the candidate's space,
-            // and the space after it is again one punctuation may take ("?!").
-            connection.deleteSurroundingText(1, 0)
-            if (!connection.commitText("$char ", 1)) return
+        val replaceAutoSpace = englishAutoSpace != null && englishAutoSpace == englishEditAnchor(connection) &&
+            EnglishAutoText.swallowsAutoSpace(char) && connection.getTextBeforeCursor(1, 0)?.toString() == " "
+        clearEnglishAutoText()
+        if (replaceAutoSpace) {
+            if (!connection.deleteSurroundingText(1, 0) || !connection.commitText("$char ", 1)) return
+            englishAutoSpace = englishEditAnchor(connection)
             finalizeEnglishComposingWord()
             consumeShiftOnce()
             return
         }
-        englishAutoSpacePending = false
         if (!connection.commitText(char, 1)) return
         if (personalizedLearningAllowed() && char.length == 1 && char[0].isLetter()) {
             englishComposingWord.append(char.lowercase())
@@ -3295,8 +3324,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 break
             }
         }
+        clearEnglishAutoText()
         if (!connection.commitText("$word ", 1)) return
-        englishAutoSpacePending = true
+        englishAutoSpace = englishEditAnchor(connection)
         englishCandidateProvider.recordCommit(word)
         englishComposingWord.clear()
         updateEnglishCandidates()
@@ -3410,6 +3440,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     internal fun sendEnterKey() {
+        clearEnglishAutoText()
         if (inputMode == InputMode.ENGLISH && latinInputMode == LatinInputMode.PINYIN &&
             !ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) {
             rimePinyinController.confirmFirst({ renderPinyinCandidates(it) }, { sendEditorEnterKey() })
@@ -3443,7 +3474,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // onStartInputView() works out the new field's.
         if (autoShift) shiftState = ShiftState.OFF
         autoShift = false
-        englishAutoSpacePending = false
+        clearEnglishAutoText()
         englishComposingWord.clear()
         englishCandidateQueryEpoch++
         rimePinyinController.clear()
@@ -3454,7 +3485,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             else if (currentInputConnection?.commitText(text, 1) == true) {
                 // Typing an offered association out by hand counts as picking it.
                 if (personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(this)) {
-                    strokeController.phraseRepository.recordTypedContinuation(rimePinyinController.associationContext(), text)
+                    strokeController.phraseRepository.recordTypedContinuation(
+                        rimePinyinController.associationLearning.advance(rimePinyinController.associationContext(), text),
+                    )
+                } else {
+                    rimePinyinController.associationLearning.reset()
                 }
                 rimePinyinController.recordCommittedText(text)
                 performKeyHaptic()
@@ -3501,6 +3536,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         "${keyboardPanelHeightDp()}:${raiseHeightDp(this)}:$inputMode:$latinInputMode:${personalizedLearningAllowed()}"
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        clearEnglishAutoText()
         if (draftEdit != null && (recording || processing)) cancelDictation()
         closeDraft()
         super.onFinishInputView(finishingInput)
@@ -3523,6 +3559,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     override fun onFinishInput() {
+        clearEnglishAutoText()
         if (draftEdit != null && (recording || processing)) cancelDictation()
         closeDraft()
         cancelImeSession()
@@ -3568,6 +3605,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         candidatesEnd: Int,
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        if (draftEdit == null) invalidateEnglishAutoTextSelection(newSelStart, newSelEnd)
         // Selecting another span must not discard the user's pending undo/redo.
         if (newSelStart < 0 || newSelStart != newSelEnd) return
         invalidateDictationResultIfTextChanged()
@@ -4083,6 +4121,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     /** Composition and dictation-result state belongs to one text target; drop it when the target flips between the host field and the draft. */
     private fun resetEditingStateForTargetChange() {
+        clearEnglishAutoText()
         englishComposingWord.clear()
         englishCandidateQueryEpoch++
         rimePinyinController.clear()
@@ -4104,7 +4143,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         draftMessage = null
         draftMessageIsError = false
         draftConnection = null
-        draftEdit = android.widget.EditText(this).apply {
+        draftEdit = object : android.widget.EditText(this) {
+            override fun onSelectionChanged(selStart: Int, selEnd: Int) {
+                super.onSelectionChanged(selStart, selEnd)
+                invalidateEnglishAutoTextSelection(selStart, selEnd)
+            }
+        }.apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                 InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI

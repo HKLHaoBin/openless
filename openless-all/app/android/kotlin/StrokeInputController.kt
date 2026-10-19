@@ -41,6 +41,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
     private val wordSegments = mutableListOf<String>()
     private var lastStrokeCandidates: List<String> = emptyList()
     private var confirmedText = ""
+    private val associationLearning = TypedContinuationHistory()
     private var phraseQueryEpoch = 0L
     private var strokePreview: TextView? = null
     private var clearStrokeButton: TextView? = null
@@ -79,6 +80,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
 
     /** Matches selectInputMode()'s own old inline reset exactly — mode-switch also resets the number/symbol sub-panel and the punctuation rail's page, which resetForNewInputSession() below does not. */
     fun resetForModeSwitch() {
+        associationLearning.reset()
         strokeNumberMode = false
         numberSymbolMode = false
         symbolPageIndex = 0
@@ -91,6 +93,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
 
     /** Matches onStartInput()'s own old inline reset exactly — a fresh input session also drops any in-progress word segments/candidates, but leaves the punctuation rail's page alone. */
     fun resetForNewInputSession() {
+        associationLearning.reset()
         strokeNumberMode = false
         numberSymbolMode = false
         symbolPageIndex = 0
@@ -114,6 +117,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
      * panel is the one showing.
      */
     fun clearAfterFieldEmptied() {
+        associationLearning.reset()
         if (service.inputMode == OpenLessImeService.InputMode.STROKE) {
             abandonComposition()
         } else {
@@ -596,7 +600,9 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
         val contextBeforeCommit = confirmedText.takeLast(MAX_ASSOCIATION_CONTEXT)
         if (!connection.commitText(service.outputScript(word), 1)) return false
         if (service.personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(service)) {
-            phraseRepository.recordTypedContinuation(contextBeforeCommit, word)
+            phraseRepository.recordTypedContinuation(associationLearning.advance(contextBeforeCommit, word))
+        } else {
+            associationLearning.reset()
         }
         if (service.personalizedLearningAllowed()) confirmedText = (confirmedText + word).takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()
@@ -634,12 +640,14 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
         if (service.personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(service)) {
             phraseRepository.recordUsage(matchedContext, displayText)
         }
+        associationLearning.reset()
         confirmedText = (confirmedText + suffix).takeLast(MAX_ASSOCIATION_CONTEXT)
         clearStrokes()
         refreshAssociations()
     }
 
     private fun deleteStroke() {
+        associationLearning.reset()
         if (strokeCode.isNotEmpty()) {
             strokeCode = strokeCode.dropLast(1)
             strokeQueryEpoch++
@@ -684,6 +692,7 @@ internal class StrokeInputController(private val service: OpenLessImeService) {
      * meaning nothing. Same as pinyin abandoning its encoding on punctuation.
      */
     private fun abandonComposition() {
+        associationLearning.reset()
         clearStrokes()
         confirmedText = ""
         phraseQueryEpoch++

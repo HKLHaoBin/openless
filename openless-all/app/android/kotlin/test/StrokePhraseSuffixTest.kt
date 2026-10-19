@@ -61,6 +61,53 @@ class StrokePhraseSuffixTest {
         assertEquals("天气", hit?.matchedPrefix)
     }
 
+    @Test fun splitCommitsLearnTheOriginalAssociationPrefix() {
+        val lookup = lookupOf("天气", "天气预报")
+        val history = TypedContinuationHistory()
+        assertEquals(emptyList<Candidate>(), history.advance("天气", "预").mapNotNull {
+            typedContinuation(it.contextBefore, it.word, lookup)
+        })
+        val completed = history.advance("天气预", "报").mapNotNull {
+            typedContinuation(it.contextBefore, it.word, lookup)
+        }
+        assertEquals(listOf("天气", "天气预"), completed.map { it.matchedPrefix })
+        assertEquals(listOf("天气预报", "天气预报"), completed.map { it.text })
+    }
+
+    @Test fun batchCommitsStillLearnAndUnrelatedTextDoesNot() {
+        val lookup = lookupOf("天气", "天气预报")
+        val history = TypedContinuationHistory()
+        val batch = history.advance("天气", "预报").mapNotNull {
+            typedContinuation(it.contextBefore, it.word, lookup)
+        }
+        assertEquals(listOf("天气"), batch.map { it.matchedPrefix })
+        assertEquals(emptyList<Candidate>(), history.advance("天气预报", "雨").mapNotNull {
+            typedContinuation(it.contextBefore, it.word, lookup)
+        })
+    }
+
+    @Test fun resetAndContextChangesDiscardPendingContinuations() {
+        val history = TypedContinuationHistory()
+        history.advance("天气", "预")
+        history.reset()
+        assertEquals(listOf(TypedContinuation("天气预", "报")), history.advance("天气预", "报"))
+        history.advance("天气", "预")
+        assertEquals(listOf(TypedContinuation("别处", "报")), history.advance("别处", "报"))
+    }
+
+    @Test fun historyIsBoundedAndDoesNotInventCommitBoundaries() {
+        val history = TypedContinuationHistory()
+        assertEquals(emptyList<TypedContinuation>(), history.advance("", "天气"))
+        assertEquals(listOf(TypedContinuation("天气", "预报")), history.advance("天气", "预报"))
+        var context = "天气预报"
+        repeat(20) {
+            val continuations = history.advance(context, "字")
+            assertEquals(true, continuations.size <= 7)
+            assertEquals(true, continuations.all { it.word.length < 8 })
+            context = (context + "字").takeLast(8)
+        }
+    }
+
     @Test fun typingSomethingElseCountsAsNothing() {
         val lookup = lookupOf("天气", "天气预报")
         // Only part of the association, more than it, or unrelated text.

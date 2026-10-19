@@ -70,19 +70,14 @@ internal class StrokePhraseRepository(context: Context) {
         executor.execute { userFrequency.record(context, candidate) }
     }
 
-    /**
-     * [word] was typed (not picked from the association row) right after
-     * [contextBefore]. If that is exactly one of the associations the row
-     * offered for [contextBefore], count it as a pick of that association —
-     * under the same (matched prefix, phrase) key a tap would have used, so
-     * typing a phrase out by hand trains the row too. Off the caller's thread.
-     */
-    fun recordTypedContinuation(contextBefore: String, word: String) {
-        if (contextBefore.isEmpty() || word.isEmpty()) return
+    /** Records completed associations across one or more successful editor commits. */
+    fun recordTypedContinuation(continuations: List<TypedContinuation>) {
+        if (continuations.isEmpty()) return
         executor.execute {
             ensureLoaded()
-            val hit = typedContinuation(contextBefore, word, ::find) ?: return@execute
-            userFrequency.record(hit.matchedPrefix, hit.text)
+            continuations.mapNotNull { typedContinuation(it.contextBefore, it.word, ::find) }
+                .distinctBy { it.matchedPrefix to it.text }
+                .forEach { userFrequency.record(it.matchedPrefix, it.text) }
         }
     }
 
@@ -228,3 +223,28 @@ internal fun typedContinuation(
     lookup: (String) -> List<StrokePhraseRepository.Candidate>,
 ): StrokePhraseRepository.Candidate? =
     longestSuffixExtensions(contextBefore, lookup).firstOrNull { it.text == it.matchedPrefix + word }
+
+internal data class TypedContinuation(val contextBefore: String, val word: String)
+
+/** Main-thread commit boundaries; background lookups receive immutable snapshots. */
+internal class TypedContinuationHistory {
+    private var expectedContext: String? = null
+    private var continuations = emptyList<TypedContinuation>()
+
+    fun reset() {
+        expectedContext = null
+        continuations = emptyList()
+    }
+
+    fun advance(contextBefore: String, word: String): List<TypedContinuation> {
+        if (word.isEmpty()) return emptyList()
+        if (contextBefore != expectedContext) reset()
+        val starts = continuations + if (contextBefore.isNotEmpty()) {
+            listOf(TypedContinuation(contextBefore, ""))
+        } else emptyList()
+        continuations = starts.map { it.copy(word = it.word + word) }
+            .filter { it.word.length < StrokeInputController.MAX_ASSOCIATION_CONTEXT }
+        expectedContext = (contextBefore + word).takeLast(StrokeInputController.MAX_ASSOCIATION_CONTEXT)
+        return continuations
+    }
+}

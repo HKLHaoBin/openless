@@ -108,6 +108,7 @@ const KOTLIN_ANDROID_TEST_FILES = [
   'OpenLessCredentialVaultInstrumentedTest.kt',
   'ImeLearningMigrationTest.kt',
   'RimeEngineIntegrationTest.kt',
+  'ImeAutoTextIntegrationTest.kt',
 ];
 
 const XML_FILES = [
