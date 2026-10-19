@@ -3907,15 +3907,16 @@ mod enter_stop_preference_tests {
 
     #[test]
     fn enabled_enter_stop_roundtrips_with_camel_case_wire_key() {
-        let mut preferences = UserPreferences::default();
-        preferences.enter_stop_enabled = true;
+        let preferences = UserPreferences {
+            enter_stop_enabled: true,
+            ..UserPreferences::default()
+        };
         let value = serde_json::to_value(&preferences).unwrap();
         assert_eq!(value["enterStopEnabled"], true);
-        assert_eq!(
+        assert!(
             serde_json::from_value::<UserPreferences>(value)
                 .unwrap()
-                .enter_stop_enabled,
-            true
+                .enter_stop_enabled
         );
     }
 }

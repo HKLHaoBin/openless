@@ -2,28 +2,26 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 
-// Exercise the real settings handlers without browser hooks, native IPC or effects.
-type Node = { type: unknown; props: Record<string, any> };
-let prefs: Record<string, any> = {
+let prefs = {
   hotkey: { mode: 'toggle' },
   enterStopEnabled: false,
 };
 let desktop = true;
 let saves = 0;
-const dependencies: Record<string, any> = {
-  useTranslation: () => ({ t: (key: string) => key }),
+const dependencies = {
+  useTranslation: () => ({ t: (key) => key }),
   useHotkeySettings: () => ({
     prefs,
     capability: { adapter: 'windowsLowLevel' },
-    updatePrefs: (next: Record<string, any>) => {
+    updatePrefs: (next) => {
       prefs = next;
       saves += 1;
     },
     refresh: async () => {},
   }),
-  useState: (initial: any) => [typeof initial === 'function' ? initial() : initial, () => {}],
-  useRef: (initial: unknown) => ({ current: initial }),
-  useCallback: (callback: unknown) => callback,
+  useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}],
+  useRef: (initial) => ({ current: initial }),
+  useCallback: (callback) => callback,
   useEffect: () => {},
   useLayoutEffect: () => {},
   useId: () => 'recording-test',
@@ -37,7 +35,10 @@ const dependencies: Record<string, any> = {
   showWindowsSendInputNewlineMode: () => false,
   detectOS: () => 'win',
 };
-const source = readFileSync(new URL('./RecordingInputSection.tsx', import.meta.url), 'utf8');
+const source = readFileSync(
+  new URL('../src/pages/settings/RecordingInputSection.tsx', import.meta.url),
+  'utf8',
+);
 const parsed = ts.createSourceFile(
   'RecordingInputSection.tsx',
   source,
@@ -63,8 +64,8 @@ const compiled = ts.transpileModule(body, {
     jsx: ts.JsxEmit.ReactJSX,
   },
 }).outputText;
-const jsx = (type: unknown, props: Record<string, any>) => ({ type, props });
-const render: () => Node = new Function(
+const jsx = (type, props) => ({ type, props });
+const render = new Function(
   ...imports,
   'exports',
   'require',
@@ -74,7 +75,7 @@ const render: () => Node = new Function(
   {},
   () => ({ jsx, jsxs: jsx }),
 );
-function pathTo(value: unknown, predicate: (node: Node) => boolean, parents: Node[] = []): Node[] {
+function pathTo(value, predicate, parents = []) {
   if (Array.isArray(value)) {
     for (const child of value) {
       const found = pathTo(child, predicate, parents);
@@ -83,15 +84,15 @@ function pathTo(value: unknown, predicate: (node: Node) => boolean, parents: Nod
     return [];
   }
   if (!value || typeof value !== 'object' || !('props' in value)) return [];
-  const node = value as Node;
+  const node = value;
   const path = [...parents, node];
   return predicate(node) ? path : pathTo(node.props.children, predicate, path);
 }
-function enterControl(tree: Node) {
+function enterControl(tree) {
   const path = pathTo(tree, (node) => node.props.label === 'settings.recording.enterStopLabel');
   assert(path.length, 'desktop recording settings must contain the Enter switch');
   const row = path[path.length - 1];
-  const control = row.props.children as Node;
+  const control = row.props.children;
   assert.equal(control.type, 'Toggle');
   const group = path.find((node) => Object.prototype.hasOwnProperty.call(node.props, 'aria-hidden'));
   assert(group, 'Enter switch must be in the Toggle-only controls group');
@@ -126,7 +127,6 @@ for (const mode of ['hold', 'auto', 'toggle']) {
 control.props.onToggle(false);
 assert.equal(prefs.enterStopEnabled, false);
 
-// An older frontend snapshot missing the new field must not display it as enabled.
 delete prefs.enterStopEnabled;
 assert.equal(enterControl(render()).control.props.on, false);
 desktop = false;

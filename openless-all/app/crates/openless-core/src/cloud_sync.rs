@@ -754,8 +754,10 @@ mod enter_stop_sync_tests {
 
     #[test]
     fn enter_stop_is_projected_and_applied_by_plaintext_sync() {
-        let mut preferences = UserPreferences::default();
-        preferences.enter_stop_enabled = true;
+        let preferences = UserPreferences {
+            enter_stop_enabled: true,
+            ..UserPreferences::default()
+        };
         let projected = capture_preferences(&preferences, CloudSyncUiPreferences::default());
         assert_eq!(projected.enter_stop_enabled, Some(true));
 
