@@ -1483,7 +1483,7 @@ mod platform {
                     cancel_tx,
                     combo_tx,
                     fn_pressed_at: parking_lot::Mutex::new(None),
-                    enter_stop: parking_lot::Mutex::new(super::EnterStopState::default()),
+                    enter_stop: parking_lot::Mutex::new(super::super::EnterStopState::default()),
                     handles: Arc::new(MacShutdownHandles {
                         tap: std::sync::Mutex::new(None),
                         runloop: std::sync::Mutex::new(None),
@@ -2327,7 +2327,7 @@ mod platform {
                     cancel_tx,
                     combo_tx: combo_abort_tx,
                     hook: std::sync::Mutex::new(None),
-                    enter_stop: parking_lot::Mutex::new(super::EnterStopState::default()),
+                    enter_stop: parking_lot::Mutex::new(super::super::EnterStopState::default()),
                 },
                 rx,
                 combo_abort_rx,
