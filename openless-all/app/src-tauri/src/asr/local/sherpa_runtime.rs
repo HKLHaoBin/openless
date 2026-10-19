@@ -794,10 +794,16 @@ impl SherpaOnlineSession {
     where
         F: Fn(&SherpaTokenEmission),
     {
-        {
-            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "input_finished");
-            self.stream.input_finished();
-        }
+        finish_online_segment_input(
+            |tail| {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "tail_padding");
+                self.stream.accept_waveform(16_000, tail);
+            },
+            || {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "input_finished");
+                self.stream.input_finished();
+            },
+        );
         self.drain_ready_without_endpoint_reset(on_token);
         self.capture_result(on_token, false);
         if !self.last_partial_text.is_empty() {
@@ -917,6 +923,18 @@ impl SherpaOnlineSession {
         }
         text.trim().to_string()
     }
+}
+
+// Sherpa 1.13.2's online-decode-files.py supplies 0.66 s of zero samples before
+// input_finished(): marking EOF alone does not provide the model's trailing context.
+// This is bounded model input, not a wall-clock wait or continuous idle inference.
+fn finish_online_segment_input(
+    accept_tail: impl FnOnce(&[f32]),
+    input_finished: impl FnOnce(),
+) {
+    const TAIL: [f32; 16_000 * 66 / 100] = [0.0; 16_000 * 66 / 100];
+    accept_tail(&TAIL);
+    input_finished();
 }
 
 fn append_segment(text: &mut String, segment: &str) {
@@ -1171,6 +1189,34 @@ mod tests {
     #[test]
     fn pcm_s16le_to_f32_rejects_odd_length() {
         assert!(pcm_s16le_to_f32(&[0]).is_err());
+    }
+
+    #[test]
+    fn segment_input_supplies_bounded_silent_context_before_eof() {
+        let events = std::cell::RefCell::new(Vec::new());
+        finish_online_segment_input(
+            |tail| {
+                assert_eq!(tail.len(), 10_560);
+                assert!(tail.iter().all(|sample| *sample == 0.0));
+                events.borrow_mut().push(("tail", tail.len()));
+            },
+            || events.borrow_mut().push(("finished", 0)),
+        );
+        assert_eq!(*events.borrow(), vec![("tail", 10_560), ("finished", 0)]);
+    }
+
+    #[test]
+    fn repeated_segment_boundaries_do_not_accumulate_tail_context() {
+        let samples = std::cell::Cell::new(0);
+        let boundaries = std::cell::Cell::new(0);
+        for _ in 0..2 {
+            finish_online_segment_input(
+                |tail| samples.set(samples.get() + tail.len()),
+                || boundaries.set(boundaries.get() + 1),
+            );
+        }
+        assert_eq!(samples.get(), 21_120);
+        assert_eq!(boundaries.get(), 2);
     }
 
     #[test]
