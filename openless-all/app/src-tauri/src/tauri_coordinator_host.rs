@@ -1046,7 +1046,7 @@ impl TauriCapsuleWindow {
                             .is_panel_visible()
                             .then(|| self.qa_context.external_focus_target())
                             .flatten()
-                            .or_else(crate::coordinator::capture_external_focus_target);
+                            .or_else(crate::coordinator::capture_focus_target);
                         let monitor = raw_hwnd.and_then(|hwnd| {
                             crate::capsule_mirrors::monitor_rect_for_hwnd(window, hwnd)
                         });
@@ -2274,12 +2274,16 @@ mod tests {
         };
         state.begin_foreground_target_capture("session-a", Some(monitor));
         state.begin_foreground_target_capture("session-a", None);
+        assert_eq!(state.foreground_monitor(), Some(monitor));
         assert!(state.foreground_target_matches_session("session-a"));
         assert!(!state.foreground_target_matches_session("session-b"));
         assert!(state.foreground_target_captured.load(Ordering::SeqCst));
         state.clear_foreground_target();
         assert_eq!(state.foreground_monitor(), None);
         assert!(!state.foreground_target_captured.load(Ordering::SeqCst));
+        state.begin_foreground_target_capture("session-b", None);
+        assert!(state.foreground_target_matches_session("session-b"));
+        assert_eq!(state.foreground_monitor(), None);
     }
 
     #[test]

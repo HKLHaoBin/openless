@@ -48,6 +48,11 @@ const tauriEventsRs = await readFile(
   new URL('../src-tauri/src/tauri_events.rs', import.meta.url),
   'utf-8',
 );
+assertMatch(
+  coordinatorRs,
+  /fn prepare_display_target[\s\S]*?\.then\(\|\| self\.qa_context\.external_focus_target\(\)\)[\s\S]*?\.or_else\(crate::coordinator::capture_focus_target\)/,
+  'foreground display targeting must retain QA provenance and accept OpenLess foreground windows',
+);
 const capsuleTsx = await readFile(
   new URL('../src/components/Capsule.tsx', import.meta.url),
   'utf-8',

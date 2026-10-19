@@ -119,8 +119,11 @@ pub struct SyncPreferences {
     pub theme_mode: Option<SyncThemeMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capsule_style: Option<SyncCapsuleStyle>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // Old plaintext readers reject unknown keys. Display targeting syncs through E2EE only.
+    #[serde(skip_serializing)]
     pub capsule_display_mode: Option<SyncCapsuleDisplayMode>,
+    #[serde(skip_serializing)]
+    pub capsule_display_mode_v2: Option<SyncCapsuleDisplayMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_mode: Option<PolishMode>,
     #[serde(skip_serializing_if = "Option::is_none")]

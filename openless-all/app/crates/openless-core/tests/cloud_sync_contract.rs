@@ -273,10 +273,10 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
     let uploaded = server.state.lock().unwrap().payload.clone().unwrap();
     let serialized = uploaded.to_string();
     assert_eq!(uploaded["preferences"]["stableTranscriptionEnabled"], true);
-    assert_eq!(
-        uploaded["preferences"]["capsuleDisplayMode"],
-        "foregroundWindowScreen"
-    );
+    assert!(uploaded["preferences"].get("capsuleDisplayMode").is_none());
+    assert!(uploaded["preferences"]
+        .get("capsuleDisplayModeV2")
+        .is_none());
     for private in [
         "cloud-fixture-token",
         "never-sync-asr-secret",
@@ -333,7 +333,7 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
     );
     assert_eq!(
         preferences.capsule_display_mode,
-        CapsuleDisplayMode::ForegroundWindowScreen
+        CapsuleDisplayMode::CursorScreen
     );
     assert_eq!(preferences.active_style_pack_id, "custom.cloud");
     assert_eq!(preferences.active_asr_provider, "target-asr");
@@ -392,6 +392,39 @@ async fn portable_data_round_trips_without_uploading_credentials_or_device_setti
         legacy_target.backend.get_preferences().capsule_display_mode,
         CapsuleDisplayMode::PrimaryScreen
     );
+    // Read transitional snapshots without re-emitting fields rejected by plaintext V1 readers.
+    for mode in [
+        "cursorScreen",
+        "primaryScreen",
+        "foregroundWindowScreen",
+        "allScreens",
+    ] {
+        server.state.lock().unwrap().payload.as_mut().unwrap()["preferences"]
+            ["capsuleDisplayModeV2"] = json!(mode);
+        target.backend.cloud_sync_restore().await.unwrap();
+        let prefs = target.backend.get_preferences();
+        assert_eq!(
+            serde_json::to_value(&prefs).unwrap()["capsuleDisplayMode"],
+            mode
+        );
+        assert_eq!(
+            prefs.capsule_display_mode_v2,
+            Some(prefs.capsule_display_mode)
+        );
+        {
+            let mut state = server.state.lock().unwrap();
+            let preferences = state.payload.as_mut().unwrap()["preferences"]
+                .as_object_mut()
+                .unwrap();
+            preferences.remove("capsuleDisplayModeV2");
+            preferences.insert("capsuleDisplayMode".into(), json!("cursorScreen"));
+        }
+        target.backend.cloud_sync_restore().await.unwrap();
+        assert_eq!(
+            serde_json::to_value(target.backend.get_preferences()).unwrap()["capsuleDisplayMode"],
+            mode
+        );
+    }
 }
 
 #[tokio::test]
