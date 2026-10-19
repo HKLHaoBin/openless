@@ -56,6 +56,21 @@ HRESULT ApplyOpenLessInputDisplayAttribute(TfEditCookie edit_cookie, ITfContext 
   return hr;
 }
 
+HRESULT ClearOpenLessInputDisplayAttribute(TfEditCookie edit_cookie, ITfContext *context,
+                                           ITfRange *range) {
+  if (context == nullptr || range == nullptr) {
+    return E_INVALIDARG;
+  }
+  ITfProperty *property = nullptr;
+  HRESULT hr = context->GetProperty(GUID_PROP_ATTRIBUTE, &property);
+  if (FAILED(hr) || property == nullptr) {
+    return FAILED(hr) ? hr : E_UNEXPECTED;
+  }
+  hr = property->Clear(edit_cookie, range);
+  property->Release();
+  return hr;
+}
+
 OpenLessDisplayAttributeInfo::OpenLessDisplayAttributeInfo() {
   InterlockedIncrement(&g_object_count);
 }

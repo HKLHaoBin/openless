@@ -349,6 +349,10 @@ HRESULT OpenLessEditSession::CancelComposition(TfEditCookie edit_cookie) {
 
   hr = range->SetText(edit_cookie, 0, composition_->original_text.c_str(),
                       static_cast<LONG>(composition_->original_text.size()));
+  if (SUCCEEDED(hr)) {
+    // Appearance failures must not prevent native composition cleanup.
+    (void)ClearOpenLessInputDisplayAttribute(edit_cookie, context_, range);
+  }
   bool composition_ended = !active;
   if (SUCCEEDED(hr) && active) {
     hr = composition_->composition->EndComposition(edit_cookie);
@@ -395,6 +399,10 @@ HRESULT OpenLessEditSession::FinishComposition(TfEditCookie edit_cookie) {
       }
       hr = composition_->terminated_range->SetText(edit_cookie, 0, text_.c_str(),
                                                    static_cast<LONG>(text_.size()));
+      if (SUCCEEDED(hr)) {
+        (void)ClearOpenLessInputDisplayAttribute(edit_cookie, context_,
+                                                composition_->terminated_range);
+      }
       if (SUCCEEDED(hr) &&
           SUCCEEDED(composition_->terminated_range->Collapse(edit_cookie, TF_ANCHOR_END))) {
         TF_SELECTION selection = {};
@@ -424,6 +432,7 @@ HRESULT OpenLessEditSession::FinishComposition(TfEditCookie edit_cookie) {
   }
   hr = range->SetText(edit_cookie, 0, text_.c_str(), static_cast<LONG>(text_.size()));
   if (SUCCEEDED(hr)) {
+    (void)ClearOpenLessInputDisplayAttribute(edit_cookie, context_, range);
     hr = composition_->composition->EndComposition(edit_cookie);
   }
   if (SUCCEEDED(hr)) {

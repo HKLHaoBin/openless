@@ -186,10 +186,13 @@ STDMETHODIMP OpenLessTextService::OnCompositionTerminated(TfEditCookie edit_cook
     // partial after TSF terminates the composition externally. Snapshot the
     // text as an ownership check: a later user edit must not be overwritten.
     if (SUCCEEDED(composition->GetRange(&composition_->terminated_range)) &&
-        composition_->terminated_range != nullptr &&
-        SUCCEEDED(ReadOpenLessRangeText(edit_cookie, composition_->terminated_range,
-                                        &composition_->terminated_text))) {
-      composition_->terminated_text_captured = true;
+        composition_->terminated_range != nullptr) {
+      (void)ClearOpenLessInputDisplayAttribute(edit_cookie, composition_->context,
+                                              composition_->terminated_range);
+      if (SUCCEEDED(ReadOpenLessRangeText(edit_cookie, composition_->terminated_range,
+                                          &composition_->terminated_text))) {
+        composition_->terminated_text_captured = true;
+      }
     }
     composition_->composition->Release();
     composition_->composition = nullptr;

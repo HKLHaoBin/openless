@@ -110,8 +110,6 @@ mod unicode_keystroke;
 #[path = "mobile_stubs/unicode_keystroke.rs"]
 mod unicode_keystroke;
 #[cfg(target_os = "windows")]
-mod windows_single_instance;
-#[cfg(target_os = "windows")]
 mod windows_ime_ipc;
 mod windows_ime_profile;
 #[cfg(target_os = "windows")]
@@ -734,9 +732,7 @@ fn run_desktop() {
     // this plugin registers; the plugin is macOS-only.
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
-    #[cfg(target_os = "windows")]
-    let builder = builder.plugin(windows_single_instance::init(single_instance_callback));
-    #[cfg(not(target_os = "windows"))]
+    // Keep one instance across installed and development copies sharing the same app identifier.
     let builder = builder.plugin(tauri_plugin_single_instance::init(single_instance_callback));
     builder
         .plugin(tauri_plugin_shell::init())

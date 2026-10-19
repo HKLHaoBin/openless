@@ -13,6 +13,10 @@ void FillOpenLessInputDisplayAttribute(TF_DISPLAYATTRIBUTE *attribute);
 HRESULT ApplyOpenLessInputDisplayAttribute(TfEditCookie edit_cookie, ITfContext *context,
                                            ITfRange *range);
 
+// EndComposition only clears GUID_PROP_COMPOSING, not the display attribute.
+HRESULT ClearOpenLessInputDisplayAttribute(TfEditCookie edit_cookie, ITfContext *context,
+                                           ITfRange *range);
+
 class OpenLessDisplayAttributeInfo final : public ITfDisplayAttributeInfo {
 public:
   OpenLessDisplayAttributeInfo();

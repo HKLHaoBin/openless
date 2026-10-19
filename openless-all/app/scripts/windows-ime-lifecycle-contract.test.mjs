@@ -12,10 +12,6 @@ const registry = readFileSync(join(imeRoot, 'registry.cpp'), 'utf8');
 const protocol = readFileSync(join(appRoot, 'src-tauri', 'src', 'windows_ime_protocol.rs'), 'utf8');
 const ipc = readFileSync(join(appRoot, 'src-tauri', 'src', 'windows_ime_ipc.rs'), 'utf8');
 const tauriLib = readFileSync(join(appRoot, 'src-tauri', 'src', 'lib.rs'), 'utf8');
-const windowsSingleInstance = readFileSync(
-  join(appRoot, 'src-tauri', 'src', 'windows_single_instance.rs'),
-  'utf8',
-);
 
 // The IME runs inside every host process. It must not own threads or block the
 // host UI thread: joining a worker from Deactivate deadlocked hosts whenever
@@ -139,28 +135,18 @@ assert.match(
 
 assert.match(
   tauriLib,
-  /#\[cfg\(target_os = "windows"\)\]\s*let builder = builder\.plugin\(windows_single_instance::init\(single_instance_callback\)\)/,
-  'Windows must use the path-scoped single-instance broker',
+  /let builder = builder\.plugin\(tauri_plugin_single_instance::init\(single_instance_callback\)\)/,
+  'Every desktop platform must use the app-identifier-scoped single-instance broker',
 );
-assert.match(
+assert.doesNotMatch(
   tauriLib,
-  /#\[cfg\(not\(target_os = "windows"\)\)\]\s*let builder = builder\.plugin\(tauri_plugin_single_instance::init\(single_instance_callback\)\)/,
-  'Non-Windows desktop platforms must retain the upstream single-instance broker',
+  /windows_single_instance/,
+  'Separate install paths must not bypass the shared single-instance guard',
 );
-assert.match(
-  windowsSingleInstance,
-  /current_exe\(\)[\s\S]*canonicalize\(\)[\s\S]*instance_key_for_path\(&executable\)/,
-  'Windows single-instance identity must be derived from the canonical executable path',
-);
-assert.match(
-  windowsSingleInstance,
-  /fn instance_key_for_path[\s\S]*Sha256/,
-  'Windows single-instance identity must use a bounded hash',
-);
-assert.match(
-  windowsSingleInstance,
-  /executable_instance_key\(\)[\s\S]*CreateMutexW[\s\S]*FindWindowW/,
-  'Windows single-instance broker must use the path-scoped identity for its mutex and window',
+assert.equal(
+  JSON.parse(readFileSync(join(appRoot, 'src-tauri', 'tauri.conf.json'), 'utf8')).identifier,
+  'com.openless.app',
+  'All OpenLess copies must share the same single-instance identity',
 );
 
 assert.match(
@@ -216,6 +202,42 @@ assert.match(
   editSession,
   /ApplyOpenLessInputDisplayAttribute\(/,
   'IME composition text should carry the OpenLess input display attribute (underline)',
+);
+assert.match(
+  displayAttribute,
+  /ClearOpenLessInputDisplayAttribute[\s\S]*GetProperty\(GUID_PROP_ATTRIBUTE[\s\S]*property->Clear\(edit_cookie, range\)/,
+  'IME must explicitly clear the display attribute instead of relying on EndComposition',
+);
+const cancellation = editSession.slice(
+  editSession.indexOf('HRESULT OpenLessEditSession::CancelComposition'),
+  editSession.indexOf('HRESULT OpenLessEditSession::FinishComposition'),
+);
+const finalization = editSession.slice(
+  editSession.indexOf('HRESULT OpenLessEditSession::FinishComposition'),
+);
+assert.match(
+  cancellation,
+  /SetText[\s\S]*ClearOpenLessInputDisplayAttribute[\s\S]*EndComposition/,
+  'Cancellation must clear the underline before releasing the restored selection',
+);
+assert.match(
+  finalization,
+  /ClearOpenLessInputDisplayAttribute\(edit_cookie, context_,\s*composition_->terminated_range\)/,
+  'Finalization must clear the underline on an externally terminated range',
+);
+assert.match(
+  finalization,
+  /ClearOpenLessInputDisplayAttribute\(edit_cookie, context_, range\)[\s\S]*EndComposition/,
+  'Finalization must clear the underline before ending a live composition',
+);
+const termination = textService.slice(
+  textService.indexOf('STDMETHODIMP OpenLessTextService::OnCompositionTerminated'),
+  textService.indexOf('STDMETHODIMP OpenLessTextService::EnumDisplayAttributeInfo'),
+);
+assert.match(
+  termination,
+  /ClearOpenLessInputDisplayAttribute[\s\S]*ReadOpenLessRangeText/,
+  'External termination must clear the underline without waiting for dictation to finish',
 );
 assert.match(
   displayAttribute,

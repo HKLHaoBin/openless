@@ -2151,11 +2151,16 @@ impl ActiveTextInsertion {
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         self.task_spawner.spawn(Box::pin(async move {
             let result = insertion.finish_committed(final_text).await;
-            // A failed finalization must return to the active state so the caller's
-            // cancellation path can clear a possibly live native composition.
-            insertion
-                .terminal
-                .store(if result.is_ok() { 3 } else { 0 }, Ordering::Release);
+            // Only Windows TSF can retain a composition after failed finalization. Other hosts
+            // have already settled cleanup and may cache the delivery error in their terminal.
+            insertion.terminal.store(
+                if cfg!(target_os = "windows") && result.is_err() {
+                    0
+                } else {
+                    3
+                },
+                Ordering::Release,
+            );
             insertion.drained.notify_waiters();
             let _ = result_tx.send(result);
         }));
@@ -2275,7 +2280,7 @@ impl ActiveTextInsertion {
                     };
                     match result {
                         Ok(()) => return Ok(()),
-                        Err(_error) if cleanup_retries < 2 => {
+                        Err(_error) if cfg!(target_os = "windows") && cleanup_retries < 2 => {
                             if self
                                 .terminal
                                 .compare_exchange(4, 0, Ordering::AcqRel, Ordering::Acquire)
@@ -7420,9 +7425,9 @@ impl OpenLessBackend {
                 }
             };
             let result = insertion.cancel().await;
-            if result.is_ok() {
-                // Keep a failed cancellation in the registry so a later cleanup attempt can
-                // reach the same native session. Never remove a newer replacement session.
+            if result.is_ok() || !cfg!(target_os = "windows") {
+                // Only Windows TSF retains a native cleanup obligation after an error.
+                // Never remove a newer replacement session.
                 let mut insertions = text_insertions
                     .lock()
                     .expect("text insertion registry lock poisoned");
@@ -14722,6 +14727,117 @@ mod tests {
         assert_eq!(logs.len(), 2);
         assert!(logs[0].contains("attempt=1 operation=insert_final chars=10"));
         assert!(logs[1].contains("attempt=1 operation=insert_final result=Ok(Inserted)"));
+    }
+
+    #[tokio::test]
+    async fn native_terminal_errors_retain_cleanup_only_on_windows() {
+        struct FailedTerminalSession(Arc<AtomicBool>);
+        impl TextInsertionSession for FailedTerminalSession {
+            fn write(
+                &self,
+                _: String,
+            ) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
+                panic!("a final-only session must not stream text");
+            }
+            fn copy(&self, _: String) -> BoxFuture<'static, Result<(), BackendError>> {
+                boxed(async { Ok(()) })
+            }
+            fn finish(&self, _: String) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
+                boxed(async {
+                    Err(BackendError::new(
+                        BackendErrorCode::Platform,
+                        "native delivery failed",
+                    ))
+                })
+            }
+            fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+                let fails = self.0.load(Ordering::Acquire);
+                boxed(async move {
+                    if fails {
+                        Err(BackendError::new(
+                            BackendErrorCode::Platform,
+                            "cached terminal error",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                })
+            }
+        }
+        struct FailedTerminalInserter(Arc<AtomicBool>);
+        impl TextInserter for FailedTerminalInserter {
+            fn begin(
+                &self,
+                _: SessionId,
+                _: Arc<DictationContext>,
+            ) -> BoxFuture<'static, Result<Arc<dyn TextInsertionSession>, BackendError>>
+            {
+                let session: Arc<dyn TextInsertionSession> =
+                    Arc::new(FailedTerminalSession(Arc::clone(&self.0)));
+                boxed(async { Ok(session) })
+            }
+        }
+
+        for finish in [true, false] {
+            let data_dir = TestDataDir::new("native-terminal-error");
+            let cancel_fails = Arc::new(AtomicBool::new(true));
+            let mut deps = BackendDependencies::unsupported();
+            deps.host_actions = Arc::new(FakeHost::default());
+            deps.credential_store = llm_configured_credentials();
+            deps.text_inserter = Arc::new(FailedTerminalInserter(Arc::clone(&cancel_fails)));
+            deps.dictation_engine = Arc::new(crate::testing::FixtureDictationEngine::successful(
+                "raw", "final",
+            ));
+            deps.task_spawner = Arc::new(TokioTaskSpawner);
+            let backend = OpenLessBackend::new(
+                BackendConfig {
+                    data_dir: data_dir.path().to_path_buf(),
+                    ..BackendConfig::default()
+                },
+                deps,
+            )
+            .unwrap();
+            backend.start().await.unwrap();
+            let session_id = backend.start_dictation().await.unwrap();
+            let error = if finish {
+                backend.stop_dictation().await.unwrap_err()
+            } else {
+                backend
+                    .cancel_dictation(Some(session_id))
+                    .await
+                    .unwrap_err()
+            };
+            assert_eq!(error.code, BackendErrorCode::Platform);
+            assert_eq!(
+                backend
+                    .text_insertions
+                    .lock()
+                    .unwrap()
+                    .contains_key(&session_id),
+                cfg!(target_os = "windows"),
+            );
+            if cfg!(target_os = "windows") {
+                assert_eq!(
+                    backend.start_dictation().await.unwrap_err().code,
+                    BackendErrorCode::Busy
+                );
+            }
+            cancel_fails.store(false, Ordering::Release);
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while backend
+                    .text_insertions
+                    .lock()
+                    .unwrap()
+                    .contains_key(&session_id)
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("native cleanup must release the prior voice session");
+            let next = backend.start_dictation().await.unwrap();
+            backend.cancel_dictation(Some(next)).await.unwrap();
+        }
     }
 
     struct CompositionRecorder(Arc<Mutex<Vec<String>>>);
