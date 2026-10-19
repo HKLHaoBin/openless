@@ -431,7 +431,7 @@ impl LinuxHost {
                 {
                     return;
                 }
-                std::mem::replace(&mut *current, Some((generation, next.clone())))
+                current.replace((generation, next.clone()))
             };
             if let Err(error) = crate::fcitx5::set_dictation_enter_stop_session(&next) {
                 *SESSION.lock().expect("Enter-stop session lock poisoned") = previous;

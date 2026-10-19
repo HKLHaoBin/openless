@@ -29,7 +29,7 @@ static LISTENER_GENERATION: std::sync::atomic::AtomicU64 =
 pub(crate) fn listener_active() -> bool {
     #[cfg(any(target_os = "linux", test))]
     {
-        return LISTENER_ACTIVE.load(std::sync::atomic::Ordering::Acquire);
+        LISTENER_ACTIVE.load(std::sync::atomic::Ordering::Acquire)
     }
     #[cfg(not(any(target_os = "linux", test)))]
     {
@@ -40,7 +40,7 @@ pub(crate) fn listener_active() -> bool {
 pub(crate) fn listener_generation() -> u64 {
     #[cfg(any(target_os = "linux", test))]
     {
-        return LISTENER_GENERATION.load(std::sync::atomic::Ordering::Acquire);
+        LISTENER_GENERATION.load(std::sync::atomic::Ordering::Acquire)
     }
     #[cfg(not(any(target_os = "linux", test)))]
     {
