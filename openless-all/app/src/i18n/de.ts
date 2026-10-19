@@ -1521,6 +1521,16 @@ export const de: typeof zhCN = {
       capsuleTranscriptDesc:
         'Erkannten Originaltext statt Audiobalken anzeigen. Ohne Streaming erscheint der Text nach der Erkennung. Deaktivieren stellt die bisherige Anzeige wieder her.',
       capsuleTranscriptFontSize: 'Transkript-Schriftgröße',
+      capsuleDisplayModeLabel: 'Kapsel auf mehreren Bildschirmen',
+      capsuleDisplayModeDesc:
+        'Wähle die Bildschirme für die Aufnahmekapsel. Alle Bildschirme benötigen zusätzliche Fenster und Grafikressourcen.',
+      capsuleDisplayCursorScreen: 'Bildschirm unter dem Mauszeiger',
+      capsuleDisplayPrimaryScreen: 'Nur Hauptbildschirm',
+      capsuleDisplayForegroundWindowScreen: 'Bildschirm des Vordergrundfensters',
+      capsuleDisplayAllScreens: 'Auf allen Bildschirmen anzeigen',
+      capsuleDisplayModeRestartTitle: 'OpenLess neu starten, um den Anzeigemodus anzuwenden',
+      capsuleDisplayModeRestartDesc:
+        'Der Wechsel vom Modus für alle Bildschirme erfordert einen Neustart, um die bisherigen Kapselfenster zu schließen. Jetzt neu starten?',
       capsuleStyleLabel: 'Kapselstil',
       capsuleStyleSiri: 'Schimmernder Siri-Stil',
       capsuleStyleClassic: 'OpenLess-Standardstil',
@@ -1550,6 +1560,9 @@ export const de: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (Standard / die meisten Apps)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / die meisten Terminals)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Reintext-Einfügemodus',
+      plainTextInsertionDesc:
+        'Wenn aktiviert, verwendet das simulierte Einfügen Umschalt+Einfg statt Strg+V (der obige Kurzbefehl ist dabei gesperrt). Nur in sehr besonderen Fällen aktivieren, z. B. wenn ein Tastaturlayout-Umschalter wie Punto Switcher Strg+V abfängt. Gilt nur für die Einfügemethode über die Zwischenablage (nur Windows).',
       comboRecordLabel: 'Kurzbefehl aufzeichnen',
       comboRecordDesc:
         'Klicke hier und drücke die gewünschte Tastenkombination (z. B. ⌘⇧D). Unterstützt die Modi „Umschalten“ und „Gedrückt halten“.',

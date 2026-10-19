@@ -1533,6 +1533,16 @@ export const fr: typeof zhCN = {
       capsuleTranscriptDesc:
         'Affiche le texte reconnu à la place des barres audio. Sans streaming, le texte apparaît à réception du résultat. Désactivez pour retrouver l’affichage initial.',
       capsuleTranscriptFontSize: 'Taille de la transcription',
+      capsuleDisplayModeLabel: 'Capsule sur plusieurs écrans',
+      capsuleDisplayModeDesc:
+        'Choisissez où afficher la capsule. Le mode tous les écrans utilise davantage de fenêtres et de ressources graphiques.',
+      capsuleDisplayCursorScreen: 'Écran sous le pointeur',
+      capsuleDisplayPrimaryScreen: 'Écran principal uniquement',
+      capsuleDisplayForegroundWindowScreen: 'Écran de la fenêtre au premier plan',
+      capsuleDisplayAllScreens: 'Afficher sur tous les écrans',
+      capsuleDisplayModeRestartTitle: 'Redémarrer OpenLess pour appliquer le mode d’affichage',
+      capsuleDisplayModeRestartDesc:
+        'Quitter le mode tous les écrans nécessite un redémarrage pour fermer les anciennes capsules. Redémarrer maintenant ?',
       capsuleStyleLabel: 'Style de capsule',
       capsuleStyleSiri: 'Style lumineux Siri',
       capsuleStyleClassic: 'Style par défaut d’OpenLess',
@@ -1562,6 +1572,9 @@ export const fr: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (par défaut / plupart des applications)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / plupart des terminaux)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Mode d’insertion en texte brut',
+      plainTextInsertionDesc:
+        'Lorsqu’il est activé, le collage simulé utilise Maj+Insert au lieu de Ctrl+V (le raccourci ci-dessus est verrouillé pendant ce temps). À n’activer que dans des cas très particuliers, par ex. si un outil de changement de disposition comme Punto Switcher intercepte Ctrl+V. S’applique uniquement à l’insertion par collage via le presse-papiers (Windows uniquement).',
       comboRecordLabel: 'Enregistrer un raccourci',
       comboRecordDesc:
         'Cliquez, puis appuyez sur la combinaison souhaitée (p. ex. ⌘⇧D). Accepte les modes Basculer et Maintenir pour parler.',

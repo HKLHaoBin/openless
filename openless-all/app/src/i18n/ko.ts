@@ -1468,6 +1468,16 @@ export const ko: typeof zhCN = {
       capsuleTranscriptDesc:
         '오디오 막대 대신 인식된 원문을 표시합니다. 끄면 기존 표시로 돌아갑니다. 비스트리밍 인식은 결과 수신 후 표시됩니다.',
       capsuleTranscriptFontSize: '원문 글자 크기',
+      capsuleDisplayModeLabel: '다중 화면 캡슐',
+      capsuleDisplayModeDesc:
+        '녹음 캡슐을 표시할 화면을 선택합니다. 모든 화면 모드는 창과 그래픽 리소스를 더 사용합니다.',
+      capsuleDisplayCursorScreen: '마우스 포인터가 있는 화면',
+      capsuleDisplayPrimaryScreen: '주 디스플레이만',
+      capsuleDisplayForegroundWindowScreen: '전경 창이 있는 화면',
+      capsuleDisplayAllScreens: '모든 화면에 표시',
+      capsuleDisplayModeRestartTitle: '표시 모드를 적용하려면 OpenLess를 다시 시작하세요',
+      capsuleDisplayModeRestartDesc:
+        '모든 화면 표시에서 전환하려면 이전 캡슐 창을 정리하기 위해 다시 시작해야 합니다. 지금 다시 시작할까요?',
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
       capsuleStyleClassic: 'Openless 기본 스타일',
@@ -1497,6 +1507,9 @@ export const ko: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (기본 / 대부분 앱)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / 대부분 터미널)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: '일반 텍스트 삽입 모드',
+      plainTextInsertionDesc:
+        '켜면 모의 붙여넣기에 Ctrl+V 대신 Shift+Insert를 사용합니다(켜져 있는 동안 위 단축키는 변경할 수 없습니다). 매우 특수한 경우에만 켜세요(예: Punto Switcher 같은 키보드 레이아웃 전환 도구가 Ctrl+V를 가로챌 때). 클립보드 붙여넣기 방식에만 적용됩니다(Windows 전용).',
       comboRecordLabel: '단축키 녹화',
       comboRecordDesc:
         '클릭 후 원하는 단축키 조합(예: ⌘⇧D)을 누르세요. 토글 및 누르기 모드 모두 지원합니다.',

@@ -1480,6 +1480,16 @@ export const ja: typeof zhCN = {
       capsuleTranscriptDesc:
         '音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。',
       capsuleTranscriptFontSize: '文字起こしの文字サイズ',
+      capsuleDisplayModeLabel: '複数画面のカプセル',
+      capsuleDisplayModeDesc:
+        '録音カプセルを表示する画面を選択します。すべての画面ではウィンドウと描画リソースの使用量が増えます。',
+      capsuleDisplayCursorScreen: 'マウスポインターのある画面',
+      capsuleDisplayPrimaryScreen: 'メインディスプレイのみ',
+      capsuleDisplayForegroundWindowScreen: '前面ウィンドウのある画面',
+      capsuleDisplayAllScreens: 'すべての画面に表示',
+      capsuleDisplayModeRestartTitle: '表示モードを適用するには OpenLess を再起動してください',
+      capsuleDisplayModeRestartDesc:
+        'すべての画面表示から切り替えるには、以前のカプセルウィンドウを閉じるため再起動が必要です。今すぐ再起動しますか？',
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
       capsuleStyleClassic: 'Openless デフォルトスタイル',
@@ -1509,6 +1519,9 @@ export const ja: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V（既定 / ほとんどのアプリ）',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V（kitty / alacritty / wezterm / ほとんどのターミナル）',
       pasteShortcutShiftInsert: 'Shift+Insert（xterm / urxvt）',
+      plainTextInsertionLabel: 'プレーンテキスト挿入モード',
+      plainTextInsertionDesc:
+        'オンにすると、模擬貼り付けは Ctrl+V の代わりに Shift+Insert を使います（オン中は上のショートカットを変更できません）。極めて特殊な場合にのみオンにしてください（例：Punto Switcher などのキーボード配列切替ツールが Ctrl+V を奪う場合）。クリップボード貼り付け方式にのみ適用されます（Windows のみ）。',
       comboRecordLabel: 'ショートカットを記録',
       comboRecordDesc:
         'クリック後、希望するキーの組み合わせ（例：⌘⇧D）を押してください。トグル / 押し続けの両方に対応。',

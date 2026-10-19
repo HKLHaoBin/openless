@@ -1421,6 +1421,15 @@ export const zhCN = {
       capsuleTranscriptDesc:
         '在胶囊中显示语音识别原文，替换音频条；关闭后恢复原有显示。非流式识别将在结果返回后显示。',
       capsuleTranscriptFontSize: '原文字号',
+      capsuleDisplayModeLabel: '多屏胶囊',
+      capsuleDisplayModeDesc: '选择录音胶囊显示在哪些屏幕。所有屏幕模式会增加窗口与图形资源占用。',
+      capsuleDisplayCursorScreen: '鼠标所在屏幕',
+      capsuleDisplayPrimaryScreen: '仅主显示器',
+      capsuleDisplayForegroundWindowScreen: '当前前台窗口所在显示器',
+      capsuleDisplayAllScreens: '所有屏幕显示',
+      capsuleDisplayModeRestartTitle: '重启 OpenLess 以应用显示模式',
+      capsuleDisplayModeRestartDesc:
+        '从所有屏幕显示切换需要重启软件，以清理之前的胶囊窗口。现在重启吗？',
       capsuleStyleLabel: '胶囊样式',
       capsuleStyleSiri: '流光 Siri 风格',
       capsuleStyleClassic: 'Openless 默认风格',
@@ -1446,6 +1455,9 @@ export const zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V（默认 / 多数应用）',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V（kitty / alacritty / wezterm / 多数终端）',
       pasteShortcutShiftInsert: 'Shift+Insert（xterm / urxvt）',
+      plainTextInsertionLabel: '纯文本插入模式',
+      plainTextInsertionDesc:
+        '开启后，模拟粘贴改用 Shift+Insert 代替 Ctrl+V（开启期间上方快捷键选项不可更改）。仅在极为特殊的情况下才开启，例如 Ctrl+V 被键盘布局切换工具（如 Punto Switcher）吞掉时。仅对「剪贴板粘贴」插入方式生效（仅 Windows）。',
       comboRecordLabel: '录制快捷键',
       comboRecordDesc: '点击后按下想要的快捷键组合（如 ⌘⇧D）。',
       comboRecordBtn: '录制快捷键',

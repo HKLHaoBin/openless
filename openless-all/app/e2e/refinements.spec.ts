@@ -274,55 +274,27 @@ test('text height grows with contents and chips give the selection actual layout
   await page.getByRole('button', { name: '展开全文' }).click();
   await expect(page.getByRole('button', { name: '收起' })).toHaveAttribute('aria-expanded', 'true');
   await expect.poll(async () => (await clip.boundingBox())!.height).toBeGreaterThan(initial * 3);
-  const before = (await page.getByRole('button', { name: 'Three', exact: true }).boundingBox())!;
+  // This assertion concerns layout space, not the temporary FLIP/scale
+  // transforms applied by Framer Motion (which WebKit samples fractionally).
+  const before = await page
+    .getByRole('button', { name: 'Three', exact: true })
+    .evaluate((el) => (el as HTMLElement).offsetLeft);
   await page.getByRole('button', { name: 'Two', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Two', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
   );
-  await page.evaluate(() => {
-    const buttons = Array.from(
-      document.querySelectorAll<HTMLButtonElement>('.ol-choice-chips button'),
-    );
-    if (buttons.length === 0) throw new Error('choice chips are missing');
-    return new Promise<void>((resolve) => {
-      let previous = buttons.map((button) => {
-        const rect = button.getBoundingClientRect();
-        return [rect.x, rect.width] as const;
-      });
-      let moved = false;
-      let stableFrames = 0;
-      let frames = 0;
-      const sample = () => {
-        frames += 1;
-        const current = buttons.map((button) => {
-          const rect = button.getBoundingClientRect();
-          return [rect.x, rect.width] as const;
-        });
-        const changed = current.some(
-          ([x, width], index) =>
-            Math.abs(x - previous[index][0]) > 0.01 || Math.abs(width - previous[index][1]) > 0.01,
-        );
-        if (changed) {
-          moved = true;
-          stableFrames = 0;
-        } else if (moved) {
-          stableFrames += 1;
-        }
-        if ((moved && stableFrames >= 3) || (!moved && frames >= 3)) {
-          resolve();
-          return;
-        }
-        previous = current;
-        requestAnimationFrame(sample);
-      };
-      requestAnimationFrame(sample);
-    });
-  });
-  const selected = await page.getByRole('button', { name: 'Two', exact: true }).boundingBox();
-  const last = await page.getByRole('button', { name: 'Three', exact: true }).boundingBox();
-  expect(selected!.x + selected!.width).toBeLessThan(last!.x);
-  expect(last!.x).toBeGreaterThanOrEqual(before.x - 1.5);
+  const selected = await page
+    .getByRole('button', { name: 'Two', exact: true })
+    .evaluate((el) => ({
+      x: (el as HTMLElement).offsetLeft,
+      width: (el as HTMLElement).offsetWidth,
+    }));
+  const last = await page
+    .getByRole('button', { name: 'Three', exact: true })
+    .evaluate((el) => (el as HTMLElement).offsetLeft);
+  expect(selected.x + selected.width).toBeLessThan(last);
+  expect(last).toBeGreaterThanOrEqual(before - 1);
 });
 
 test('swipe departure is directional, removable and undoable', async ({ page }) => {

@@ -1513,6 +1513,16 @@ export const es: typeof zhCN = {
       capsuleTranscriptDesc:
         'Muestra el texto reconocido en lugar de las barras de audio. Sin streaming, aparece al recibir el resultado. Desactiva para restaurar la vista original.',
       capsuleTranscriptFontSize: 'Tamaño de la transcripción',
+      capsuleDisplayModeLabel: 'Cápsula en varias pantallas',
+      capsuleDisplayModeDesc:
+        'Elige dónde aparece la cápsula. El modo de todas las pantallas utiliza más ventanas y recursos gráficos.',
+      capsuleDisplayCursorScreen: 'Pantalla bajo el puntero',
+      capsuleDisplayPrimaryScreen: 'Solo pantalla principal',
+      capsuleDisplayForegroundWindowScreen: 'Pantalla de la ventana en primer plano',
+      capsuleDisplayAllScreens: 'Mostrar en todas las pantallas',
+      capsuleDisplayModeRestartTitle: 'Reinicia OpenLess para aplicar el modo de pantalla',
+      capsuleDisplayModeRestartDesc:
+        'Cambiar del modo de todas las pantallas requiere reiniciar para cerrar las cápsulas anteriores. ¿Reiniciar ahora?',
       capsuleStyleLabel: 'Estilo de cápsula',
       capsuleStyleSiri: 'Estilo luminoso Siri',
       capsuleStyleClassic: 'Estilo predeterminado de OpenLess',
@@ -1542,6 +1552,9 @@ export const es: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (predeterminado / mayoría de aplicaciones)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / mayoría de terminales)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Modo de inserción de texto plano',
+      plainTextInsertionDesc:
+        'Al activarlo, el pegado simulado usa Shift+Insert en lugar de Ctrl+V (el atajo superior queda bloqueado mientras esté activo). Actívalo solo en casos muy especiales, p. ej. cuando un cambiador de disposición de teclado como Punto Switcher intercepta Ctrl+V. Solo se aplica al pegado desde el portapapeles (solo Windows).',
       comboRecordLabel: 'Grabar atajo',
       comboRecordDesc:
         'Pulsa aquí y después la combinación deseada (p. ej., ⌘⇧D). Admite los modos Alternar y Mantener para hablar.',

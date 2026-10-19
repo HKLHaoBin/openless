@@ -1492,6 +1492,16 @@ export const en: typeof zhCN = {
       capsuleTranscriptDesc:
         'Show recognized speech in the capsule instead of audio bars. Turn off to restore the original display. Non-streaming recognition appears when results arrive.',
       capsuleTranscriptFontSize: 'Transcript font size',
+      capsuleDisplayModeLabel: 'Multi-display capsule',
+      capsuleDisplayModeDesc:
+        'Choose where the recording capsule appears. Showing it on all displays uses additional windows and graphics resources.',
+      capsuleDisplayCursorScreen: 'Display under the pointer',
+      capsuleDisplayPrimaryScreen: 'Primary display only',
+      capsuleDisplayForegroundWindowScreen: 'Display under the foreground window',
+      capsuleDisplayAllScreens: 'Show on all displays',
+      capsuleDisplayModeRestartTitle: 'Restart OpenLess to apply display mode',
+      capsuleDisplayModeRestartDesc:
+        'Switching from all-screen display requires a restart to clear the previous capsule windows. Restart now?',
       capsuleStyleLabel: 'Capsule style',
       capsuleStyleSiri: 'Shimmer Siri style',
       capsuleStyleClassic: 'OpenLess default style',
@@ -1521,6 +1531,9 @@ export const en: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (default / most apps)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / most terminals)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Plain-text insertion mode',
+      plainTextInsertionDesc:
+        'When on, the simulated paste uses Shift+Insert instead of Ctrl+V (the shortcut above is locked while on). Only enable this in very special cases, e.g. when a keyboard layout switcher such as Punto Switcher swallows Ctrl+V. Applies to clipboard paste insertion only (Windows).',
       comboRecordLabel: 'Record shortcut',
       comboRecordDesc:
         'Click, then press your desired key combination (e.g. \u2318\u21E7D). Supports Toggle and Push-to-talk modes.',
