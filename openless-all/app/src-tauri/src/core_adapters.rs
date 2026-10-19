@@ -1603,6 +1603,11 @@ impl VoiceActivationEmitter {
             }
             let text = state.text.clone();
             let matched = state.recognizer.observe(&text, self.command);
+            // [DEBUG-VOICE-1003] P4 / H2,H3: no transcript content or phrases.
+            crate::recorder::voice_diagnostic("P4", &["H2", "H3"], "command_match", "observed",
+                serde_json::json!({"matched": matched.is_some(), "bound": bound_session_id.is_some(),
+                    "mode": if self.command == VoiceActivationCommand::Wake { "wake" } else { "finish" },
+                    "count": text.chars().count(), "new_segment": is_new_segment, "delta": is_delta}));
             if self.command == VoiceActivationCommand::Finish && bound_session_id.is_none() {
                 state.pending_finish = true;
                 state.pending_finish_match |= matched.is_some();
@@ -1628,7 +1633,13 @@ impl VoiceActivationEmitter {
         };
         let _ = self.sink.publish(signal.clone());
         if let Some(backend) = self.backend.lock().as_ref().and_then(std::sync::Weak::upgrade) {
+            // [DEBUG-VOICE-1003] P6 / H3: dispatch guard facts, without identifiers.
+            crate::recorder::voice_diagnostic("P6", &["H3"], "command_dispatch", "entered",
+                serde_json::json!({"current": backend.voice_activation_generation_is_current(self.generation),
+                    "present": backend.snapshot().dictation.session_id.is_some(),
+                    "mode": if self.command == VoiceActivationCommand::Wake { "wake" } else { "finish" }}));
             backend.handle_voice_activation_signal(signal);
+            crate::recorder::voice_diagnostic("P6", &["H3"], "command_dispatch", "returned", serde_json::json!({}));
         }
     }
 
@@ -1662,7 +1673,13 @@ impl VoiceActivationEmitter {
             };
             let _ = self.sink.publish(signal.clone());
             if let Some(backend) = self.backend.lock().as_ref().and_then(std::sync::Weak::upgrade) {
+                // [DEBUG-VOICE-1003] P6 / H3: dispatch guard facts, without identifiers.
+                crate::recorder::voice_diagnostic("P6", &["H3"], "command_dispatch", "entered",
+                    serde_json::json!({"current": backend.voice_activation_generation_is_current(self.generation),
+                        "present": backend.snapshot().dictation.session_id.is_some(),
+                        "mode": if self.command == VoiceActivationCommand::Wake { "wake" } else { "finish" }}));
                 backend.handle_voice_activation_signal(signal);
+                crate::recorder::voice_diagnostic("P6", &["H3"], "command_dispatch", "returned", serde_json::json!({}));
             }
         } else if !text.is_empty() {
             self.observe(text, false, false);

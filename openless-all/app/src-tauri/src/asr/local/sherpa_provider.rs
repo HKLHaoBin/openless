@@ -290,6 +290,8 @@ impl OnlineWorker {
         let join_handle = std::thread::Builder::new()
             .name(format!("openless-sherpa-online-{alias}"))
             .spawn(move || {
+                // [DEBUG-VOICE-1003] P2 / H1,H2,H4: worker control-message lifecycle.
+                crate::recorder::voice_diagnostic("P2", &["H1", "H2", "H4"], "worker", "started", serde_json::json!({}));
                 let emit = |emission: &SherpaTokenEmission| {
                     if emission.text.is_empty() || worker_cancelled.load(Ordering::SeqCst) {
                         return;
@@ -312,6 +314,7 @@ impl OnlineWorker {
                             }
                         }
                         Ok(OnlineWorkerMessage::FlushSegment) => {
+                            crate::recorder::voice_diagnostic("P2", &["H1", "H2", "H4"], "flush", "received", serde_json::json!({"cancelled": worker_cancelled.load(Ordering::SeqCst)}));
                             if worker_cancelled.load(Ordering::SeqCst) {
                                 break Err(anyhow::anyhow!("sherpa-onnx streaming cancelled"));
                             }
@@ -320,6 +323,7 @@ impl OnlineWorker {
                             }
                         }
                         Ok(OnlineWorkerMessage::Finish) => {
+                            crate::recorder::voice_diagnostic("P2", &["H1", "H2", "H4"], "finish", "received", serde_json::json!({"cancelled": worker_cancelled.load(Ordering::SeqCst)}));
                             if worker_cancelled.load(Ordering::SeqCst) {
                                 break Err(anyhow::anyhow!("sherpa-onnx streaming cancelled"));
                             }
@@ -331,6 +335,7 @@ impl OnlineWorker {
                         }
                     }
                 };
+                crate::recorder::voice_diagnostic("P2", &["H1", "H2", "H4"], "worker", "exiting", serde_json::json!({"ok": result.is_ok(), "cancelled": worker_cancelled.load(Ordering::SeqCst)}));
                 let _ = result_tx.send(result);
             })
             .expect("spawn sherpa online worker");
@@ -401,11 +406,13 @@ impl OnlineWorker {
     }
 
     fn cancel(self) {
+        crate::recorder::voice_diagnostic("P2", &["H1", "H2", "H4"], "cancel", "entered", serde_json::json!({}));
         self.cancelled.store(true, Ordering::SeqCst);
         let _ = self.tx.send(OnlineWorkerMessage::Cancel);
         if let Some(join_handle) = self.join_handle.lock().take() {
             let _ = join_handle.join();
         }
+        crate::recorder::voice_diagnostic("P2", &["H1", "H2", "H4"], "cancel", "returned", serde_json::json!({}));
     }
 }
 

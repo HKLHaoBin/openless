@@ -50,6 +50,55 @@ const ACTIVATION_VAD_PRE_ROLL_BYTES: usize = TARGET_SAMPLE_RATE as usize * 2 / 5
 const ACTIVATION_VAD_HANGOVER_CHUNKS: usize = 8;
 const VOICE_CAPTURE_KEY_PREFIX: u64 = 1 << 63;
 
+// [DEBUG-VOICE-1003] Temporary P1-P6 diagnostics; remove only after user confirmation.
+// Audio/model work never waits for disk I/O. Only the dedicated NDJSON writer opens a file.
+pub(crate) fn voice_diagnostic(
+    probe_id: &'static str,
+    hypothesis_ids: &'static [&'static str],
+    event: &'static str,
+    outcome: &'static str,
+    safe: serde_json::Value,
+) {
+    #[cfg(all(target_os = "windows", not(test)))]
+    {
+        use std::io::Write;
+        static WRITER: OnceLock<Option<SyncSender<serde_json::Value>>> = OnceLock::new();
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        static DROPPED: AtomicU64 = AtomicU64::new(0);
+        static RUN: OnceLock<String> = OnceLock::new();
+        let run = RUN.get_or_init(|| format!("r{:x}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+        let writer = WRITER.get_or_init(|| {
+            let (tx, rx) = sync_channel::<serde_json::Value>(4096);
+            std::thread::Builder::new().name("voice-1003-diagnostics".into()).spawn(move || {
+                let path = std::env::temp_dir().join("openless-1003-3c02ffc1.ndjson");
+                let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) else {
+                    return;
+                };
+                for record in rx {
+                    let Ok(mut line) = serde_json::to_vec(&record) else { continue; };
+                    line.push(b'\n');
+                    if file.write_all(&line).is_err() { break; }
+                }
+            }).ok().map(|_| tx)
+        });
+        if let Some(writer) = writer {
+            let record = serde_json::json!({
+                "schema": "diagnosing-bugs.v1", "session_id": "voice-1003-3c02ffc1",
+                "run_id": run, "probe_id": probe_id, "hypothesis_ids": hypothesis_ids,
+                "event": event, "outcome": outcome, "safe": safe,
+                "seq": SEQUENCE.fetch_add(1, Ordering::Relaxed),
+                "dropped": DROPPED.load(Ordering::Relaxed),
+                "ts": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default().as_millis().to_string(),
+            });
+            if writer.try_send(record).is_err() { DROPPED.fetch_add(1, Ordering::Relaxed); }
+        }
+    }
+    #[cfg(any(not(target_os = "windows"), test))]
+    let _ = (probe_id, hypothesis_ids, event, outcome, safe);
+}
+
 fn voice_capture_key(generation: u64) -> u64 {
     generation | VOICE_CAPTURE_KEY_PREFIX
 }
@@ -479,7 +528,22 @@ impl WarmCaptureSink {
     }
 
     fn deliver_activation(&self, consumer: &Arc<dyn AudioConsumer>, pcm: &[u8]) {
-        let gated = self.activation_vad.lock().gate(pcm);
+        let (gated, was_active, active, hangover) = {
+            let mut vad = self.activation_vad.lock();
+            let was_active = vad.speech_active;
+            let gated = vad.gate(pcm);
+            (gated, was_active, vad.speech_active, vad.hangover_chunks)
+        };
+        // [DEBUG-VOICE-1003] P1 / H1: transitions plus bounded coverage of sustained noise/silence.
+        static BLOCKS: AtomicU64 = AtomicU64::new(0);
+        let blocks = BLOCKS.fetch_add(1, Ordering::Relaxed);
+        if was_active != active || gated.end_of_speech || blocks % 64 == 0 {
+            voice_diagnostic("P1", &["H1"], "vad_gate", "observed", serde_json::json!({
+                "bytes": pcm.len(), "active": active, "hangover": hangover,
+                "forwarded": gated.pcm.is_some(), "boundary": gated.end_of_speech,
+                "count": blocks,
+            }));
+        }
         if let Some(pcm) = gated.pcm {
             consumer.consume_pcm_chunk(&pcm);
         }

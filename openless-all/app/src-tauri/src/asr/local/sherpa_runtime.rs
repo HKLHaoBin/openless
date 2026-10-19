@@ -56,6 +56,9 @@ struct LoadedOfflineModel {
 /// Online model load state. Each dictation session creates its own `OnlineStream` from the recognizer.
 #[derive(Clone)]
 struct LoadedOnlineModel {
+    // [DEBUG-VOICE-1003] Observe overlap without serializing native calls.
+    #[cfg(target_os = "windows")]
+    diagnostic_active: Arc<std::sync::atomic::AtomicUsize>,
     alias: String,
     #[cfg(target_os = "windows")]
     recognizer: Arc<OnlineRecognizer>,
@@ -333,6 +336,12 @@ impl SherpaOnnxRuntime {
         let _lifecycle = self.lifecycle.lock().await;
         let mut state = self.state.lock();
         state.offline_loaded = None;
+        if let Some(loaded) = state.online_loaded.as_ref() {
+            #[cfg(target_os = "windows")]
+            crate::recorder::voice_diagnostic("P5", &["H4"], "cache_owner", "releasing",
+                serde_json::json!({"count": Arc::strong_count(&loaded.recognizer),
+                    "active": loaded.diagnostic_active.load(Ordering::Relaxed)}));
+        }
         state.online_loaded = None;
         Ok(())
     }
@@ -351,6 +360,12 @@ impl SherpaOnnxRuntime {
         }
         let mut state = self.state.lock();
         state.offline_loaded = None;
+        if let Some(loaded) = state.online_loaded.as_ref() {
+            #[cfg(target_os = "windows")]
+            crate::recorder::voice_diagnostic("P5", &["H4"], "cache_owner", "releasing",
+                serde_json::json!({"count": Arc::strong_count(&loaded.recognizer),
+                    "active": loaded.diagnostic_active.load(Ordering::Relaxed)}));
+        }
         state.online_loaded = None;
         Ok(true)
     }
@@ -481,6 +496,7 @@ async fn load_model(alias: &str, dir: &Path) -> Result<LoadedModel> {
             Some(openless_core::LocalAsrExecutionMode::Online) => {
                 let recognizer = create_online_recognizer(&alias, &dir)?;
                 Ok(LoadedModel::Online(LoadedOnlineModel {
+                    diagnostic_active: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                     alias,
                     recognizer: Arc::new(recognizer),
                 }))
@@ -648,6 +664,8 @@ async fn transcribe_loaded_model(
 }
 
 pub struct SherpaOnlineSession {
+    #[cfg(target_os = "windows")]
+    diagnostic_active: Arc<std::sync::atomic::AtomicUsize>,
     alias: String,
     #[cfg(target_os = "windows")]
     recognizer: Arc<OnlineRecognizer>,
@@ -657,6 +675,43 @@ pub struct SherpaOnlineSession {
     last_partial_text: String,
     last_emitted_text: String,
     pending_new_segment: bool,
+}
+
+// [DEBUG-VOICE-1003] P3 / H2,H4: native entry/return and per-recognizer overlap.
+#[cfg(target_os = "windows")]
+struct VoiceNativeProbe<'a> {
+    active: &'a std::sync::atomic::AtomicUsize,
+    stage: &'static str,
+}
+
+#[cfg(target_os = "windows")]
+impl<'a> VoiceNativeProbe<'a> {
+    fn enter(active: &'a std::sync::atomic::AtomicUsize, stage: &'static str) -> Self {
+        let count = active.fetch_add(1, Ordering::Relaxed) + 1;
+        crate::recorder::voice_diagnostic("P3", &["H2", "H4"], "native", "entered",
+            serde_json::json!({"stage": stage, "count": count}));
+        Self { active, stage }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for VoiceNativeProbe<'_> {
+    fn drop(&mut self) {
+        let count = self.active.fetch_sub(1, Ordering::Relaxed) - 1;
+        crate::recorder::voice_diagnostic("P3", &["H2", "H4"], "native", "returned",
+            serde_json::json!({"stage": self.stage, "count": count}));
+    }
+}
+
+// [DEBUG-VOICE-1003] P5 / H4: observe ownership before existing field destruction.
+// No fields are moved, reordered or manually dropped here.
+#[cfg(target_os = "windows")]
+impl Drop for SherpaOnlineSession {
+    fn drop(&mut self) {
+        crate::recorder::voice_diagnostic("P5", &["H4"], "session_owner", "dropping",
+            serde_json::json!({"count": Arc::strong_count(&self.recognizer),
+                "active": self.diagnostic_active.load(Ordering::Relaxed)}));
+    }
 }
 
 impl SherpaOnlineSession {
@@ -696,7 +751,10 @@ impl SherpaOnlineSession {
     where
         F: Fn(&SherpaTokenEmission),
     {
-        self.stream.accept_waveform(16_000, samples);
+        {
+            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "accept");
+            self.stream.accept_waveform(16_000, samples);
+        }
         self.drain_ready(on_token);
         Ok(())
     }
@@ -714,7 +772,10 @@ impl SherpaOnlineSession {
     where
         F: Fn(&SherpaTokenEmission),
     {
-        self.stream.input_finished();
+        {
+            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "input_finished");
+            self.stream.input_finished();
+        }
         self.drain_ready(on_token);
         self.capture_result(on_token, false);
         Ok(self.final_text())
@@ -733,7 +794,10 @@ impl SherpaOnlineSession {
     where
         F: Fn(&SherpaTokenEmission),
     {
-        self.stream.input_finished();
+        {
+            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "input_finished");
+            self.stream.input_finished();
+        }
         self.drain_ready_without_endpoint_reset(on_token);
         self.capture_result(on_token, false);
         if !self.last_partial_text.is_empty() {
@@ -742,7 +806,10 @@ impl SherpaOnlineSession {
         self.last_partial_text.clear();
         self.last_emitted_text.clear();
         self.pending_new_segment = true;
-        self.recognizer.reset(&self.stream);
+        {
+            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "reset");
+            self.recognizer.reset(&self.stream);
+        }
         Ok(())
     }
 
@@ -760,7 +827,10 @@ impl SherpaOnlineSession {
         F: Fn(&SherpaTokenEmission),
     {
         while self.recognizer.is_ready(&self.stream) {
-            self.recognizer.decode(&self.stream);
+            {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "decode");
+                self.recognizer.decode(&self.stream);
+            }
             self.capture_result(on_token, true);
         }
     }
@@ -771,7 +841,10 @@ impl SherpaOnlineSession {
         F: Fn(&SherpaTokenEmission),
     {
         while self.recognizer.is_ready(&self.stream) {
-            self.recognizer.decode(&self.stream);
+            {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "decode");
+                self.recognizer.decode(&self.stream);
+            }
             self.capture_result(on_token, false);
         }
     }
@@ -781,7 +854,15 @@ impl SherpaOnlineSession {
     where
         F: Fn(&SherpaTokenEmission),
     {
-        let Some(result) = self.recognizer.get_result(&self.stream) else {
+        let result = {
+            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "result");
+            self.recognizer.get_result(&self.stream)
+        };
+        crate::recorder::voice_diagnostic("P3", &["H2", "H4"], "native_result", "observed",
+            serde_json::json!({"present": result.is_some(),
+                "count": result.as_ref().map(|result| result.text.chars().count()).unwrap_or(0),
+                "stage": if allow_endpoint_reset { "streaming" } else { "flush" }}));
+        let Some(result) = result else {
             return;
         };
         let text = result.text.trim().to_string();
@@ -795,7 +876,10 @@ impl SherpaOnlineSession {
             self.last_partial_text.clear();
             self.last_emitted_text.clear();
             self.pending_new_segment = true;
-            self.recognizer.reset(&self.stream);
+            {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "reset");
+                self.recognizer.reset(&self.stream);
+            }
         }
     }
 
@@ -849,7 +933,10 @@ fn append_segment(text: &mut String, segment: &str) {
 #[cfg(target_os = "windows")]
 fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<SherpaOnlineSession> {
     let stream = loaded.recognizer.create_stream();
+    crate::recorder::voice_diagnostic("P5", &["H4"], "session_owner", "created",
+        serde_json::json!({"count": Arc::strong_count(&loaded.recognizer)}));
     Ok(SherpaOnlineSession {
+        diagnostic_active: loaded.diagnostic_active,
         alias: loaded.alias,
         recognizer: loaded.recognizer,
         stream,
