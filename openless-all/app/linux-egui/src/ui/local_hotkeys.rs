@@ -79,10 +79,9 @@ mod enter_stop_tests {
         events: Vec<egui::Event>,
         eligible: Option<&str>,
     ) -> (Option<String>, usize) {
-        let mut result = (None, 0);
-        let _ = ctx.run(egui::RawInput { events, ..Default::default() }, |ctx| {
-            result = (matcher.poll(ctx, eligible), ctx.input(|input| input.events.len()));
-        });
+        ctx.begin_pass(egui::RawInput { events, ..Default::default() });
+        let result = (matcher.poll(ctx, eligible), ctx.input(|input| input.events.len()));
+        let _ = crate::ui::frontend::end_pass(ctx);
         result
     }
 

@@ -191,7 +191,7 @@ impl OpenLessEguiApp {
                         self.spawn(async move {
                             host.dispatch_hotkey_event(
                                 LinuxHotkeyEvent::DictationEnterStopRequested {
-                                    session_id: openless_core::SessionId(id),
+                                    session_id: openless_core::SessionId::from_uuid(id),
                                 },
                             )
                             .await?;
