@@ -352,6 +352,8 @@ export interface UserPreferences {
   showCapsule: boolean;
   /** Recording capsule appearance; synced to the capsule window on save. */
   capsuleStyle: CapsuleStyle;
+  capsuleDisplayMode: 'cursorScreen' | 'primaryScreen' | 'foregroundWindowScreen' | 'allScreens';
+  capsuleDisplayModeV2?: UserPreferences['capsuleDisplayMode'];
   capsuleTranscriptEnabled: boolean;
   capsuleTranscriptFontSize: number;
   /** Temporarily mutes system output during recording; restores the original mute state on stop/cancel/error. */
@@ -360,6 +362,8 @@ export interface UserPreferences {
   stableTranscriptionEnabled: boolean;
   /** Keep a bounded microphone pre-roll in memory to reduce the delay before first speech is captured. */
   lowLatencyDictationEnabled: boolean;
+  /** Apply conservative noise suppression, lightweight gain, and soft limiting to local microphone input. Disabled by default. */
+  audioEnhancementEnabled: boolean;
   /** When the recording hotkey enters the recording state, plays a synthesized cue that recording has started.
    *  On by default; synthesized with the Web Audio API in the capsule window, independent of showCapsule. */
   audioCueOnRecord: boolean;
@@ -443,6 +447,8 @@ export interface UserPreferences {
   openAppHotkey: ShortcutBinding | null;
   /** Style pack direct hotkeys: pressing one activates the corresponding style pack. Default empty list (issue #759). */
   stylePackHotkeys: StylePackHotkey[];
+  /** Local opt-in for features under testing. Defaults to false. */
+  testingFeaturesEnabled: boolean;
   /** Less Computer: whether enabled. Off by default. */
   codingAgentEnabled: boolean;
   /** Agent backend: claude-code-cli (default) / opencode-cli / codex-cli / dsh-cli. */
@@ -492,6 +498,8 @@ export interface UserPreferences {
   historyRetentionDays: number;
   /** Conversation-aware polish context window (minutes). 0 = off. Default 5. See PR-A. */
   polishContextWindowMinutes: number;
+  /** Skip LLM polish when the transcript has at most N non-whitespace chars (issue #1032). 0 = off. */
+  polishSkipMaxChars: number;
   /** Run silently at startup (no main window). Common for Windows auto-start — background + tray only,
    *  without the main window popping up. When on, no startup path shows the window; open it from the menu bar / tray. Default false. */
   startMinimized: boolean;
@@ -796,7 +804,7 @@ export type PermissionStatus =
   'granted' | 'denied' | 'notDetermined' | 'restricted' | 'notApplicable' | 'noDevice';
 
 /** Runtime platform kind returned by `get_platform_capabilities`. */
-export type PlatformKind = 'desktop' | 'android' | 'mobile';
+export type PlatformKind = 'desktop' | 'android' | 'harmony' | 'mobile';
 
 /** Feature flags for desktop vs Android APK UI gating. Mirrors src-tauri PlatformCapabilities. */
 export interface PlatformCapabilities {

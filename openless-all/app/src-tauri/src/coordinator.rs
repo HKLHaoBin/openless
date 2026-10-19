@@ -701,7 +701,10 @@ impl Coordinator {
                 startup_error,
             );
 
-            let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(Arc::clone(&app));
+            let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(
+                Arc::clone(&app),
+                Arc::clone(&qa_context),
+            );
             let hotkey_runtime_target = (&backend.get_preferences()).into();
             let inner = Arc::new(Inner {
                 host,
@@ -834,7 +837,10 @@ impl Coordinator {
             startup_error,
         );
 
-        let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(Arc::clone(&app));
+        let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(
+            Arc::clone(&app),
+            Arc::clone(&qa_context),
+        );
         let hotkey_runtime_target = (&backend.get_preferences()).into();
         let inner = Arc::new(Inner {
             host,
@@ -1451,7 +1457,8 @@ impl Coordinator {
 
     pub(crate) fn try_update_translation_hotkey_binding(&self) -> Result<(), String> {
         let target = hotkey_runtime_target(&self.inner);
-        if is_builtin_translation_shift(&target.translation)
+        if is_unconfigured_shortcut(&target.translation)
+            || is_builtin_translation_shift(&target.translation)
             || crate::shortcut_binding::legacy_modifier_trigger(&target.translation).is_some()
         {
             take_translation_hotkey_on_main_thread(&self.inner);
@@ -1544,9 +1551,13 @@ impl Coordinator {
     /// After saving, syncs style, window size, and click region without
     /// waiting for the next recording state event.
     pub fn sync_capsule_style_from_preferences(&self) {
+        let preferences = self.inner.backend.get_preferences();
         self.inner
             .host
-            .cache_capsule_style(self.inner.backend.get_preferences().capsule_style);
+            .cache_capsule_display_mode(preferences.capsule_display_mode);
+        self.inner
+            .host
+            .cache_capsule_style(preferences.capsule_style);
     }
     /// Apply only the Tauri presentation side of the Core-owned vocabulary
     /// suggestion state. Commands mutate the Core collection first, then pass
