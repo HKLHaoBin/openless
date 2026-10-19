@@ -253,6 +253,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun hideOverlay() = withOverlayLock {
         val removed = clearAllOverlayRoots()
+        if (!overlayDisplayAllowed()) {
+            OpenLessAccessibilityService.sendVocabularyCommand("refresh")
+        }
         if (removed > 0) {
             Log.i(TAG, "overlay hidden removed=$removed")
         }
