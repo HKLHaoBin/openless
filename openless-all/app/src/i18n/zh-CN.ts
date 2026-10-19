@@ -1276,6 +1276,15 @@ export const zhCN = {
       cursorContextDesc:
         '润色时把光标附近的一小段文字发给模型作参考，用于专有词、同音词和指代的判断（macOS / Windows / Android）。听写、速记和云笔记都会参考，但上下文本身不会写入笔记、历史或日志；使用云端模型时会随本次润色请求发送给该模型服务。此开关与本地手改学词独立；排除密码框、终端及已知敏感应用。',
     },
+    localMigration: {
+      title: '本地配置迁移',
+      description:
+        '将所有可迁移的本地配置导出为带版本的迁移文件，或在另一台 Android 设备上恢复。分享模式默认脱敏；个人迁移只有在密码保护下才可以携带凭据。原生流程会在合并或替换前展示来源、版本、类别和变更摘要。',
+      safetyNote: '系统权限、OAuth 会话、设备路径和运行时状态不会迁移。导入前会自动创建本地备份。',
+      open: '打开本地迁移',
+      opening: '正在打开…',
+      openFailed: '无法打开本地迁移流程，请从设置页重试。',
+    },
     codingConsole: {
       title: 'Claude 控制台',
       desc: '检测本机 Claude Code 与 MCP（computer use）状态，并护栏化地无头跑一次 Claude、流式查看输出与用量。',
@@ -1993,11 +2002,13 @@ export const zhCN = {
         background: '应用退到后台',
         keyboard: '弹出键盘时',
         always: '始终显示',
+        never: '从不显示',
       },
       androidOverlayTriggerHint: {
         background: '省电、实现简单；其他 App 输入时不会自动出现。',
         keyboard: '该模式已暂缓，历史配置会自动改为“应用退到后台”。',
         always: '入口始终可见，但会一直占屏。',
+        never: '永不自动出现，键盘仍可正常使用。',
       },
       androidOverlayTriggerDisabled: {
         keyboard: '“弹出键盘时”暂缓开放，后续将以悬浮窗手势替代键盘检测。',
@@ -2070,12 +2081,18 @@ export const zhCN = {
       streamingInsertHintMac: '临时切到 ABC 输入源，避免 CJK IME 拦截，会话结束后自动切回。',
       streamingInsertHintWindows: 'SendInput Unicode 直接送字符，绕过 TSF / IME，不切输入法。',
       streamingInsertHintLinux: '通过 fcitx5 插件提交文字；流式输入使用 enigo + XTest 合成按键。',
+      windowsCompositionInputLabel: '实时原文显示在输入框（Windows）',
+      windowsCompositionInputDesc:
+        '录音时把识别到的文字以带下划线的组合文本显示在输入框中，结束后替换为最终结果。需要启用 OpenLess 的 TSF 输入法组件，且目标应用支持文本服务框架（TSF）。',
       streamingInsertSaveClipboardLabel: '同步到剪贴板',
       streamingInsertSaveClipboardHint:
         '插入成功后把最终文本写入剪贴板，方便 Cmd+V 再次粘贴；关闭后流式过程不动剪贴板。',
       localAsrTitle: '本地 ASR 模型',
       localAsrDesc: '把转写从云端切到本机推理。仅推荐离线 / 隐私敏感场景。',
       localAsrWarningShort: '本地推理较慢，配置不足时可能吞字。',
+      localAsrFallbackLabel: '云端识别失败时用本地模型',
+      localAsrFallbackDesc:
+        '网络不好或没网时，用已下载的本地模型识别录音，不再等云端重试。需要先下载本地模型。',
       qwen3Desc: '启动之后，ASR 提供商将被接管。',
       sherpaDesc: '启动之后，ASR 提供商将被接管。',
       foundryDesc: '启动之后，ASR 提供商将被接管。',

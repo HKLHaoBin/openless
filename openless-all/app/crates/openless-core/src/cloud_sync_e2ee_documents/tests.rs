@@ -79,6 +79,7 @@ pub(super) fn channel_snapshot() -> ExportSnapshot {
         enabled: true,
         order: 0,
         active: true,
+        configuration: BTreeMap::new(),
     });
     data.provider_credentials.push(ProviderCredentialRecord {
         channel_id: "llm-one".into(),
@@ -146,6 +147,22 @@ fn enter_stop_preference_merges_as_an_independent_portable_setting() {
 }
 
 #[test]
+fn public_endpoint_rejects_credential_like_hostnames() {
+    assert!(!registry::public_credential_value_safe(
+        "ark.endpoint",
+        "https://sk-live-abc123.example.test"
+    ));
+    assert!(!registry::public_credential_value_safe(
+        "ark.endpoint",
+        "https://token.example.test/v1"
+    ));
+    assert!(registry::public_credential_value_safe(
+        "ark.endpoint",
+        "https://api.example.test/v1"
+    ));
+}
+
+#[test]
 fn testing_features_opt_in_is_never_exported_or_accepted_from_another_device() {
     let mut data = snapshot();
     data.preferences = SecretJson::new(json!({"testingFeaturesEnabled": true}));
@@ -210,6 +227,7 @@ fn local_asr_channels_are_archived_with_their_credentials_not_globally_activated
         enabled: true,
         order: 0,
         active: true,
+        configuration: BTreeMap::new(),
     });
     data.provider_credentials.push(ProviderCredentialRecord {
         channel_id: "local-one".into(),

@@ -1358,6 +1358,17 @@ export const de: typeof zhCN = {
       cursorContextDesc:
         'Einen kurzen Textabschnitt rund um den Cursor als Referenz für Eigennamen, Homophone und Bezüge mit der Überarbeitung an das Modell senden (macOS / Windows / Android). Diktat, Schnellnotizen und Cloud-Notizen nutzen ihn, der Kontext selbst wird aber nie in Notizen, Verlauf oder Protokolle geschrieben; bei einem Cloud-Modell wird er mit der Überarbeitungsanfrage an diesen Anbieter gesendet. Diese Einstellung ist vom lokalen Lernen getrennt. Passwortfelder, Terminals und bekannte sensible Apps sind ausgeschlossen.',
     },
+    localMigration: {
+      title: 'Lokale Konfigurationsmigration',
+      description:
+        'Exportiere alle portablen lokalen Einstellungen in ein versioniertes Paket oder stelle sie auf einem anderen Android-Gerät wieder her. Der Freigabemodus ist standardmäßig anonymisiert; persönliche Migration darf Anmeldedaten nur passwortgeschützt enthalten. Der native Ablauf zeigt Quelle, Version, Kategorien und Änderungen vor dem Zusammenführen oder Ersetzen.',
+      safetyNote:
+        'Systemberechtigungen, OAuth-Sitzungen, Gerätepfade und Laufzeitstatus werden nie migriert. Vor dem Import wird eine lokale Sicherung erstellt.',
+      open: 'Lokale Migration öffnen',
+      opening: 'Wird geöffnet…',
+      openFailed:
+        'Die lokale Migration konnte nicht geöffnet werden. Versuche es erneut über die Einstellungen.',
+    },
     codingConsole: {
       title: 'Claude-Konsole',
       desc: 'Prüft den lokalen Status von Claude Code und MCP (Computersteuerung). Führt Claude unter festgelegten Einschränkungen ohne eigene Oberfläche aus und zeigt Ausgabe und Kosten laufend an.',
@@ -2166,6 +2177,7 @@ export const de: typeof zhCN = {
         background: 'Wenn die App im Hintergrund ist',
         keyboard: 'Wenn die Tastatur erscheint',
         always: 'Immer sichtbar',
+        never: 'Nie anzeigen',
       },
       androidOverlayTriggerHint: {
         background:
@@ -2173,6 +2185,7 @@ export const de: typeof zhCN = {
         keyboard:
           'Dieser Modus wird nicht weitergeführt. Bestehende Einstellungen werden auf „Im Hintergrund“ zurückgesetzt.',
         always: 'Jederzeit verfügbar, aber dauerhaft auf dem Bildschirm.',
+        never: 'Wird nie automatisch angezeigt; die Tastatur bleibt nutzbar.',
       },
       androidOverlayTriggerDisabled: {
         keyboard:
@@ -2258,6 +2271,9 @@ export const de: typeof zhCN = {
         'SendInput gibt Unicode direkt ein und umgeht TSF / IME. Ein Wechsel der Eingabemethode ist nicht erforderlich.',
       streamingInsertHintLinux:
         'Verwendet das fcitx5-Plugin zur Textübermittlung. Laufendes Einfügen simuliert Tasten über enigo + XTest.',
+      windowsCompositionInputLabel: 'Live-Transkript im Eingabefeld anzeigen (Windows)',
+      windowsCompositionInputDesc:
+        'Während du sprichst, erscheint der erkannte Text unterstrichen im Eingabefeld und wird beim Beenden durch das Endergebnis ersetzt. Erfordert die OpenLess-TSF-Eingabekomponente und eine App mit Unterstützung für TSF.',
       streamingInsertSaveClipboardLabel: 'In Zwischenablage kopieren',
       streamingInsertSaveClipboardHint:
         'Kopiert nach erfolgreichem Einfügen den fertigen Text in die Zwischenablage, damit du ihn mit Cmd+V erneut einfügen kannst. Bei „Aus“ bleibt die Zwischenablage unberührt.',
@@ -2266,6 +2282,9 @@ export const de: typeof zhCN = {
         'Verlagert die Transkription von Cloud-ASR auf das Gerät. Für Offline-Nutzung oder sensible Daten.',
       localAsrWarningShort:
         'Lokale Inferenz ist langsamer. Zu schwache Hardware kann Wörter verlieren.',
+      localAsrFallbackLabel: 'Bei Cloud-Fehler lokales Modell verwenden',
+      localAsrFallbackDesc:
+        'Bei schwacher oder fehlender Verbindung wird die Aufnahme mit dem heruntergeladenen lokalen Modell erkannt, statt auf Cloud-Wiederholungen zu warten. Erfordert ein heruntergeladenes lokales Modell.',
       qwen3Desc: 'Nach der Aktivierung übernimmt dieses Modell die Spracherkennung.',
       sherpaDesc: 'Nach der Aktivierung übernimmt dieses Modell die Spracherkennung.',
       foundryDesc: 'Nach der Aktivierung übernimmt dieses Modell die Spracherkennung.',
