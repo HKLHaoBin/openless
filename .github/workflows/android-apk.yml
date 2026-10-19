@@ -528,7 +528,7 @@ jobs:
           out_dir="${{ steps.stage.outputs.out_dir }}"
           {
             echo "${{ steps.stage.outputs.release_files }}"
-            for f in "$out_dir"/*.apk.sig "$out_dir"/latest-android-*.json "$out_dir"/OpenLess_android_*.apk "$out_dir"/OpenLess_android_*.apk.sig; do
+            for f in "$out_dir"/*.apk.sig "$out_dir"/latest-android-*.json "$out_dir"/OpenLess_android_*.apk; do
               [ -e "$f" ] && echo "$f"
             done
           } > "$RUNNER_TEMP/android-release-files.txt"
