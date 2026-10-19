@@ -588,7 +588,11 @@ export function RecordingInputSection() {
               label={t('settings.recording.plainTextInsertionLabel')}
               desc={t('settings.recording.plainTextInsertionDesc')}
             >
-              <Toggle on={plainTextInsertionOn} onToggle={onPlainTextInsertionChange} />
+              <Toggle
+                on={plainTextInsertionOn}
+                onToggle={onPlainTextInsertionChange}
+                label={t('settings.recording.plainTextInsertionLabel')}
+              />
             </SettingRow>
           )}
           {capability.adapter === 'windowsLowLevel' && (
