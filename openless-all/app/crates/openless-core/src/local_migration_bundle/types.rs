@@ -261,6 +261,9 @@ pub struct BundleInspection {
     pub document_count: usize,
     pub tombstone_count: usize,
     pub section_counts: SectionCounts,
+    pub skipped_history: usize,
+    pub skipped_activity: usize,
+    pub skipped_tombstones: usize,
     pub credentials_present: bool,
     pub credentials_encrypted: bool,
     pub credentials_unlocked: bool,
@@ -287,6 +290,8 @@ pub struct SectionCounts {
 pub struct BundleMergePreview {
     pub inspection: BundleInspection,
     pub observed_generation: crate::cloud_sync_e2ee_documents::Revision,
+    pub observed_android_revision: Option<String>,
+    pub removed_documents: Vec<crate::cloud_sync_e2ee_documents::DocumentKey>,
     pub conflicts: Vec<crate::cloud_sync_e2ee_documents::RedactedConflict>,
 }
 

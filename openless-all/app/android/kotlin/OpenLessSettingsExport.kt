@@ -20,7 +20,6 @@ import org.json.JSONObject
 internal object OpenLessSettingsExport {
     const val VERSION = 2
     private const val PREFS_STORE = "openless_ime_ui"
-    private const val MAX_LEARNING_ENTRIES = 20_000
 
     /** One category = one row in the export/import checkbox dialog. Order here is the order shown. */
     enum class Category(val key: String, val labelZh: String, val labelEn: String) {
@@ -82,7 +81,6 @@ internal object OpenLessSettingsExport {
     /** Portable Android-only state that is not represented by Core repositories. */
     fun exportPortable(context: Context): String {
         val app = context.applicationContext
-        check(ImeLearningPolicy.migrate(app)) { "Learning data cleanup failed" }
         val prefs = app.getSharedPreferences(PREFS_STORE, Context.MODE_PRIVATE)
         return JSONObject().apply {
             put("schemaVersion", 1)
@@ -103,15 +101,13 @@ internal object OpenLessSettingsExport {
 
     fun validatePortable(json: String): Boolean = runCatching { parsePortable(json) }.isSuccess
 
-    fun importPortable(context: Context, json: String, mergeLearning: Boolean = false) {
+    internal fun replacePortable(context: Context, json: String, beforeWrite: (String) -> Unit = {}) {
         val app = context.applicationContext
         val root = parsePortable(json)
-        require(root.optInt("learningPrivacyVersion", 0) >= ImeLearningPolicy.PRIVACY_VERSION) {
-            "Portable learning data is outdated"
-        }
         val prefs = app.getSharedPreferences(PREFS_STORE, Context.MODE_PRIVATE)
         val values = root.getJSONObject("preferences")
         val editor = prefs.edit()
+        for (key in listOf("locale", "theme_mode", "key_haptic_enabled", "key_haptic_amplitude", "key_haptic_duration_ms", "english_suggestions_enabled", "key_debug_features_enabled")) editor.remove(key)
         if (values.has("locale")) editor.putString("locale", values.getString("locale"))
         if (values.has("themeMode")) editor.putString("theme_mode", values.getString("themeMode"))
         if (values.has("hapticEnabled")) editor.putBoolean("key_haptic_enabled", values.getBoolean("hapticEnabled"))
@@ -119,34 +115,18 @@ internal object OpenLessSettingsExport {
         if (values.has("hapticDurationMs")) editor.putLong("key_haptic_duration_ms", values.getLong("hapticDurationMs"))
         if (values.has("englishSuggestionsEnabled")) editor.putBoolean("english_suggestions_enabled", values.getBoolean("englishSuggestionsEnabled"))
         if (values.has("debugFeaturesEnabled")) editor.putBoolean("key_debug_features_enabled", values.getBoolean("debugFeaturesEnabled"))
+        beforeWrite("preferences")
         check(editor.commit()) { "Portable settings save failed" }
-        check(ImeLearningPolicy.migrate(app)) { "Learning data cleanup failed" }
-        val stroke = root.getJSONObject("strokeFrequency").toStringMap()
-        val pinyin = root.getJSONObject("pinyinLearnedPhrases").toStringMap()
-        if (mergeLearning) {
-            StrokeUserFrequency(app).importAll(mergeLearningEntries(StrokeUserFrequency(app).exportAll(), stroke))
-            LitePinyinLearnedPhrases(app).importAll(mergeLearningEntries(LitePinyinLearnedPhrases(app).exportAll(), pinyin))
-        } else {
-            StrokeUserFrequency(app).importAll(stroke)
-            LitePinyinLearnedPhrases(app).importAll(pinyin)
-        }
-    }
-
-    private fun mergeLearningEntries(
-        current: Map<String, String>,
-        incoming: Map<String, String>,
-    ): Map<String, String> {
-        val merged = LinkedHashMap<String, String>(MAX_LEARNING_ENTRIES)
-        incoming.forEach { (key, value) -> merged[key] = value }
-        current.forEach { (key, value) ->
-            if (merged.size < MAX_LEARNING_ENTRIES) merged.putIfAbsent(key, value)
-        }
-        return merged
+        beforeWrite("strokeFrequency")
+        StrokeUserFrequency(app).importAll(root.getJSONObject("strokeFrequency").toStringMap())
+        beforeWrite("pinyinLearnedPhrases")
+        LitePinyinLearnedPhrases(app).importAll(root.getJSONObject("pinyinLearnedPhrases").toStringMap())
     }
 
     private fun parsePortable(json: String): JSONObject {
+        require(json.toByteArray(Charsets.UTF_8).size <= 4 * 1024 * 1024)
         val root = JSONObject(json)
-        require(root.optInt("schemaVersion", 0) == 1) { "Unsupported portable settings version" }
+        require(root.opt("schemaVersion") == 1 && root.opt("learningPrivacyVersion") == ImeLearningPolicy.PRIVACY_VERSION) { "Unsupported portable settings version" }
         val allowed = setOf("schemaVersion", "learningPrivacyVersion", "preferences", "strokeFrequency", "pinyinLearnedPhrases")
         val keys = root.keys()
         while (keys.hasNext()) require(keys.next() in allowed) { "Unknown portable settings field" }
@@ -154,14 +134,19 @@ internal object OpenLessSettingsExport {
         val allowedValues = setOf("locale", "themeMode", "hapticEnabled", "hapticAmplitude", "hapticDurationMs", "englishSuggestionsEnabled", "debugFeaturesEnabled")
         val valueKeys = values.keys()
         while (valueKeys.hasNext()) require(valueKeys.next() in allowedValues) { "Unknown portable preference" }
+        for (key in listOf("locale", "themeMode")) if (values.has(key)) require(values.get(key) is String)
+        for (key in listOf("hapticEnabled", "englishSuggestionsEnabled", "debugFeaturesEnabled")) if (values.has(key)) require(values.get(key) is Boolean)
+        for (key in listOf("hapticAmplitude", "hapticDurationMs")) if (values.has(key)) require(values.get(key) is Int || values.get(key) is Long)
         if (values.has("locale")) require(values.getString("locale") in setOf("system", "zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de"))
         if (values.has("themeMode")) require(values.getString("themeMode") in setOf("system", "light", "dark"))
         if (values.has("hapticAmplitude")) require(values.getInt("hapticAmplitude") in 1..255)
         if (values.has("hapticDurationMs")) require(values.getLong("hapticDurationMs") in 1L..1000L)
         require(root.getJSONObject("strokeFrequency").length() <= 20000)
         require(root.getJSONObject("pinyinLearnedPhrases").length() <= 20000)
-        root.getJSONObject("strokeFrequency").toStringMap()
-        root.getJSONObject("pinyinLearnedPhrases").toStringMap()
+        for (key in listOf("strokeFrequency", "pinyinLearnedPhrases")) {
+            val entries = root.getJSONObject(key).toStringMap()
+            require(entries.keys.all { it.isNotEmpty() && it.toByteArray(Charsets.UTF_8).size <= 256 })
+        }
         return root
     }
 
@@ -199,7 +184,7 @@ internal object OpenLessSettingsExport {
                         val amplitude = value.getInt("amplitude")
                         val duration = value.getLong("durationMs")
                         require(amplitude in 1..255 && duration in 1..1000) { "Invalid haptic settings" }
-                        check(prefs.edit().putBoolean("key_haptic_enabled", enabled).putInt("key_haptic_amplitude", amplitude).putLong("key_haptic_duration_ms", duration).commit()) { "Settings save failed" }
+                        check(OpenLessMigrationState.settings { check(prefs.edit().putBoolean("key_haptic_enabled", enabled).putInt("key_haptic_amplitude", amplitude).putLong("key_haptic_duration_ms", duration).commit()) }) { "migration_android_busy" }
                     }
                     Category.STROKE_FREQUENCY -> StrokeUserFrequency(app).importAll(value.toStringMap())
                     Category.PINYIN_LEARNED_PHRASES -> {

@@ -136,15 +136,13 @@ object OpenLessNative {
         mode: String,
         includeCredentials: Boolean,
         password: String,
-        androidPreferencesJson: String,
     ): String
 
     @JvmStatic external fun nativeInspectLocalMigrationBundle(bundleBase64: String): String
-    @JvmStatic external fun nativeExtractLocalMigrationAndroidPreferences(bundleBase64: String, password: String): String
     @JvmStatic external fun nativePreviewLocalMigrationBundle(
         bundleBase64: String,
         password: String,
-        androidPreferencesJson: String,
+        mode: String,
     ): String
 
     @JvmStatic external fun nativeImportLocalMigrationBundle(
@@ -153,6 +151,6 @@ object OpenLessNative {
         mode: String,
         choicesJson: String,
         expectedGeneration: String,
-        androidPreferencesJson: String,
+        expectedAndroidRevision: String,
     ): String
 }

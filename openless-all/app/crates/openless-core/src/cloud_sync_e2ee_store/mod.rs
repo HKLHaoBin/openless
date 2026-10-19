@@ -47,6 +47,8 @@ struct Inner {
     metadata: tokio::sync::Mutex<()>,
     runtime_idle: std::sync::Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
     runtime_effects: std::sync::Mutex<Option<Arc<dyn crate::config::RestoreRuntimeEffects>>>,
+    android_migration:
+        std::sync::OnceLock<Arc<dyn crate::local_migration_bundle::AndroidMigrationState>>,
 }
 
 impl CoreSyncStore {
@@ -83,12 +85,23 @@ impl CoreSyncStore {
                 metadata: tokio::sync::Mutex::new(()),
                 runtime_idle: std::sync::Mutex::new(None),
                 runtime_effects: std::sync::Mutex::new(None),
+                android_migration: std::sync::OnceLock::new(),
             }),
         })
     }
 
     pub fn generation(&self) -> DocumentResult<Revision> {
         self.inner.gate.generation()
+    }
+
+    pub fn bind_android_migration_state(
+        &self,
+        state: Arc<dyn crate::local_migration_bundle::AndroidMigrationState>,
+    ) -> DocumentResult<()> {
+        self.inner
+            .android_migration
+            .set(state)
+            .map_err(|_| DocumentError::InvalidDocument)
     }
     pub fn device(&self) -> SourceDevice {
         self.inner.device.clone()
@@ -240,10 +253,21 @@ impl CoreSyncStore {
         desired: ValidatedSyncDocuments,
         context: RestoreContext,
     ) -> DocumentResult<ExportedDocuments> {
+        self.restore_scope_with_android_revision(desired, context, None)
+            .await
+    }
+
+    async fn restore_scope_with_android_revision(
+        &self,
+        desired: ValidatedSyncDocuments,
+        context: RestoreContext,
+        android_revision: Option<String>,
+    ) -> DocumentResult<ExportedDocuments> {
         self.validate_local_scope(&context.scope)?;
         let scope = context.scope.clone();
         let desired = native::canonicalize_native_documents(desired)?;
-        let plan = crate::cloud_sync_e2ee_documents::prepare_sync_restore(desired, context)?;
+        let plan = crate::cloud_sync_e2ee_documents::prepare_sync_restore(desired, context)?
+            .with_android_revision(android_revision);
         let store = self.clone();
         // Detach only the owned, journalled operation: dropping an IPC waiter cannot cancel it.
         self.spawn_owned(async move {
@@ -528,6 +552,14 @@ struct NativeLease {
     scope: SyncScope,
     scope_id: String,
     permit: ExclusivePermit,
+    android: Option<Box<dyn crate::local_migration_bundle::AndroidMigrationLease>>,
+}
+impl Drop for NativeLease {
+    fn drop(&mut self) {
+        if let Some(android) = &mut self.android {
+            let _ = android.finish(self.store.inner.gate.recovery_required().unwrap_or(true));
+        }
+    }
 }
 impl RestoreBackend for CoreSyncStore {
     fn acquire(
@@ -553,12 +585,49 @@ impl RestoreBackend for CoreSyncStore {
                 scope,
                 scope_id,
                 permit,
+                android: None,
             }) as Box<dyn RestoreLease>)
         })
     }
 }
 
 impl RestoreLease for NativeLease {
+    fn finish_local_state(&mut self) -> DocumentResult<()> {
+        if let Some(android) = &mut self.android {
+            android
+                .finish(false)
+                .map_err(|_| DocumentError::RecoveryRequired)?;
+            self.android = None;
+        }
+        Ok(())
+    }
+    fn prepare_target(
+        &mut self,
+        target: &ValidatedSyncDocuments,
+        revision: Option<&str>,
+    ) -> DocumentResult<()> {
+        if self.scope != self.store.local_bundle_scope() {
+            return if revision.is_none() {
+                Ok(())
+            } else {
+                Err(DocumentError::Unsupported)
+            };
+        }
+        if let Some(value) = android_settings(target) {
+            crate::local_migration_bundle::validate_portable_android_preferences(value)
+                .map_err(|_| DocumentError::InvalidDocument)?;
+            let state = self
+                .store
+                .inner
+                .android_migration
+                .get()
+                .ok_or(DocumentError::Unsupported)?;
+            self.android = Some(state.acquire(revision)?);
+        } else if revision.is_some() {
+            return Err(DocumentError::InvalidDocument);
+        }
+        Ok(())
+    }
     fn capture(
         &mut self,
     ) -> BoxFuture<'_, DocumentResult<crate::cloud_sync_e2ee_documents::ExportSnapshot>> {
@@ -571,9 +640,21 @@ impl RestoreLease for NativeLease {
                     .read_scope(self.scope.clone())
                     .await?,
             )?;
-            self.store
+            let mut snapshot = self
+                .store
                 .capture_native(&self.scope, &self.permit, &state)
-                .await
+                .await?;
+            if let Some(android) = &self.android {
+                let value = android.capture()?;
+                snapshot.retained_documents.retain(|doc| {
+                    !(doc.kind == DocumentKind::UiPreferences
+                        && doc.id == crate::local_migration_bundle::ANDROID_SETTINGS_ID)
+                });
+                snapshot
+                    .retained_documents
+                    .push(android_document(value.into_value()));
+            }
+            Ok(snapshot)
         })
     }
     fn capture_rollback_state(&mut self) -> BoxFuture<'_, DocumentResult<SecretJson>> {
@@ -606,7 +687,12 @@ impl RestoreLease for NativeLease {
             self.store.runtime_effects()?;
             self.store
                 .replace_native(&self.scope, &documents, &self.permit)
-                .await
+                .await?;
+            if let (Some(android), Some(value)) = (&mut self.android, android_settings(&documents))
+            {
+                android.replace(&SecretJson::new(value.clone()))?;
+            }
+            Ok(())
         })
     }
     fn reload(&mut self) -> BoxFuture<'_, DocumentResult<()>> {
@@ -649,16 +735,82 @@ fn receipt(value: gate::GateRestoreReceipt) -> crate::cloud_sync_e2ee_documents:
     }
 }
 
+fn android_settings(documents: &ValidatedSyncDocuments) -> Option<&serde_json::Value> {
+    documents
+        .documents()
+        .documents
+        .iter()
+        .find(|doc| {
+            doc.kind == DocumentKind::UiPreferences
+                && doc.id == crate::local_migration_bundle::ANDROID_SETTINGS_ID
+        })
+        .map(|doc| &doc.value)
+}
+
+fn android_document(value: serde_json::Value) -> LogicalDocument {
+    LogicalDocument {
+        id: crate::local_migration_bundle::ANDROID_SETTINGS_ID.into(),
+        kind: DocumentKind::UiPreferences,
+        schema_version: crate::cloud_sync_e2ee_documents::DOCUMENT_SCHEMA_VERSION,
+        value,
+    }
+}
+
+fn local_bundle_diff(
+    current: &ValidatedSyncDocuments,
+    incoming: &ValidatedSyncDocuments,
+    mode: RestoreMode,
+) -> DocumentResult<crate::cloud_sync_e2ee_documents::MergePreview> {
+    match mode {
+        RestoreMode::Merge => {
+            crate::cloud_sync_e2ee_documents::diff_sync_documents(None, current, incoming)
+        }
+        RestoreMode::Replace => {
+            crate::cloud_sync_e2ee_documents::diff_local_replace_documents(current, incoming)
+        }
+    }
+}
+
+fn merge_android_learning(
+    current: &ValidatedSyncDocuments,
+    desired: &mut ValidatedSyncDocuments,
+) -> Result<(), BundleError> {
+    let Some(local) = android_settings(current) else {
+        return Ok(());
+    };
+    let Some(target) = desired.set.documents.iter_mut().find(|doc| {
+        doc.kind == DocumentKind::UiPreferences
+            && doc.id == crate::local_migration_bundle::ANDROID_SETTINGS_ID
+    }) else {
+        return Ok(());
+    };
+    for key in ["strokeFrequency", "pinyinLearnedPhrases"] {
+        let incoming = target.value[key]
+            .as_object_mut()
+            .ok_or(BundleError::InvalidSchema)?;
+        for (id, value) in local[key].as_object().ok_or(BundleError::InvalidSchema)? {
+            if incoming.len() >= 20_000 {
+                break;
+            }
+            incoming.entry(id.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    crate::local_migration_bundle::validate_portable_android_preferences(&target.value)
+}
+
 impl CoreSyncStore {
     /// Export the complete local state without binding the user file to a cloud account.
     pub async fn export_local_bundle(
         &self,
         options: BundleExportOptions,
     ) -> Result<BundleArtifact, BundleError> {
-        let captured = self
-            .export_scope(self.local_bundle_scope())
-            .await
-            .map_err(BundleError::from)?;
+        let (captured, _) = self.capture_local_bundle().await?;
+        let options = BundleExportOptions {
+            portable_android_preferences: android_settings(&captured.documents)
+                .cloned()
+                .or(options.portable_android_preferences),
+            ..options
+        };
         export_validated_bundle(&captured.documents, options)
     }
 
@@ -667,56 +819,82 @@ impl CoreSyncStore {
         crate::local_migration_bundle::inspect_bundle(bytes)
     }
 
-    fn overlay_portable_android_preferences(
-        current: &ValidatedSyncDocuments,
-        value: Option<serde_json::Value>,
-    ) -> Result<ValidatedSyncDocuments, BundleError> {
-        let Some(value) = value else {
-            return Ok(current.clone());
-        };
-        let mut set = current.documents().clone();
-        set.documents.retain(|document| {
-            !(document.kind == DocumentKind::UiPreferences
-                && document.id == "androidPortableSettings")
-        });
-        set.documents.push(LogicalDocument {
-            id: "androidPortableSettings".into(),
-            kind: DocumentKind::UiPreferences,
-            schema_version: crate::cloud_sync_e2ee_documents::DOCUMENT_SCHEMA_VERSION,
-            value,
-        });
-        crate::cloud_sync_e2ee_documents::revalidate_sync_documents(
-            set,
-            current.observed_revision(),
-        )
-        .map_err(BundleError::from)
+    async fn capture_local_bundle(
+        &self,
+    ) -> Result<(ExportedDocuments, Option<String>), BundleError> {
+        let platform = self.inner.android_migration.get();
+        let android = platform.map(|state| state.capture()).transpose()?;
+        let mut captured = self.export_scope(self.local_bundle_scope()).await?;
+        if let Some(snapshot) = &android {
+            crate::local_migration_bundle::validate_portable_android_preferences(
+                snapshot.value.expose(),
+            )?;
+            captured.documents.set.documents.retain(|doc| {
+                !(doc.kind == DocumentKind::UiPreferences
+                    && doc.id == crate::local_migration_bundle::ANDROID_SETTINGS_ID)
+            });
+            captured
+                .documents
+                .set
+                .documents
+                .push(android_document(snapshot.value.expose().clone()));
+            captured.documents = crate::cloud_sync_e2ee_documents::revalidate_sync_documents(
+                captured.documents.set.clone(),
+                captured.documents.observed_revision(),
+            )?;
+            if platform.expect("captured platform").capture()?.revision != snapshot.revision {
+                return Err(BundleError::StalePreview);
+            }
+        }
+        Ok((captured, android.map(|snapshot| snapshot.revision)))
     }
 
     pub async fn preview_local_bundle(
         &self,
         bytes: &[u8],
         password: Option<BundlePassword>,
-        portable_android_preferences: Option<serde_json::Value>,
+        mode: RestoreMode,
     ) -> Result<BundleMergePreview, BundleError> {
-        let scope = self.local_bundle_scope();
-        let captured = self.export_scope(scope).await.map_err(BundleError::from)?;
+        let (captured, observed_android_revision) = self.capture_local_bundle().await?;
         let generation = captured.generation;
-        let current = Self::overlay_portable_android_preferences(
-            &captured.documents,
-            portable_android_preferences,
-        )?;
+        let current = captured.documents;
         let decoded = decode_bundle(bytes, password.as_ref(), generation)?;
         let inspection = decoded.inspection.clone();
-        let bundle_documents = self.prepare_bundle_documents(&current, decoded)?;
-        let preview = crate::cloud_sync_e2ee_documents::diff_sync_documents(
-            None,
-            &current,
-            &bundle_documents,
-        )
-        .map_err(BundleError::from)?;
+        let incoming = self.prepare_bundle_documents(&current, decoded)?;
+        let removed_documents = if mode == RestoreMode::Replace {
+            current
+                .documents()
+                .documents
+                .iter()
+                // The native restore materializes missing preferences and built-in styles.
+                .filter(|doc| {
+                    !matches!(
+                        doc.kind,
+                        DocumentKind::Preferences | DocumentKind::UiPreferences
+                    ) && !(doc.kind == DocumentKind::StylePacks
+                        && doc.value["pack"]["kind"] == "builtin")
+                })
+                .filter(|doc| {
+                    !incoming
+                        .documents()
+                        .documents
+                        .iter()
+                        .any(|other| other.kind == doc.kind && other.id == doc.id)
+                })
+                .map(|doc| crate::cloud_sync_e2ee_documents::DocumentKey {
+                    kind: doc.kind,
+                    id: doc.id.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let preview = local_bundle_diff(&current, &incoming, mode)?;
         Ok(BundleMergePreview {
             inspection,
             observed_generation: generation,
+            observed_android_revision,
+            removed_documents,
             conflicts: preview.conflicts().to_vec(),
         })
     }
@@ -730,17 +908,14 @@ impl CoreSyncStore {
         mode: RestoreMode,
         choices: &[ConflictChoice],
         expected_generation: Option<Revision>,
-        portable_android_preferences: Option<serde_json::Value>,
+        expected_android_revision: Option<String>,
     ) -> Result<BundleInspection, BundleError> {
         let scope = self.local_bundle_scope();
-        let captured = self
-            .export_scope(scope.clone())
-            .await
-            .map_err(BundleError::from)?;
-        let current = Self::overlay_portable_android_preferences(
-            &captured.documents,
-            portable_android_preferences.clone(),
-        )?;
+        let (captured, android_revision) = self.capture_local_bundle().await?;
+        if android_revision != expected_android_revision {
+            return Err(BundleError::StalePreview);
+        }
+        let current = captured.documents.clone();
         let generation = captured.generation;
         if expected_generation.is_some_and(|expected| expected != generation) {
             return Err(BundleError::StalePreview);
@@ -748,18 +923,11 @@ impl CoreSyncStore {
         let decoded = decode_bundle(bytes, password.as_ref(), generation)?;
         let inspection = decoded.inspection.clone();
         let bundle_documents = self.prepare_bundle_documents(&current, decoded)?;
-        let desired = match mode {
-            RestoreMode::Replace => bundle_documents,
-            RestoreMode::Merge => {
-                let preview = crate::cloud_sync_e2ee_documents::diff_sync_documents(
-                    None,
-                    &current,
-                    &bundle_documents,
-                )
-                .map_err(BundleError::from)?;
-                preview.resolve(choices).map_err(BundleError::from)?
-            }
-        };
+        let mut desired = local_bundle_diff(&current, &bundle_documents, mode)?.resolve(choices)?;
+        if mode == RestoreMode::Merge {
+            merge_android_learning(&current, &mut desired)?;
+        }
+        let portable_android_preferences = android_settings(&current).cloned();
         let backup_options = if inspection.credentials_present {
             BundleExportOptions {
                 mode: crate::local_migration_bundle::BundleMode::PersonalMigration,
@@ -784,7 +952,7 @@ impl CoreSyncStore {
             local_generation: generation,
             target_device: self.inner.device.clone(),
         };
-        self.restore_scope(desired, context)
+        self.restore_scope_with_android_revision(desired, context, android_revision)
             .await
             .map_err(BundleError::from)?;
         Ok(inspection)
@@ -793,10 +961,45 @@ impl CoreSyncStore {
     fn prepare_bundle_documents(
         &self,
         current: &ValidatedSyncDocuments,
-        decoded: crate::local_migration_bundle::DecodedBundle,
+        mut decoded: crate::local_migration_bundle::DecodedBundle,
     ) -> Result<ValidatedSyncDocuments, BundleError> {
         use crate::cloud_sync_e2ee_documents::DocumentKind;
 
+        decoded
+            .documents
+            .set
+            .documents
+            .retain(|doc| !matches!(doc.kind, DocumentKind::History | DocumentKind::Activity));
+        decoded
+            .documents
+            .set
+            .tombstones
+            .retain(|doc| !matches!(doc.kind, DocumentKind::History | DocumentKind::Activity));
+        decoded.documents.set.documents.extend(
+            current
+                .documents()
+                .documents
+                .iter()
+                .filter(|doc| matches!(doc.kind, DocumentKind::History | DocumentKind::Activity))
+                .cloned(),
+        );
+        decoded.documents.set.tombstones.extend(
+            current
+                .documents()
+                .tombstones
+                .iter()
+                .filter(|doc| matches!(doc.kind, DocumentKind::History | DocumentKind::Activity))
+                .cloned(),
+        );
+        if android_settings(&decoded.documents).is_none() {
+            if let Some(value) = android_settings(current) {
+                decoded
+                    .documents
+                    .set
+                    .documents
+                    .push(android_document(value.clone()));
+            }
+        }
         if !matches!(
             decoded.inspection.mode,
             crate::local_migration_bundle::BundleMode::ShareRedacted
@@ -971,7 +1174,7 @@ impl CoreSyncStore {
                 value: json!({
                     "channelId": channel_id,
                     "namespace": namespace,
-                    "accounts": {},
+                    "accounts": channel_value.get("configuration").cloned().unwrap_or_else(|| json!({})),
                 }),
             });
         }

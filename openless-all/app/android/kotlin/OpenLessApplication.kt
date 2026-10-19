@@ -20,6 +20,7 @@ class OpenLessApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         OpenLessAppContext.initialize(this)
+        OpenLessMigrationState.attach(this)
         // #region agent log
         // Baseline JNI Context so overlay/dictation notifies work even when
         // neither RuntimeService (IME) nor OverlayService has started yet.
@@ -209,6 +210,7 @@ class OpenLessApplication : Application() {
             return null
         }
         val webView = findWebView(activity.window.decorView) ?: return
+        val mirrorRevision = OpenLessMigrationState.mirrorRevision() ?: return
         webView.evaluateJavascript(
             "(function(){return localStorage.getItem('ol.locale') || document.documentElement.lang || navigator.language;})()",
         ) { result ->
@@ -216,7 +218,7 @@ class OpenLessApplication : Application() {
             if (!locale.matches(Regex("[a-z]{2,3}(-[a-z0-9]{2,8})*"))) return@evaluateJavascript
             val prefs = getSharedPreferences("openless_ime_ui", MODE_PRIVATE)
             if (prefs.getString("locale", null) != locale) {
-                prefs.edit().putString("locale", locale).apply()
+                OpenLessMigrationState.mirror(mirrorRevision) { prefs.edit().putString("locale", locale).apply() }
             }
         }
     }
@@ -242,6 +244,7 @@ class OpenLessApplication : Application() {
             return null
         }
         val webView = findWebView(activity.window.decorView) ?: return
+        val mirrorRevision = OpenLessMigrationState.mirrorRevision() ?: return
         webView.evaluateJavascript(
             """
             (function(){
@@ -261,7 +264,7 @@ class OpenLessApplication : Application() {
             if (theme != "dark" && theme != "light") return@evaluateJavascript
             val prefs = getSharedPreferences("openless_ime_ui", MODE_PRIVATE)
             if (prefs.getString("theme_mode", null) != theme) {
-                prefs.edit().putString("theme_mode", theme).apply()
+                OpenLessMigrationState.mirror(mirrorRevision) { prefs.edit().putString("theme_mode", theme).apply() }
             }
         }
     }

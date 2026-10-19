@@ -122,11 +122,7 @@ pub fn inspect_bundle(bytes: &[u8]) -> BundleResult<BundleInspection> {
     let entries = read_entries(bytes)?;
     let manifest = decode_manifest(&entries)?;
     let documents = validate_document_entry(&manifest, &entries)?;
-    let counts = section_counts(&documents)?;
-    Ok(inspection(&manifest, &documents, false)).map(|mut value| {
-        value.section_counts = counts;
-        value
-    })
+    Ok(inspection(&manifest, &documents, false))
 }
 
 pub fn decode_bundle(
@@ -167,13 +163,43 @@ pub fn decode_bundle(
         credentials_unlocked = true;
     }
     let bytes = serde_json::to_vec(&root).map_err(|_| BundleError::InvalidSchema)?;
-    let documents = if manifest.credentials.is_none() {
+    let mut documents = if manifest.credentials.is_none() {
         parse_redacted_sync_documents(&bytes, observed_revision)
     } else {
         parse_sync_documents(&bytes, observed_revision)
     }
     .map_err(BundleError::from)?;
     let inspection = inspection(&manifest, &root, credentials_unlocked);
+    for document in &mut documents.set.documents {
+        if document.kind == DocumentKind::UiPreferences && document.id == super::ANDROID_SETTINGS_ID
+        {
+            let preferences = document.value["preferences"]
+                .as_object_mut()
+                .ok_or(BundleError::InvalidSchema)?;
+            for (key, value) in [
+                ("hapticEnabled", json!(true)),
+                ("hapticAmplitude", json!(55)),
+                ("hapticDurationMs", json!(12)),
+                ("englishSuggestionsEnabled", json!(true)),
+                ("debugFeaturesEnabled", json!(false)),
+            ] {
+                preferences.entry(key).or_insert(value);
+            }
+        }
+    }
+    // Validate old bundles before dropping usage data; local migration never restores it.
+    documents.set.documents.retain(|document| {
+        !matches!(
+            document.kind,
+            DocumentKind::History | DocumentKind::Activity
+        )
+    });
+    documents.set.tombstones.retain(|document| {
+        !matches!(
+            document.kind,
+            DocumentKind::History | DocumentKind::Activity
+        )
+    });
     Ok(DecodedBundle {
         inspection,
         documents,
@@ -201,7 +227,7 @@ fn assemble_bundle(
     let mut credential_documents = Vec::new();
     source_documents.retain(|document| {
         let kind = document.get("kind").and_then(Value::as_str);
-        if kind == Some("device_profile") {
+        if matches!(kind, Some("device_profile" | "history" | "activity")) {
             return false;
         }
         if kind == Some("provider_credentials") {
@@ -256,7 +282,10 @@ fn assemble_bundle(
         .and_then(Value::as_array_mut)
     {
         tombstones.retain(|tombstone| {
-            !(matches!(options.mode, BundleMode::ShareRedacted)
+            !matches!(
+                tombstone.get("kind").and_then(Value::as_str),
+                Some("history" | "activity" | "device_profile")
+            ) && !(matches!(options.mode, BundleMode::ShareRedacted)
                 && matches!(
                     tombstone.get("kind").and_then(Value::as_str),
                     Some("provider_credentials" | "device_profile")
@@ -317,7 +346,7 @@ fn assemble_bundle(
             kdf: "argon2id".into(),
             aead: "xchacha20poly1305".into(),
         }),
-        sections: section_counts(&root)?,
+        sections: section_counts(&root, false)?,
         permissions_migrated: false,
         device_profile_migrated: false,
     };
@@ -335,6 +364,28 @@ fn assemble_bundle(
 }
 
 fn inspection(manifest: &Manifest, root: &Value, credentials_unlocked: bool) -> BundleInspection {
+    let skipped_history = root["documents"].as_array().map_or(0, |documents| {
+        documents
+            .iter()
+            .filter(|doc| doc["kind"] == "history")
+            .count()
+    });
+    let skipped_activity = root["documents"].as_array().map_or(0, |documents| {
+        documents
+            .iter()
+            .filter(|doc| doc["kind"] == "activity")
+            .count()
+    });
+    let skipped_tombstones = root["tombstones"].as_array().map_or(0, |documents| {
+        documents
+            .iter()
+            .filter(|doc| matches!(doc["kind"].as_str(), Some("history" | "activity")))
+            .count()
+    });
+    let mut section_counts =
+        section_counts(root, credentials_unlocked).expect("validated document kinds");
+    section_counts.history = 0;
+    section_counts.activity = 0;
     let (document_count, tombstone_count) = root
         .as_object()
         .map(|object| {
@@ -358,9 +409,12 @@ fn inspection(manifest: &Manifest, root: &Value, credentials_unlocked: bool) -> 
         created_at: manifest.created_at.clone(),
         platform: manifest.platform.clone(),
         mode: manifest.mode,
-        document_count,
-        tombstone_count,
-        section_counts: manifest.sections.clone(),
+        document_count: document_count - skipped_history - skipped_activity,
+        tombstone_count: tombstone_count - skipped_tombstones,
+        section_counts,
+        skipped_history,
+        skipped_activity,
+        skipped_tombstones,
         credentials_present: manifest.credentials.is_some(),
         credentials_encrypted: manifest.credentials.is_some(),
         credentials_unlocked,
@@ -427,6 +481,15 @@ fn validate_document_entry(
     {
         return Err(BundleError::InvalidSchema);
     }
+    section_counts(&root, false)?;
+    for document in root["documents"]
+        .as_array()
+        .ok_or(BundleError::InvalidSchema)?
+    {
+        if document["kind"] == "ui_preferences" && document["id"] == "androidPortableSettings" {
+            validate_portable_android_preferences(&document["value"])?;
+        }
+    }
     if let Some(credentials) = &manifest.credentials {
         let bytes = entries
             .get(&credentials.entry)
@@ -440,7 +503,7 @@ fn validate_document_entry(
     Ok(root)
 }
 
-fn section_counts(root: &Value) -> BundleResult<SectionCounts> {
+fn section_counts(root: &Value, credentials_unlocked: bool) -> BundleResult<SectionCounts> {
     let mut counts = SectionCounts::default();
     for document in root
         .get("documents")
@@ -457,6 +520,7 @@ fn section_counts(root: &Value) -> BundleResult<SectionCounts> {
             Some("style_packs") => counts.style_packs += 1,
             Some("history") => counts.history += 1,
             Some("activity") => counts.activity += 1,
+            Some("provider_credentials") if credentials_unlocked => {}
             Some("provider_credentials") | Some("device_profile") => {
                 return Err(BundleError::InvalidSchema)
             }

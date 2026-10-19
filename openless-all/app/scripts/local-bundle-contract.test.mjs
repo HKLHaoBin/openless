@@ -34,8 +34,17 @@ assert.match(migrationActivity, /RadioButton/);
 assert.match(migrationActivity, /checkedRadioButtonId/);
 assert.doesNotMatch(migrationActivity, /setSingleChoiceItems/);
 assert.match(migrationActivity, /migration_bundle_stale_preview/);
-assert.match(migrationActivity, /showMigrationRestoreMode\(bundleBase64, password, allowStaleRetry = false\)/);
+assert.match(
+  migrationActivity,
+  /previewMigration\(bundleBase64, password, mode, allowStaleRetry = false\)/,
+);
 assert.match(migrationActivity, /observedGeneration.*isNotBlank/);
+assert.match(migrationActivity, /observedAndroidRevision.*isNotBlank/);
+assert.doesNotMatch(
+  migrationActivity,
+  /nativeExtractLocalMigrationAndroidPreferences|importPortable/,
+);
+assert.match(scaffolding, /OpenLessMigrationState\.kt/);
 assert.match(migrationActivity, /documents\.json/);
 assert.doesNotMatch(migrationActivity, /pendingExportJson/);
 assert.doesNotMatch(

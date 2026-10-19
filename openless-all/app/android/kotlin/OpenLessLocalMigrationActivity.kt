@@ -399,7 +399,6 @@ class OpenLessLocalMigrationActivity : Activity() {
                         mode,
                         includeCredentials,
                         password,
-                        OpenLessSettingsExport.exportPortable(this),
                     ),
                 )
                 check(envelope.optBoolean("ok")) { envelope.optString("error", "export failed") }
@@ -432,6 +431,8 @@ class OpenLessLocalMigrationActivity : Activity() {
         append(ui("凭据：", "Credentials: ")).append(
             if (inspection.optBoolean("credentialsEncrypted")) ui("已加密", "password protected") else ui("未携带", "not included"),
         ).append('\n')
+        val skipped = inspection.optInt("skippedHistory") + inspection.optInt("skippedActivity") + inspection.optInt("skippedTombstones")
+        if (skipped > 0) appendLine(ui("已跳过历史、统计及删除标记：$skipped 项", "Skipped history, activity and deletion markers: $skipped"))
         append(ui("系统权限不会迁移，目标设备需重新授权。", "System permissions do not migrate; authorize them again on the destination device."))
     }
 
@@ -451,39 +452,31 @@ class OpenLessLocalMigrationActivity : Activity() {
             .show()
     }
 
-    private fun showMigrationRestoreMode(
-        bundleBase64: String,
-        password: String,
-        allowStaleRetry: Boolean = true,
-    ) {
+    private fun showMigrationRestoreMode(bundleBase64: String, password: String) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(ui("导入方式", "Restore mode"))
+            .setItems(arrayOf(ui("合并", "Merge"), ui("替换", "Replace"))) { _, which ->
+                previewMigration(bundleBase64, password, if (which == 0) "merge" else "replace")
+            }
+            .setNegativeButton(ui("取消", "Cancel"), null)
+            .show()
+    }
+
+    private fun previewMigration(bundleBase64: String, password: String, mode: String, allowStaleRetry: Boolean = true) {
         Thread {
             val previewResult = runCatching {
-                val response = org.json.JSONObject(
-                    OpenLessNative.nativePreviewLocalMigrationBundle(
-                        bundleBase64,
-                        password,
-                        OpenLessSettingsExport.exportPortable(this@OpenLessLocalMigrationActivity),
-                    ),
-                )
+                val response = org.json.JSONObject(OpenLessNative.nativePreviewLocalMigrationBundle(bundleBase64, password, mode))
                 check(response.optBoolean("ok")) { response.optString("error", "preview failed") }
                 response.getJSONObject("payload").also { preview ->
                     check(preview.optString("observedGeneration").isNotBlank()) { "preview missing observed generation" }
+                    check(preview.optString("observedAndroidRevision").isNotBlank()) { "preview missing Android revision" }
                 }
             }
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 previewResult.onSuccess { preview ->
-                    val conflicts = preview.getJSONArray("conflicts")
-                    val expectedGeneration = preview.optString("observedGeneration")
-                    chooseMigrationConflicts(bundleBase64, password, conflicts, 0, org.json.JSONArray()) {
-                        showMigrationRestoreModeAfterConflicts(
-                            bundleBase64,
-                            password,
-                            expectedGeneration,
-                            conflicts,
-                            it,
-                            allowStaleRetry,
-                        )
+                    chooseMigrationConflicts(bundleBase64, password, preview.getJSONArray("conflicts"), 0, org.json.JSONArray()) { choices ->
+                        confirmMigration(bundleBase64, password, mode, preview, choices, allowStaleRetry)
                     }
                 }.onFailure { error ->
                     Toast.makeText(this, ui("预览失败：${error.message}", "Preview failed: ${error.message}"), Toast.LENGTH_LONG).show()
@@ -513,7 +506,10 @@ class OpenLessLocalMigrationActivity : Activity() {
             setPadding(dp(24), dp(8), dp(24), 0)
         }
         content.addView(TextView(this).apply {
-            text = "$kind / $reason$credential"
+            text = buildString {
+                appendLine("$kind / ${conflict.optString("documentId")}")
+                append("$reason$credential")
+            }
             textSize = 14f
             setTextColor(tone(Color.rgb(220, 220, 220), Color.rgb(50, 50, 55)))
             setPadding(0, 0, 0, dp(8))
@@ -563,93 +559,46 @@ class OpenLessLocalMigrationActivity : Activity() {
         dialog.show()
     }
 
-    private fun portableConflictSide(
-        conflicts: org.json.JSONArray,
-        choices: org.json.JSONArray,
-    ): String? {
-        for (i in 0 until conflicts.length()) {
-            val conflict = conflicts.getJSONObject(i)
-            if (conflict.optString("documentId") != "androidPortableSettings") continue
-            val conflictId = conflict.optString("conflictId")
-            for (j in 0 until choices.length()) {
-                val choice = choices.getJSONObject(j)
-                if (choice.optString("conflictId") == conflictId) {
-                    return choice.optString("side")
-                }
-            }
-        }
-        return null
-    }
-
-    private fun showMigrationRestoreModeAfterConflicts(
+    private fun confirmMigration(
         bundleBase64: String,
         password: String,
-        expectedGeneration: String,
-        conflicts: org.json.JSONArray,
+        mode: String,
+        preview: org.json.JSONObject,
         choices: org.json.JSONArray,
         allowStaleRetry: Boolean,
     ) {
-        val modes = arrayOf(ui("合并", "Merge"), ui("替换", "Replace"))
+        val message = buildString {
+            append(ui("两种模式都会保留你明确选择的本机冲突项。历史、统计和系统权限不会被替换。", "Both modes honor your Keep this device choices. History, activity and system permissions are not replaced."))
+            val removed = preview.getJSONArray("removedDocuments")
+            if (mode == "replace" && removed.length() > 0) {
+                appendLine().appendLine().append(ui("以下本机独有配置将移除（冲突中明确保留的项目除外）：", "Receiver-only configuration to remove, except items explicitly kept in conflict choices:"))
+                for (i in 0 until removed.length()) {
+                    val item = removed.getJSONObject(i)
+                    appendLine().append(item.optString("kind")).append(" / ").append(item.optString("id"))
+                }
+            }
+        }
         android.app.AlertDialog.Builder(this)
-            .setTitle(ui("导入方式", "Restore mode"))
-            .setItems(modes) { _, which ->
-                val mode = if (which == 0) "merge" else "replace"
+            .setTitle(if (mode == "replace") ui("确认替换", "Confirm Replace") else ui("确认合并", "Confirm Merge"))
+            .setMessage(message)
+            .setPositiveButton(ui("应用配置", "Apply configuration")) { _, _ ->
                 Thread {
-                    val applyPortable = mode == "replace" || portableConflictSide(conflicts, choices) != "local"
-                    val mergePortableLearning = mode == "merge" && applyPortable
                     val result = runCatching {
-                        val response = org.json.JSONObject(
-                            OpenLessNative.nativeImportLocalMigrationBundle(
-                                bundleBase64,
-                                password,
-                                mode,
-                                choices.toString(),
-                                expectedGeneration,
-                                OpenLessSettingsExport.exportPortable(this@OpenLessLocalMigrationActivity),
-                            ),
-                        )
+                        val response = org.json.JSONObject(OpenLessNative.nativeImportLocalMigrationBundle(
+                            bundleBase64, password, mode, choices.toString(),
+                            preview.getString("observedGeneration"), preview.getString("observedAndroidRevision"),
+                        ))
                         check(response.optBoolean("ok")) { response.optString("error", "import failed") }
-                        val payload = response.getJSONObject("payload")
-                        val portableResponse = org.json.JSONObject(
-                            OpenLessNative.nativeExtractLocalMigrationAndroidPreferences(bundleBase64, password),
-                        )
-                        check(portableResponse.optBoolean("ok")) { portableResponse.optString("error", "portable settings read failed") }
-                        val portable = portableResponse.getJSONObject("payload").opt("preferences")
-                        if (portable !is org.json.JSONObject && portable != org.json.JSONObject.NULL) {
-                            error("invalid portable Android settings")
-                        }
-                        Triple(
-                            payload,
-                            (portable as? org.json.JSONObject)?.toString(),
-                            applyPortable to mergePortableLearning,
-                        )
                     }
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
-                        result.onSuccess { (_, portableJson, portableOptions) ->
-                            runCatching {
-                                if (portableOptions.first) {
-                                    portableJson?.let {
-                                        OpenLessSettingsExport.importPortable(this, it, portableOptions.second)
-                                    }
-                                }
-                            }.onSuccess {
-                                Toast.makeText(this, ui("导入完成，备份已保留", "Import complete; backup retained"), Toast.LENGTH_LONG).show()
-                                setContentView(buildContent())
-                            }.onFailure { error ->
-                                Toast.makeText(this, ui("核心数据已导入，但 Android 偏好未应用：${error.message}", "Core data imported, but Android preferences were not applied: ${error.message}"), Toast.LENGTH_LONG).show()
-                            }
+                        result.onSuccess {
+                            Toast.makeText(this, ui("导入完成，备份已保留", "Import complete; backup retained"), Toast.LENGTH_LONG).show()
+                            setContentView(buildContent())
                         }.onFailure { error ->
                             if (allowStaleRetry && error.message?.contains("migration_bundle_stale_preview") == true) {
-                                Toast.makeText(
-                                    this,
-                                    ui(
-                                        "本地配置在确认后发生变化，正在重新预览；请再次确认导入方式。",
-                                        "Local configuration changed after review. Rechecking the preview; please confirm the restore mode again.",
-                                    ),
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                                showMigrationRestoreMode(bundleBase64, password, allowStaleRetry = false)
+                                Toast.makeText(this, ui("本机配置已变化，请重新确认预览", "Local configuration changed; review the new preview"), Toast.LENGTH_LONG).show()
+                                previewMigration(bundleBase64, password, mode, allowStaleRetry = false)
                             } else {
                                 Toast.makeText(this, ui("导入未完成：${error.message}", "Import not completed: ${error.message}"), Toast.LENGTH_LONG).show()
                             }

@@ -154,3 +154,102 @@ fn container_rejects_unknown_entries() {
         Err(BundleError::MalformedContainer)
     ));
 }
+
+#[test]
+fn review_default_share_does_not_contain_history() {
+    let mut set = fixture().documents().clone();
+    set.documents.push(serde_json::from_value(json!({"id":"private-history","kind":"history","schemaVersion":1,"value":{"id":"private-history","createdAt":"2026-09-26T00:00:00Z","source":"quick_note","rawTranscript":"PRIVATE_DICTATION_MARKER","finalText":"PRIVATE_DICTATION_MARKER","mode":"raw","insertStatus":"notRequested","hasAudioRecording":false,"sortIndex":0}})).unwrap());
+    let docs = parse_sync_documents(&serde_json::to_vec(&set).unwrap(), Revision::new(0)).unwrap();
+    let artifact = export_validated_bundle(&docs, BundleExportOptions::default()).unwrap();
+    let mut archive = zip::ZipArchive::new(Cursor::new(&artifact.bytes[..])).unwrap();
+    let mut raw = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("documents.json").unwrap(), &mut raw)
+        .unwrap();
+    assert!(
+        !raw.contains("PRIVATE_DICTATION_MARKER"),
+        "default redacted share contains plaintext dictation history"
+    );
+}
+
+#[test]
+fn both_modes_exclude_usage_records_and_tombstones() {
+    let mut set = fixture().documents().clone();
+    set.documents.push(serde_json::from_value(json!({"id":"history-private","kind":"history","schemaVersion":1,"value":{"id":"history-private","createdAt":"2026-09-26T00:00:00Z","source":"quick_note","rawTranscript":"PRIVATE_HISTORY","finalText":"PRIVATE_HISTORY","mode":"raw","insertStatus":"notRequested","hasAudioRecording":false,"sortIndex":0}})).unwrap());
+    set.documents.push(serde_json::from_value(json!({"id":"private-device:2026-09-26","kind":"activity","schemaVersion":1,"value":{"sourceDeviceId":"private-device","date":"2026-09-26","count":3,"chars":10,"durationMs":20}})).unwrap());
+    for (kind, id) in [
+        ("history", "deleted-history"),
+        ("activity", "other-device:2026-09-26"),
+    ] {
+        set.tombstones.push(
+            serde_json::from_value(
+                json!({"id":id,"kind":kind,"deletedAt":"2026-09-26T00:00:00Z","baseRevision":"0"}),
+            )
+            .unwrap(),
+        );
+    }
+    let docs = parse_sync_documents(&serde_json::to_vec(&set).unwrap(), Revision::new(0)).unwrap();
+    for personal in [false, true] {
+        let password = personal.then(|| BundlePassword::new("test-password").unwrap());
+        let artifact = export_validated_bundle(
+            &docs,
+            BundleExportOptions {
+                mode: if personal {
+                    BundleMode::PersonalMigration
+                } else {
+                    BundleMode::ShareRedacted
+                },
+                credential_policy: if personal {
+                    CredentialPolicy::PasswordEncrypted
+                } else {
+                    CredentialPolicy::Omit
+                },
+                password: password.clone(),
+                ..BundleExportOptions::default()
+            },
+        )
+        .unwrap();
+        let decoded = decode_bundle(&artifact.bytes, password.as_ref(), Revision::new(0)).unwrap();
+        assert_eq!(decoded.inspection.section_counts.history, 0);
+        assert_eq!(decoded.inspection.section_counts.activity, 0);
+        assert!(decoded.documents.documents().tombstones.is_empty());
+        let mut archive = zip::ZipArchive::new(Cursor::new(&artifact.bytes[..])).unwrap();
+        let mut raw = String::new();
+        std::io::Read::read_to_string(&mut archive.by_name("documents.json").unwrap(), &mut raw)
+            .unwrap();
+        assert!(!raw.contains("PRIVATE_HISTORY"));
+        assert!(!raw.contains("private-device"));
+    }
+}
+
+#[test]
+fn malformed_android_state_is_rejected_during_inspection_and_decode() {
+    let valid = json!({"schemaVersion":1,"learningPrivacyVersion":1,"preferences":{},"strokeFrequency":{},"pinyinLearnedPhrases":{}});
+    let mut invalid = vec![json!({}), valid.clone()];
+    invalid[1]["learningPrivacyVersion"] = json!(0);
+    for (key, value) in [
+        ("hapticEnabled", json!("true")),
+        ("hapticAmplitude", json!(0)),
+        ("hapticAmplitude", json!(1.5)),
+        ("locale", json!(1)),
+        ("themeMode", json!("invalid")),
+    ] {
+        let mut value_root = valid.clone();
+        value_root["preferences"][key] = value;
+        invalid.push(value_root);
+    }
+    for value in invalid {
+        let mut set = fixture().documents().clone();
+        set.documents.push(serde_json::from_value(json!({"id":"androidPortableSettings","kind":"ui_preferences","schemaVersion":1,"value":value})).unwrap());
+        let docs =
+            parse_sync_documents(&serde_json::to_vec(&set).unwrap(), Revision::new(0)).unwrap();
+        let artifact = export_validated_bundle(&docs, BundleExportOptions::default()).unwrap();
+        assert!(matches!(
+            inspect_bundle(&artifact.bytes),
+            Err(BundleError::InvalidSchema)
+        ));
+        assert!(matches!(
+            decode_bundle(&artifact.bytes, None, Revision::new(0)),
+            Err(BundleError::InvalidSchema)
+        ));
+    }
+}

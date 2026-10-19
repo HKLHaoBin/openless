@@ -13,8 +13,8 @@ pub use export::{
     export_sync_documents, secret_rows, ui_preferences, vocabulary_records,
 };
 pub use merge::{
-    diff_sync_documents, record_missing_tombstones, ConflictChoice, ConflictReason, ConflictSide,
-    MergePreview, RedactedConflict,
+    diff_local_replace_documents, diff_sync_documents, record_missing_tombstones, ConflictChoice,
+    ConflictReason, ConflictSide, MergePreview, RedactedConflict,
 };
 pub use restore::{
     apply_sync_restore, prepare_sync_restore, recover_sync_restore, CryptoJournalProtector,

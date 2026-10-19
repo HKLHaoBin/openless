@@ -60,6 +60,7 @@ const KOTLIN_FILES = [
   'OpenLessContentReader.kt',
   'OpenLessContentWriter.kt',
   'OpenLessMigrationBundlePolicy.kt',
+  'OpenLessMigrationState.kt',
   'OpenLessImeService.kt',
   'PendingEditReplacement.kt',
   'ImeLearningPolicy.kt',

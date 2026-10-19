@@ -66,6 +66,13 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         WindowCompat.getInsetsController(window, window.decorView)
     }
 
+    private fun saveMigrationSetting(write: () -> Unit) {
+        if (!OpenLessMigrationState.settings(write)) {
+            Toast.makeText(this, ui("正在恢复配置，请稍后重试", "Configuration restore is in progress; try again shortly"), Toast.LENGTH_SHORT).show()
+            setContentView(buildContent())
+        }
+    }
+
     private fun buildContent(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -202,7 +209,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
             Switch(this).apply {
                 isChecked = debugFeaturesEnabled
                 setOnCheckedChangeListener { _, checked ->
-                    prefs.edit().putBoolean("key_debug_features_enabled", checked).apply()
+                    saveMigrationSetting { prefs.edit().putBoolean("key_debug_features_enabled", checked).apply() }
                     // The restart-stats section's own visibility is decided
                     // once, above, when this page was built — rebuild it so
                     // toggling here shows/hides it immediately instead of
@@ -232,7 +239,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         enabledRow.addView(
             Switch(this).apply {
                 isChecked = prefs.getBoolean("key_haptic_enabled", true)
-                setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("key_haptic_enabled", checked).apply() }
+                setOnCheckedChangeListener { _, checked -> saveMigrationSetting { prefs.edit().putBoolean("key_haptic_enabled", checked).apply() } }
             },
         )
         content.addView(
@@ -255,7 +262,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
         englishSuggestionsRow.addView(
             Switch(this).apply {
                 isChecked = prefs.getBoolean("english_suggestions_enabled", true)
-                setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("english_suggestions_enabled", checked).apply() }
+                setOnCheckedChangeListener { _, checked -> saveMigrationSetting { prefs.edit().putBoolean("english_suggestions_enabled", checked).apply() } }
             },
         )
         content.addView(
@@ -284,7 +291,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
                 current = currentAmplitude,
                 onChange = { value ->
                     currentAmplitude = value
-                    prefs.edit().putInt("key_haptic_amplitude", value).apply()
+                    saveMigrationSetting { prefs.edit().putInt("key_haptic_amplitude", value).apply() }
                 },
                 onRelease = { fireTestVibration(currentAmplitude, currentDurationMs) },
             ),
@@ -297,7 +304,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
                 current = currentDurationMs,
                 onChange = { value ->
                     currentDurationMs = value
-                    prefs.edit().putLong("key_haptic_duration_ms", value.toLong()).apply()
+                    saveMigrationSetting { prefs.edit().putLong("key_haptic_duration_ms", value.toLong()).apply() }
                 },
                 onRelease = { fireTestVibration(currentAmplitude, currentDurationMs) },
             ),

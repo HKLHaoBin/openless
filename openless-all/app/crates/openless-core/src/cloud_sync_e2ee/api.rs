@@ -2,6 +2,17 @@ use super::OpenLessBackend;
 use crate::{cloud_sync_e2ee::*, BackendError};
 
 impl OpenLessBackend {
+    pub fn bind_android_migration_state(
+        &self,
+        state: std::sync::Arc<dyn crate::local_migration_bundle::AndroidMigrationState>,
+    ) -> Result<(), BackendError> {
+        self.local_migration_store
+            .bind_android_migration_state(state)
+            .map_err(|error| {
+                BackendError::new(crate::BackendErrorCode::InvalidState, error.to_string())
+            })
+    }
+
     pub async fn export_local_migration_bundle(
         &self,
         options: crate::local_migration_bundle::BundleExportOptions,
@@ -27,10 +38,10 @@ impl OpenLessBackend {
         &self,
         bytes: &[u8],
         password: Option<crate::local_migration_bundle::BundlePassword>,
-        portable_android_preferences: Option<serde_json::Value>,
+        mode: crate::local_migration_bundle::RestoreMode,
     ) -> Result<crate::local_migration_bundle::BundleMergePreview, BackendError> {
         self.local_migration_store
-            .preview_local_bundle(bytes, password, portable_android_preferences)
+            .preview_local_bundle(bytes, password, mode)
             .await
             .map_err(|error| {
                 BackendError::new(crate::BackendErrorCode::InvalidState, error.to_string())
@@ -44,7 +55,7 @@ impl OpenLessBackend {
         mode: crate::local_migration_bundle::RestoreMode,
         choices: &[crate::cloud_sync_e2ee_documents::ConflictChoice],
         expected_generation: Option<crate::cloud_sync_e2ee_documents::Revision>,
-        portable_android_preferences: Option<serde_json::Value>,
+        expected_android_revision: Option<String>,
     ) -> Result<crate::local_migration_bundle::BundleInspection, BackendError> {
         self.local_migration_store
             .import_local_bundle(
@@ -53,7 +64,7 @@ impl OpenLessBackend {
                 mode,
                 choices,
                 expected_generation,
-                portable_android_preferences,
+                expected_android_revision,
             )
             .await
             .map_err(|error| {

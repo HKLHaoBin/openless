@@ -33,9 +33,11 @@ internal class LitePinyinLearnedPhrases(context: Context) {
      */
     fun observeSequence(combinedEncoding: String, text: String) {
         if (combinedEncoding.length < 2 || text.length < 2) return
-        val existing = preferences.getString(combinedEncoding, null)?.split(',')
-        val count = if (existing?.getOrNull(0) == text) (existing.getOrNull(1)?.toIntOrNull() ?: 0) + 1 else 1
-        preferences.edit().putString(combinedEncoding, "$text,$count").apply()
+        OpenLessMigrationState.learn {
+            val existing = preferences.getString(combinedEncoding, null)?.split(',')
+            val count = if (existing?.getOrNull(0) == text) (existing.getOrNull(1)?.toIntOrNull() ?: 0) + 1 else 1
+            preferences.edit().putString(combinedEncoding, "$text,$count").apply()
+        }
     }
 
     /** The learned text for this exact encoding, only once it has crossed the promotion threshold — null otherwise (including "seen once or twice but not yet promoted", which is deliberately invisible to callers). */
@@ -60,7 +62,9 @@ internal class LitePinyinLearnedPhrases(context: Context) {
 
     /** Replaces the entire store with [entries] — an import wholesale-restores a backup rather than merging with whatever's already on this device. */
     fun importAll(entries: Map<String, String>) {
-        check(preferences.edit().clear().apply { entries.forEach { (key, value) -> putString(key, value) } }.commit()) { "Pinyin learning save failed" }
+        check(OpenLessMigrationState.settings {
+            check(preferences.edit().clear().apply { entries.forEach { (key, value) -> putString(key, value) } }.commit()) { "Pinyin learning save failed" }
+        }) { "migration_android_busy" }
     }
 
     private companion object {
