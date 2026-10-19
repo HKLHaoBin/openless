@@ -119,6 +119,33 @@ fn all_current_preference_fields_have_an_explicit_registration() {
 }
 
 #[test]
+fn enter_stop_preference_is_a_portable_boolean() {
+    let field = registry::preference_field("enterStopEnabled").expect("registered preference");
+    assert_eq!(field.rust_name, "enter_stop_enabled");
+    assert_eq!(field.class, registry::PreferenceClass::Portable);
+    assert!(matches!(field.shape, registry::PreferenceShape::Boolean));
+}
+
+#[test]
+fn enter_stop_preference_merges_as_an_independent_portable_setting() {
+    let mut data = snapshot();
+    data.preferences = SecretJson::new(json!({"enterStopEnabled": false}));
+    let base = export_snapshot(data).unwrap().documents;
+    let local = change(&base, DocumentKind::Preferences, "enterStopEnabled", json!(true));
+    let merged = diff_sync_documents(Some(&base), &local, &base)
+        .unwrap()
+        .resolve(&[])
+        .unwrap();
+    let preference = merged
+        .documents()
+        .documents
+        .iter()
+        .find(|doc| doc.kind == DocumentKind::Preferences && doc.id == "enterStopEnabled")
+        .expect("merged enter-stop preference");
+    assert_eq!(preference.value, json!(true));
+}
+
+#[test]
 fn testing_features_opt_in_is_never_exported_or_accepted_from_another_device() {
     let mut data = snapshot();
     data.preferences = SecretJson::new(json!({"testingFeaturesEnabled": true}));
