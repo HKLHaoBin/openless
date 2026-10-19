@@ -231,20 +231,16 @@ fn run_listener(
         }
     };
     let stop_events = events.clone();
-    let stop_rule = dbus::message::MatchRule::parse(&format!(
+    let stop_rule = match dbus::message::MatchRule::parse(&format!(
         "type='signal',interface='{}',member='DictationEnterStopRequested'",
         crate::fcitx5::INTERFACE
-    ))
-    .map_err(|parse_error| {
-        BackendError::new(
-            BackendErrorCode::Internal,
-            format!("invalid fcitx5 Enter-stop signal rule: {parse_error}"),
-        )
-    });
-    let stop_rule = match stop_rule {
+    )) {
         Ok(rule) => rule.static_clone(),
-        Err(error) => {
-            let _ = startup.send(Err(error));
+        Err(parse_error) => {
+            let _ = startup.send(Err(BackendError::new(
+                BackendErrorCode::Internal,
+                format!("invalid fcitx5 Enter-stop signal rule: {parse_error}"),
+            )));
             return;
         }
     };
