@@ -92,7 +92,8 @@ fn hotkeys_require_native_update(
 ) -> bool {
     let mut previous = change.previous.clone();
     previous.enter_stop_enabled = change.next.enter_stop_enabled;
-    previous != change.next
+    // Equal targets explicitly request startup reapplication of native bindings.
+    change.previous == change.next || previous != change.next
 }
 
 impl SettingsRuntime for LinuxSettingsRuntime {
@@ -701,6 +702,21 @@ mod tests {
         };
         assert_eq!(shortcut_to_raw(&binding).unwrap(), (0xff0d, 64 | 1));
         assert_eq!(binding_to_fcitx_key(&binding), "Super+Shift+enter");
+    }
+
+    #[test]
+    fn equal_hotkey_targets_request_native_startup_reapplication() {
+        for enabled in [false, true] {
+            let preferences = openless_core::UserPreferences {
+                enter_stop_enabled: enabled,
+                ..openless_core::UserPreferences::default()
+            };
+            let target = HotkeyRuntimeTarget::from(&preferences);
+            assert!(hotkeys_require_native_update(&openless_core::SettingsValueChange {
+                previous: target.clone(),
+                next: target,
+            }));
+        }
     }
 
     #[test]
