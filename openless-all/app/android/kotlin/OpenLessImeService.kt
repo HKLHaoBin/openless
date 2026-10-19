@@ -3583,6 +3583,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * code row. A pinyin encoding still being composed is left alone.
      */
     private fun clearCandidatesIfFieldEmptied() {
+        // Typing goes to the draft box while it is open; the host field being
+        // empty says nothing about what the candidate row refers to.
+        if (draftEdit != null) return
         val connection = currentInputConnection ?: return
         val before = connection.getTextBeforeCursor(1, 0) ?: return
         val after = connection.getTextAfterCursor(1, 0) ?: return
