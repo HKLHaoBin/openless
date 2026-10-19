@@ -141,6 +141,24 @@ fn windows_executable(request: &AgentCommand) -> PathBuf {
 }
 
 impl CodingAgentProcessAdapter for TauriCodingAgentProcessAdapter {
+    fn record_dsh_diagnostic(&self, record: &str) {
+        use std::io::Write;
+
+        // [DEBUG-DSH-1204] Keep each NDJSON record intact across concurrent runs.
+        static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let Ok(_guard) = WRITE_LOCK.lock() else {
+            return;
+        };
+        let path = crate::log_dir_path().join(openless_core::DSH_DIAGNOSTIC_LOG_NAME);
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = file.write_all(format!("{record}\n").as_bytes());
+        }
+    }
+
     fn execute(
         &self,
         mut request: AgentCommand,
