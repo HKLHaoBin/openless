@@ -85,7 +85,7 @@ pub(crate) fn voice_diagnostic(
         if let Some(writer) = writer {
             let record = serde_json::json!({
                 "schema": "diagnosing-bugs.v1", "session_id": "voice-1003-3c02ffc1",
-                "attempt_id": "A1-tail-context", "change_id": "C1-nonterminal-padding",
+                "attempt_id": "A2-terminal-tail", "change_id": "C2-terminal-padding",
                 "run_id": run, "probe_id": probe_id, "hypothesis_ids": hypothesis_ids,
                 "event": event, "outcome": outcome, "safe": safe,
                 "seq": SEQUENCE.fetch_add(1, Ordering::Relaxed),

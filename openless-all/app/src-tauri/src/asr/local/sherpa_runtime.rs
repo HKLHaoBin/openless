@@ -677,7 +677,7 @@ pub struct SherpaOnlineSession {
     pending_new_segment: bool,
 }
 
-// [DEBUG-VOICE-1003] P3 / H2,H4: native entry/return and per-recognizer overlap.
+// [DEBUG-VOICE-1003] P3 / H2,H4,H6: native entry/return and per-recognizer overlap.
 #[cfg(target_os = "windows")]
 struct VoiceNativeProbe<'a> {
     active: &'a std::sync::atomic::AtomicUsize,
@@ -688,7 +688,7 @@ struct VoiceNativeProbe<'a> {
 impl<'a> VoiceNativeProbe<'a> {
     fn enter(active: &'a std::sync::atomic::AtomicUsize, stage: &'static str) -> Self {
         let count = active.fetch_add(1, Ordering::Relaxed) + 1;
-        crate::recorder::voice_diagnostic("P3", &["H2", "H4"], "native", "entered",
+        crate::recorder::voice_diagnostic("P3", &["H2", "H4", "H6"], "native", "entered",
             serde_json::json!({"stage": stage, "count": count}));
         Self { active, stage }
     }
@@ -698,7 +698,7 @@ impl<'a> VoiceNativeProbe<'a> {
 impl Drop for VoiceNativeProbe<'_> {
     fn drop(&mut self) {
         let count = self.active.fetch_sub(1, Ordering::Relaxed) - 1;
-        crate::recorder::voice_diagnostic("P3", &["H2", "H4"], "native", "returned",
+        crate::recorder::voice_diagnostic("P3", &["H2", "H4", "H6"], "native", "returned",
             serde_json::json!({"stage": self.stage, "count": count}));
     }
 }
@@ -772,10 +772,16 @@ impl SherpaOnlineSession {
     where
         F: Fn(&SherpaTokenEmission),
     {
-        {
-            let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "input_finished");
-            self.stream.input_finished();
-        }
+        finish_online_segment_input(
+            |tail| {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "tail_padding");
+                self.stream.accept_waveform(16_000, tail);
+            },
+            || {
+                let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "input_finished");
+                self.stream.input_finished();
+            },
+        );
         self.drain_ready(on_token);
         self.capture_result(on_token, false);
         Ok(self.final_text())
@@ -864,7 +870,7 @@ impl SherpaOnlineSession {
             let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "result");
             self.recognizer.get_result(&self.stream)
         };
-        crate::recorder::voice_diagnostic("P3", &["H2", "H4"], "native_result", "observed",
+        crate::recorder::voice_diagnostic("P3", &["H2", "H4", "H6"], "native_result", "observed",
             serde_json::json!({"present": result.is_some(),
                 "count": result.as_ref().map(|result| result.text.chars().count()).unwrap_or(0),
                 "stage": if allow_endpoint_reset { "streaming" } else { "flush" }}));
