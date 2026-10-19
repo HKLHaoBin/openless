@@ -1543,6 +1543,16 @@ export const fr: typeof zhCN = {
       capsuleTranscriptDesc:
         'Affiche le texte reconnu à la place des barres audio. Sans streaming, le texte apparaît à réception du résultat. Désactivez pour retrouver l’affichage initial.',
       capsuleTranscriptFontSize: 'Taille de la transcription',
+      capsuleDisplayModeLabel: 'Capsule sur plusieurs écrans',
+      capsuleDisplayModeDesc:
+        'Choisissez où afficher la capsule. Le mode tous les écrans utilise davantage de fenêtres et de ressources graphiques.',
+      capsuleDisplayCursorScreen: 'Écran sous le pointeur',
+      capsuleDisplayPrimaryScreen: 'Écran principal uniquement',
+      capsuleDisplayForegroundWindowScreen: 'Écran de la fenêtre au premier plan',
+      capsuleDisplayAllScreens: 'Afficher sur tous les écrans',
+      capsuleDisplayModeRestartTitle: 'Redémarrer OpenLess pour appliquer le mode d’affichage',
+      capsuleDisplayModeRestartDesc:
+        'Quitter le mode tous les écrans nécessite un redémarrage pour fermer les anciennes capsules. Redémarrer maintenant ?',
       capsuleStyleLabel: 'Style de capsule',
       capsuleStyleSiri: 'Style lumineux Siri',
       capsuleStyleClassic: 'Style par défaut d’OpenLess',
@@ -1572,6 +1582,9 @@ export const fr: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (par défaut / plupart des applications)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / plupart des terminaux)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Mode d’insertion en texte brut',
+      plainTextInsertionDesc:
+        'Lorsqu’il est activé, le collage simulé utilise Maj+Insert au lieu de Ctrl+V (le raccourci ci-dessus est verrouillé pendant ce temps). À n’activer que dans des cas très particuliers, par ex. si un outil de changement de disposition comme Punto Switcher intercepte Ctrl+V. S’applique uniquement à l’insertion par collage via le presse-papiers (Windows uniquement).',
       comboRecordLabel: 'Enregistrer un raccourci',
       comboRecordDesc:
         'Cliquez, puis appuyez sur la combinaison souhaitée (p. ex. ⌘⇧D). Accepte les modes Basculer et Maintenir pour parler.',
@@ -2173,12 +2186,14 @@ export const fr: typeof zhCN = {
         background: 'Lorsque l’application est en arrière-plan',
         keyboard: 'À l’apparition du clavier',
         always: 'Toujours visible',
+        never: 'Ne jamais afficher',
       },
       androidOverlayTriggerHint: {
         background:
           'Simple et économe en batterie ; aucune fenêtre flottante pendant la saisie dans d’autres applications.',
         keyboard: 'Ce mode a été retiré. Les réglages existants repassent en mode arrière-plan.',
         always: 'Toujours disponible, mais reste affichée en permanence.',
+        never: 'N’apparaît jamais automatiquement ; le clavier reste utilisable.',
       },
       androidOverlayTriggerDisabled: {
         keyboard:
@@ -2262,6 +2277,9 @@ export const fr: typeof zhCN = {
         'SendInput Unicode écrit directement, sans passer par TSF / IME et sans changer de méthode de saisie.',
       streamingInsertHintLinux:
         'Utilise le complément fcitx5 pour envoyer le texte ; l’insertion progressive simule les touches avec enigo + XTest.',
+      windowsCompositionInputLabel: 'Afficher la transcription en direct dans le champ (Windows)',
+      windowsCompositionInputDesc:
+        "Pendant la dictée, le texte reconnu apparaît souligné dans le champ puis est remplacé par le résultat final. Nécessite le composant de saisie TSF d'OpenLess et une application compatible avec TSF.",
       streamingInsertSaveClipboardLabel: 'Copier dans le presse-papiers',
       streamingInsertSaveClipboardHint:
         'Après une insertion réussie, copie le texte final dans le presse-papiers pour pouvoir le recoller avec Cmd+V. Désactivé : le presse-papiers n’est jamais modifié.',
@@ -2270,6 +2288,9 @@ export const fr: typeof zhCN = {
         'Remplace l’ASR dans le cloud par l’inférence sur l’appareil. Pour l’usage hors ligne ou les données sensibles.',
       localAsrWarningShort:
         'L’inférence locale est plus lente ; un appareil insuffisamment puissant peut omettre des mots.',
+      localAsrFallbackLabel: 'Utiliser le modèle local si le cloud échoue',
+      localAsrFallbackDesc:
+        'En cas de connexion faible ou absente, transcrit l\'enregistrement avec le modèle local téléchargé au lieu d\'attendre les nouvelles tentatives du cloud. Nécessite un modèle local téléchargé.',
       qwen3Desc: 'Une fois activé, il remplace le fournisseur ASR.',
       sherpaDesc: 'Une fois activé, il remplace le fournisseur ASR.',
       foundryDesc: 'Une fois activé, il remplace le fournisseur ASR.',

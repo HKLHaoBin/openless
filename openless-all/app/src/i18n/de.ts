@@ -1532,6 +1532,16 @@ export const de: typeof zhCN = {
       capsuleTranscriptDesc:
         'Erkannten Originaltext statt Audiobalken anzeigen. Ohne Streaming erscheint der Text nach der Erkennung. Deaktivieren stellt die bisherige Anzeige wieder her.',
       capsuleTranscriptFontSize: 'Transkript-Schriftgröße',
+      capsuleDisplayModeLabel: 'Kapsel auf mehreren Bildschirmen',
+      capsuleDisplayModeDesc:
+        'Wähle die Bildschirme für die Aufnahmekapsel. Alle Bildschirme benötigen zusätzliche Fenster und Grafikressourcen.',
+      capsuleDisplayCursorScreen: 'Bildschirm unter dem Mauszeiger',
+      capsuleDisplayPrimaryScreen: 'Nur Hauptbildschirm',
+      capsuleDisplayForegroundWindowScreen: 'Bildschirm des Vordergrundfensters',
+      capsuleDisplayAllScreens: 'Auf allen Bildschirmen anzeigen',
+      capsuleDisplayModeRestartTitle: 'OpenLess neu starten, um den Anzeigemodus anzuwenden',
+      capsuleDisplayModeRestartDesc:
+        'Der Wechsel vom Modus für alle Bildschirme erfordert einen Neustart, um die bisherigen Kapselfenster zu schließen. Jetzt neu starten?',
       capsuleStyleLabel: 'Kapselstil',
       capsuleStyleSiri: 'Schimmernder Siri-Stil',
       capsuleStyleClassic: 'OpenLess-Standardstil',
@@ -1561,6 +1571,9 @@ export const de: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (Standard / die meisten Apps)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / die meisten Terminals)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Reintext-Einfügemodus',
+      plainTextInsertionDesc:
+        'Wenn aktiviert, verwendet das simulierte Einfügen Umschalt+Einfg statt Strg+V (der obige Kurzbefehl ist dabei gesperrt). Nur in sehr besonderen Fällen aktivieren, z. B. wenn ein Tastaturlayout-Umschalter wie Punto Switcher Strg+V abfängt. Gilt nur für die Einfügemethode über die Zwischenablage (nur Windows).',
       comboRecordLabel: 'Kurzbefehl aufzeichnen',
       comboRecordDesc:
         'Klicke hier und drücke die gewünschte Tastenkombination (z. B. ⌘⇧D). Unterstützt die Modi „Umschalten“ und „Gedrückt halten“.',
@@ -2161,6 +2174,7 @@ export const de: typeof zhCN = {
         background: 'Wenn die App im Hintergrund ist',
         keyboard: 'Wenn die Tastatur erscheint',
         always: 'Immer sichtbar',
+        never: 'Nie anzeigen',
       },
       androidOverlayTriggerHint: {
         background:
@@ -2168,6 +2182,7 @@ export const de: typeof zhCN = {
         keyboard:
           'Dieser Modus wird nicht weitergeführt. Bestehende Einstellungen werden auf „Im Hintergrund“ zurückgesetzt.',
         always: 'Jederzeit verfügbar, aber dauerhaft auf dem Bildschirm.',
+        never: 'Wird nie automatisch angezeigt; die Tastatur bleibt nutzbar.',
       },
       androidOverlayTriggerDisabled: {
         keyboard:
@@ -2253,6 +2268,9 @@ export const de: typeof zhCN = {
         'SendInput gibt Unicode direkt ein und umgeht TSF / IME. Ein Wechsel der Eingabemethode ist nicht erforderlich.',
       streamingInsertHintLinux:
         'Verwendet das fcitx5-Plugin zur Textübermittlung. Laufendes Einfügen simuliert Tasten über enigo + XTest.',
+      windowsCompositionInputLabel: 'Live-Transkript im Eingabefeld anzeigen (Windows)',
+      windowsCompositionInputDesc:
+        'Während du sprichst, erscheint der erkannte Text unterstrichen im Eingabefeld und wird beim Beenden durch das Endergebnis ersetzt. Erfordert die OpenLess-TSF-Eingabekomponente und eine App mit Unterstützung für TSF.',
       streamingInsertSaveClipboardLabel: 'In Zwischenablage kopieren',
       streamingInsertSaveClipboardHint:
         'Kopiert nach erfolgreichem Einfügen den fertigen Text in die Zwischenablage, damit du ihn mit Cmd+V erneut einfügen kannst. Bei „Aus“ bleibt die Zwischenablage unberührt.',
@@ -2261,6 +2279,9 @@ export const de: typeof zhCN = {
         'Verlagert die Transkription von Cloud-ASR auf das Gerät. Für Offline-Nutzung oder sensible Daten.',
       localAsrWarningShort:
         'Lokale Inferenz ist langsamer. Zu schwache Hardware kann Wörter verlieren.',
+      localAsrFallbackLabel: 'Bei Cloud-Fehler lokales Modell verwenden',
+      localAsrFallbackDesc:
+        'Bei schwacher oder fehlender Verbindung wird die Aufnahme mit dem heruntergeladenen lokalen Modell erkannt, statt auf Cloud-Wiederholungen zu warten. Erfordert ein heruntergeladenes lokales Modell.',
       qwen3Desc: 'Nach der Aktivierung übernimmt dieses Modell die Spracherkennung.',
       sherpaDesc: 'Nach der Aktivierung übernimmt dieses Modell die Spracherkennung.',
       foundryDesc: 'Nach der Aktivierung übernimmt dieses Modell die Spracherkennung.',

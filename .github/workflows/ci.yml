@@ -9,7 +9,7 @@ name: CI
 
 on:
   push:
-    branches: [main, beta]
+    branches: ['**']
   pull_request:
     branches: [main, beta]
   workflow_dispatch:
@@ -169,6 +169,12 @@ jobs:
       - name: Check Android updater pubkey matches tauri.conf.json
         run: npm run check:android-updater-pubkey
 
+      # arm64 Android links sherpa-onnx's shared libraries (local ASR). Its
+      # build script finds them through SHERPA_ONNX_LIB_DIR and has no Android
+      # prebuilt download of its own.
+      - name: Prepare sherpa-onnx Android libraries
+        run: echo "SHERPA_ONNX_LIB_DIR=$(node scripts/sherpa-onnx-android.mjs)" >> "$GITHUB_ENV"
+
       - name: Check Tauri backend (Android target)
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android
 
@@ -188,6 +194,17 @@ jobs:
 
       - name: Copy Android production and test scaffolding
         run: node scripts/copy-android-scaffolding.mjs
+
+      - name: Cache Android Rime instrumentation dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/openless-cache/mobile-rime
+          key: mobile-rime-ndk26-x86_64-${{ hashFiles('openless-all/app/scripts/build-mobile-rime.py', 'openless-all/app/mobile-ime/**') }}
+
+      - name: Build and stage Rime for Android instrumentation tests
+        env:
+          OPENLESS_CACHE_ROOT: ${{ runner.temp }}/openless-cache
+        run: python3 scripts/build-mobile-rime.py android --abi x86_64 --stage
 
       - name: Merge Shizuku manifest
         run: node scripts/merge-android-shizuku-manifest.mjs
@@ -219,7 +236,8 @@ jobs:
           api-level: 35
           target: google_apis
           arch: x86_64
-          # The instrumentation suite exercises AndroidKeyStore without launching Tauri.
+          # The suite exercises AndroidKeyStore and the real packaged Rime JNI
+          # without launching Tauri. Rime is staged for this emulator ABI above.
           script: >-
             cd openless-all/app &&
             src-tauri/gen/android/gradlew

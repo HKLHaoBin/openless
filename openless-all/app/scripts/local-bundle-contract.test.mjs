@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -19,6 +19,8 @@ const migrationIpc = read('src/lib/ipc/local-migration.ts');
 const permissionsCommands = read('src-tauri/src/commands/permissions_cmds.rs');
 const mobileHandler = read('src-tauri/src/lib.rs');
 const application = read('android/kotlin/OpenLessApplication.kt');
+const settingsExport = read('android/kotlin/OpenLessSettingsExport.kt');
+const legacyPinyin = read('android/kotlin/LegacyPinyinBackup.kt');
 
 assert.match(policy, /openless\.android\.migration-bundle/);
 assert.match(migrationActivity, /nativeExportLocalMigrationBundle/);
@@ -51,6 +53,13 @@ assert.doesNotMatch(
   keyboardActivity,
   /nativeExportLocalMigrationBundle|nativePreviewLocalMigrationBundle|nativeImportLocalMigrationBundle|本地迁移 \/ 分享/,
 );
+assert.doesNotMatch(keyboardActivity, /showExportCategoryDialog|launchImportPicker/);
+assert.match(keyboardActivity, /nativeAsrUsage/);
+assert.match(keyboardActivity, /LegacyPinyinBackup/);
+assert.doesNotMatch(settingsExport, /LitePinyinLearnedPhrases/);
+assert.match(settingsExport, /pinyinLearnedPhrases.*LegacyPinyinBackup/);
+assert.match(legacyPinyin, /OpenLessMigrationState\.settings/);
+assert.equal(existsSync(join(appRoot, 'android/kotlin/LitePinyinLearnedPhrases.kt')), false);
 assert.match(scaffolding, /OpenLessLocalMigrationActivity\.kt/);
 assert.match(native, /nativeExportLocalMigrationBundle/);
 assert.match(native, /nativePreviewLocalMigrationBundle/);
@@ -64,6 +73,7 @@ assert.match(bridge, /missing expected generation/);
 assert.match(scaffolding, /OpenLessMigrationBundlePolicy\.kt/);
 assert.match(scaffolding, /OpenLessMigrationBundleContractTest\.kt/);
 assert.match(scaffolding, /OpenLessMigrationBundleInstrumentedTest\.kt/);
+assert.match(scaffolding, /RimeEngineIntegrationTest\.kt/);
 
 assert.match(manifestMerge, /OpenLessLocalMigrationActivity/);
 assert.match(manifestMerge, /android:exported="false"/);

@@ -353,6 +353,9 @@ impl CoreSyncStore {
                 DocumentKind::Dictionary | DocumentKind::Corrections | DocumentKind::History => {}
             }
         }
+        if let Some(mode) = map.get("capsuleDisplayModeV2").cloned() {
+            map.insert("capsuleDisplayMode".into(), mode);
+        }
         if styles.is_empty()
             || !styles.iter().any(|style| {
                 style.pack.expose().get("enabled").and_then(Value::as_bool) == Some(true)

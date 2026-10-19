@@ -100,6 +100,30 @@ class OpenLessMigrationBundleInstrumentedTest {
     }
 
     @Test
+    fun legacyPinyinBackupRoundTripsUnderTheMigrationFence() {
+        val context = isolatedContext()
+        OpenLessMigrationState.initialize(context, false)
+        // Complete the privacy cleanup before seeding a compatible legacy backup.
+        OpenLessMigrationState.capture(context)
+        val backup = LegacyPinyinBackup(context)
+        backup.importAll(mapOf("before" to "旧词,2"))
+        val before = JSONObject(OpenLessMigrationState.capture(context))
+        assertEquals("旧词,2", before.getJSONObject("value").getJSONObject("pinyinLearnedPhrases").getString("before"))
+        val next = JSONObject(before.getJSONObject("value").toString()).apply {
+            put("pinyinLearnedPhrases", JSONObject().put("after", "新词,3"))
+        }
+        val lease = OpenLessMigrationState.acquire(before.getString("revision"))
+        try {
+            assertTrue(runCatching { backup.importAll(mapOf("unexpected" to "blocked,1")) }.isFailure)
+            assertEquals(mapOf("before" to "旧词,2"), backup.exportAll())
+            OpenLessMigrationState.replace(context, lease, next.toString())
+            assertEquals(mapOf("after" to "新词,3"), backup.exportAll())
+            OpenLessMigrationState.replace(context, lease, before.getJSONObject("value").toString())
+            assertEquals(mapOf("before" to "旧词,2"), backup.exportAll())
+        } finally { OpenLessMigrationState.finish(lease, false) }
+    }
+
+    @Test
     fun appContextIsAvailableAndSharePolicyIsRedacted() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         assertEquals("com.openless.app", context.packageName)

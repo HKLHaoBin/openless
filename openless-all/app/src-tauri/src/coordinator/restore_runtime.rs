@@ -61,6 +61,10 @@ impl openless_core::config::RestoreRuntimeEffects for RestoreHost {
                     coord
                         .inner
                         .host
+                        .cache_capsule_display_mode(work_target.capsule_display_mode);
+                    coord
+                        .inner
+                        .host
                         .cache_capsule_style(work_target.capsule_style);
                     Ok::<_, BackendError>(())
                 })
@@ -73,7 +77,8 @@ impl openless_core::config::RestoreRuntimeEffects for RestoreHost {
                     crate::android::replace_android_overlay()
                 }
                 crate::types::AndroidOverlayTrigger::Background
-                | crate::types::AndroidOverlayTrigger::Keyboard => {
+                | crate::types::AndroidOverlayTrigger::Keyboard
+                | crate::types::AndroidOverlayTrigger::Never => {
                     crate::android::hide_android_overlay()
                 }
             }

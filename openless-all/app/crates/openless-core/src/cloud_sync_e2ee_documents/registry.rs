@@ -103,6 +103,20 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "capsule_display_mode",
+        key: "capsuleDisplayMode",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Text,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "capsule_display_mode_v2",
+        key: "capsuleDisplayModeV2",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Text,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "capsule_transcript_enabled",
         key: "capsuleTranscriptEnabled",
         class: PreferenceClass::Portable,
@@ -621,6 +635,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
+        rust_name: "local_asr_fallback_enabled",
+        key: "localAsrFallbackEnabled",
+        class: PreferenceClass::DeviceProfile,
+        shape: PreferenceShape::Boolean,
+        reason: "device_bound",
+    },
+    PreferenceField {
         rust_name: "update_channel",
         key: "updateChannel",
         class: PreferenceClass::Portable,
@@ -686,6 +707,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "streaming_insert_save_clipboard",
         key: "streamingInsertSaveClipboard",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "windows_composition_input",
+        key: "windowsCompositionInput",
         class: PreferenceClass::Portable,
         shape: PreferenceShape::Boolean,
         reason: "portable_setting",
@@ -900,6 +928,12 @@ pub fn validate_preference_value(field: &PreferenceField, value: &Value) -> Docu
     let choices: &[&str] = match field.key {
         "defaultMode" => &["raw", "light", "structured", "formal"],
         "capsuleStyle" => &["siri", "classic", "typeless"],
+        "capsuleDisplayMode" | "capsuleDisplayModeV2" => &[
+            "cursorScreen",
+            "primaryScreen",
+            "foregroundWindowScreen",
+            "allScreens",
+        ],
         "pipelineMode" => &["traditional", "multimodal"],
         "chineseScriptPreference" => &["auto", "simplified", "traditional"],
         "outputLanguagePreference" => &["auto", "zhCn", "zhTw", "en", "ja", "ko"],

@@ -249,6 +249,17 @@ class OpenLessKeyboardSettingsActivity : Activity() {
             },
         )
 
+        content.addView(sectionLabel(ui("拼音云候选", "Cloud Pinyin candidates")))
+        content.addView(Switch(this).apply {
+            text = ui("Google 云候选（发送当前拼音；密码和隐私输入禁用）", "Google cloud candidates (sends Pinyin; disabled in private fields)")
+            isChecked = prefs.getBoolean("cloud_pinyin_enabled", false)
+            setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("cloud_pinyin_enabled", checked).apply() }
+        })
+        content.addView(Switch(this).apply {
+            text = ui("每周更新公共词库（学习词仅保存在本机）", "Weekly public dictionaries (learned words stay on this device)")
+            isChecked = prefs.getBoolean("public_dictionary_updates", true)
+            setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean("public_dictionary_updates", checked).apply() }
+        })
         content.addView(sectionLabel(ui("英文键盘", "English keyboard")))
         val englishSuggestionsRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         englishSuggestionsRow.addView(
@@ -465,16 +476,13 @@ class OpenLessKeyboardSettingsActivity : Activity() {
                 setTextColor(tone(Color.rgb(200, 200, 200), Color.rgb(70, 70, 75)))
             },
         )
-        // 简拼优选：不是每次输入都记一条，是"连续两次直接打拼音上屏"的组合
-        // （比如先打 zg 选中国，紧接着打 rm 选人民）达到 3 次后才计入这里——
-        // 见 LitePinyinLearnedPhrases 的文档注释。这里只显示已经达标、正在
-        // 生效的组合数，未达标的候选不计入（避免这个数字本身产生误导）。
-        val learnedPhrases = LitePinyinLearnedPhrases(this)
+        // Retain old backups without presenting them as active Rime learning.
+        val learnedPhrases = LegacyPinyinBackup(this)
         content.addView(
             TextView(this).apply {
                 text = ui(
-                    "简拼优选：已生效 ${learnedPhrases.promotedCount()} 条",
-                    "Pinyin combo learning: ${learnedPhrases.promotedCount()} promoted",
+                    "旧版拼音备份：${learnedPhrases.entryCount()} 条（不参与候选）",
+                    "Legacy pinyin backup: ${learnedPhrases.entryCount()} entries (not used for candidates)",
                 )
                 textSize = 14f
                 setTextColor(tone(Color.rgb(200, 200, 200), Color.rgb(70, 70, 75)))
@@ -516,6 +524,21 @@ class OpenLessKeyboardSettingsActivity : Activity() {
                 onChange = { prefs.edit().putString("key_cloud_note_webhook_token", it).apply() },
             ),
         )
+
+        // "语音识别来源": how many dictations in history the cloud and the local
+        // model each recognized (with the local standby racing the cloud
+        // either can win), the latest one's kind highlighted.
+        content.addView(sectionLabel(ui("语音识别来源", "Speech recognition source")))
+        val asrUsageText = TextView(this).apply {
+            text = ui("读取中…", "Loading…")
+            textSize = 14f
+            setTextColor(tone(Color.rgb(220, 220, 220), Color.rgb(50, 50, 55)))
+        }
+        content.addView(asrUsageText)
+        Thread {
+            val usage = runCatching { OpenLessNative.nativeAsrUsage() }.getOrNull()
+            runOnUiThread { asrUsageText.text = asrUsageSummary(usage) }
+        }.apply { name = "openless-asr-usage" }.start()
 
         // build_first_seen_wall_time is written by OpenLessApplication's
         // resetRestartStatsOnVersionBump() at the exact moment it last
@@ -560,6 +583,25 @@ class OpenLessKeyboardSettingsActivity : Activity() {
                 vibrator.vibrate(durationMs.toLong())
             }
         }
+    }
+
+    /** "云 N · 本 M" from nativeAsrUsage()'s "<local>,<cloud>,<latest>", the latest kind bold and colored. */
+    private fun asrUsageSummary(usage: String?): CharSequence {
+        val parts = usage?.split(',') ?: return ui("后台服务未就绪", "Backend not ready")
+        val local = parts.getOrNull(0)?.toIntOrNull() ?: 0
+        val cloud = parts.getOrNull(1)?.toIntOrNull() ?: 0
+        if (local + cloud == 0) return ui("暂无听写记录", "No dictations yet")
+        val cloudText = ui("云 $cloud", "Cloud $cloud")
+        val localText = ui("本 $local", "Local $local")
+        val text = android.text.SpannableString("$cloudText · $localText")
+        val (start, end, color) = when (parts.getOrNull(2)) {
+            "cloud" -> Triple(0, cloudText.length, tone(Color.rgb(96, 165, 250), Color.rgb(37, 99, 235)))
+            "local" -> Triple(text.length - localText.length, text.length, tone(Color.rgb(74, 222, 128), Color.rgb(21, 128, 61)))
+            else -> return text
+        }
+        text.setSpan(android.text.style.ForegroundColorSpan(color), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        text.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return text
     }
 
     private fun sectionLabel(text: String): View = TextView(this).apply {
