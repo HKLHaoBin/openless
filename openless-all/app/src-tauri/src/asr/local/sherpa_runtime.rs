@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use tokio::sync::Mutex as AsyncMutex;
 
-#[cfg(target_os = "windows")]
+#[cfg(local_asr_sherpa)]
 use super::blocking_decode::run_serialized_decode;
 
 use crate::asr::local::sherpa::{
@@ -35,7 +35,7 @@ pub struct SherpaTokenEmission {
 
 const QWEN3_ASR_MAX_NEW_TOKENS: i32 = 256;
 
-#[cfg(target_os = "windows")]
+#[cfg(local_asr_sherpa)]
 use sherpa_onnx::{
     OfflineParaformerModelConfig, OfflineQwen3ASRModelConfig, OfflineRecognizer,
     OfflineRecognizerConfig, OfflineSenseVoiceModelConfig, OfflineWhisperModelConfig,
@@ -47,9 +47,9 @@ use sherpa_onnx::{
 #[derive(Clone)]
 struct LoadedOfflineModel {
     alias: String,
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     recognizer: Arc<OfflineRecognizer>,
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     decode_gate: Arc<tokio::sync::Semaphore>,
 }
 
@@ -57,10 +57,10 @@ struct LoadedOfflineModel {
 #[derive(Clone)]
 struct LoadedOnlineModel {
     // [DEBUG-VOICE-1003] Observe overlap without serializing native calls.
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     diagnostic_active: Arc<std::sync::atomic::AtomicUsize>,
     alias: String,
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     recognizer: Arc<OnlineRecognizer>,
 }
 
@@ -102,11 +102,11 @@ impl SherpaOnnxRuntime {
         }
     }
 
-    /// Whether the runtime actually has inference capability today. Only Windows currently
-    /// wires in the `sherpa-onnx` offline recognizer.
+    /// Whether the runtime actually has inference capability today: the targets that link
+    /// `sherpa-onnx` (Windows, arm64 Android — the `local_asr_sherpa` cfg from build.rs).
     #[allow(dead_code)]
     pub fn is_available(&self) -> bool {
-        cfg!(target_os = "windows")
+        cfg!(local_asr_sherpa)
     }
 
     pub async fn status_snapshot(&self, active_model: &str) -> SherpaRuntimeStatus {
@@ -337,7 +337,7 @@ impl SherpaOnnxRuntime {
         let mut state = self.state.lock();
         state.offline_loaded = None;
         if let Some(loaded) = state.online_loaded.as_ref() {
-            #[cfg(target_os = "windows")]
+            #[cfg(local_asr_sherpa)]
             crate::recorder::voice_diagnostic("P5", &["H4"], "cache_owner", "releasing",
                 serde_json::json!({"count": Arc::strong_count(&loaded.recognizer),
                     "active": loaded.diagnostic_active.load(Ordering::Relaxed)}));
@@ -361,7 +361,7 @@ impl SherpaOnnxRuntime {
         let mut state = self.state.lock();
         state.offline_loaded = None;
         if let Some(loaded) = state.online_loaded.as_ref() {
-            #[cfg(target_os = "windows")]
+            #[cfg(local_asr_sherpa)]
             crate::recorder::voice_diagnostic("P5", &["H4"], "cache_owner", "releasing",
                 serde_json::json!({"count": Arc::strong_count(&loaded.recognizer),
                     "active": loaded.diagnostic_active.load(Ordering::Relaxed)}));
@@ -479,7 +479,7 @@ enum LoadedModel {
     Online(LoadedOnlineModel),
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(local_asr_sherpa)]
 async fn load_model(alias: &str, dir: &Path) -> Result<LoadedModel> {
     let alias = alias.to_string();
     let dir = dir.to_path_buf();
@@ -508,7 +508,7 @@ async fn load_model(alias: &str, dir: &Path) -> Result<LoadedModel> {
     .map_err(|e| anyhow::anyhow!("sherpa-onnx load join failed: {e:#}"))?
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(local_asr_sherpa))]
 async fn load_model(alias: &str, _dir: &Path) -> Result<LoadedModel> {
     match sherpa_target(alias)?.sherpa_execution_mode() {
         Some(openless_core::LocalAsrExecutionMode::Offline) => {
@@ -525,7 +525,7 @@ async fn load_model(alias: &str, _dir: &Path) -> Result<LoadedModel> {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(local_asr_sherpa)]
 fn create_offline_recognizer(alias: &str, dir: &Path) -> Result<OfflineRecognizer> {
     let mut config = OfflineRecognizerConfig::default();
     config.model_config.num_threads = std::thread::available_parallelism()
@@ -579,7 +579,7 @@ fn create_offline_recognizer(alias: &str, dir: &Path) -> Result<OfflineRecognize
         .ok_or_else(|| anyhow::anyhow!("create sherpa-onnx offline recognizer failed"))
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(local_asr_sherpa)]
 fn create_online_recognizer(alias: &str, dir: &Path) -> Result<OnlineRecognizer> {
     let mut config = OnlineRecognizerConfig::default();
     config.model_config.num_threads = std::thread::available_parallelism()
@@ -609,7 +609,7 @@ fn create_online_recognizer(alias: &str, dir: &Path) -> Result<OnlineRecognizer>
         .ok_or_else(|| anyhow::anyhow!("create sherpa-onnx online recognizer failed"))
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(local_asr_sherpa)]
 fn path_to_string(path: &Path) -> Result<String> {
     Ok(path
         .to_str()
@@ -617,7 +617,7 @@ fn path_to_string(path: &Path) -> Result<String> {
         .to_string())
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(local_asr_sherpa)]
 async fn transcribe_loaded_model(
     loaded: LoadedOfflineModel,
     pcm_chunks: Vec<Vec<u8>>,
@@ -653,7 +653,7 @@ async fn transcribe_loaded_model(
     .await
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(local_asr_sherpa))]
 async fn transcribe_loaded_model(
     _loaded: LoadedOfflineModel,
     _pcm_chunks: Vec<Vec<u8>>,
@@ -664,12 +664,12 @@ async fn transcribe_loaded_model(
 }
 
 pub struct SherpaOnlineSession {
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     diagnostic_active: Arc<std::sync::atomic::AtomicUsize>,
     alias: String,
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     recognizer: Arc<OnlineRecognizer>,
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     stream: sherpa_onnx::OnlineStream,
     committed_text: String,
     last_partial_text: String,
@@ -678,13 +678,13 @@ pub struct SherpaOnlineSession {
 }
 
 // [DEBUG-VOICE-1003] P3 / H2,H4,H6: native entry/return and per-recognizer overlap.
-#[cfg(target_os = "windows")]
+#[cfg(local_asr_sherpa)]
 struct VoiceNativeProbe<'a> {
     active: &'a std::sync::atomic::AtomicUsize,
     stage: &'static str,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(local_asr_sherpa)]
 impl<'a> VoiceNativeProbe<'a> {
     fn enter(active: &'a std::sync::atomic::AtomicUsize, stage: &'static str) -> Self {
         let count = active.fetch_add(1, Ordering::Relaxed) + 1;
@@ -694,7 +694,7 @@ impl<'a> VoiceNativeProbe<'a> {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(local_asr_sherpa)]
 impl Drop for VoiceNativeProbe<'_> {
     fn drop(&mut self) {
         let count = self.active.fetch_sub(1, Ordering::Relaxed) - 1;
@@ -705,7 +705,7 @@ impl Drop for VoiceNativeProbe<'_> {
 
 // [DEBUG-VOICE-1003] P5 / H4: observe ownership before existing field destruction.
 // No fields are moved, reordered or manually dropped here.
-#[cfg(target_os = "windows")]
+#[cfg(local_asr_sherpa)]
 impl Drop for SherpaOnlineSession {
     fn drop(&mut self) {
         crate::recorder::voice_diagnostic("P5", &["H4"], "session_owner", "dropping",
@@ -746,7 +746,7 @@ impl SherpaOnlineSession {
         self.flush_segment_inner(on_token)
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     fn accept_samples<F>(&mut self, samples: &[f32], on_token: &F) -> Result<()>
     where
         F: Fn(&SherpaTokenEmission),
@@ -759,7 +759,7 @@ impl SherpaOnlineSession {
         Ok(())
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(local_asr_sherpa))]
     fn accept_samples<F>(&mut self, _samples: &[f32], _on_token: &F) -> Result<()>
     where
         F: Fn(&SherpaTokenEmission),
@@ -767,7 +767,7 @@ impl SherpaOnlineSession {
         Ok(())
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     fn finish_inner<F>(&mut self, on_token: &F) -> Result<String>
     where
         F: Fn(&SherpaTokenEmission),
@@ -787,7 +787,7 @@ impl SherpaOnlineSession {
         Ok(self.final_text())
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(local_asr_sherpa))]
     fn finish_inner<F>(&mut self, _on_token: &F) -> Result<String>
     where
         F: Fn(&SherpaTokenEmission),
@@ -795,7 +795,7 @@ impl SherpaOnlineSession {
         Ok(self.final_text())
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     fn flush_segment_inner<F>(&mut self, on_token: &F) -> Result<()>
     where
         F: Fn(&SherpaTokenEmission),
@@ -825,7 +825,7 @@ impl SherpaOnlineSession {
         Ok(())
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(local_asr_sherpa))]
     fn flush_segment_inner<F>(&mut self, _on_token: &F) -> Result<()>
     where
         F: Fn(&SherpaTokenEmission),
@@ -833,7 +833,7 @@ impl SherpaOnlineSession {
         Ok(())
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     fn drain_ready<F>(&mut self, on_token: &F)
     where
         F: Fn(&SherpaTokenEmission),
@@ -847,7 +847,7 @@ impl SherpaOnlineSession {
         }
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     fn drain_ready_without_endpoint_reset<F>(&mut self, on_token: &F)
     where
         F: Fn(&SherpaTokenEmission),
@@ -861,7 +861,7 @@ impl SherpaOnlineSession {
         }
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     fn capture_result<F>(&mut self, on_token: &F, allow_endpoint_reset: bool)
     where
         F: Fn(&SherpaTokenEmission),
@@ -954,7 +954,7 @@ fn append_segment(text: &mut String, segment: &str) {
     text.push_str(segment);
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(local_asr_sherpa)]
 fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<SherpaOnlineSession> {
     let stream = loaded.recognizer.create_stream();
     crate::recorder::voice_diagnostic("P5", &["H4"], "session_owner", "created",
@@ -971,7 +971,7 @@ fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<Sherpa
     })
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(local_asr_sherpa))]
 fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<SherpaOnlineSession> {
     Ok(SherpaOnlineSession {
         alias: loaded.alias,
@@ -1023,7 +1023,7 @@ mod tests {
         let status = runtime.status_snapshot("sense-voice-small-zh").await;
 
         assert_eq!(status.provider_id, PROVIDER_ID);
-        assert_eq!(status.available, cfg!(target_os = "windows"));
+        assert_eq!(status.available, cfg!(local_asr_sherpa));
         assert!(!status.runtime_ready);
         assert_eq!(status.active_model, "sense-voice-small-zh");
         assert_eq!(status.loaded_model_id, None);
@@ -1034,7 +1034,7 @@ mod tests {
         assert_eq!(status.last_error, None);
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(local_asr_sherpa))]
     #[tokio::test]
     async fn status_snapshot_only_marks_active_model_ready() {
         let runtime = SherpaOnnxRuntime::new();
@@ -1097,7 +1097,7 @@ mod tests {
     #[tokio::test]
     async fn release_now_clears_loaded_model() {
         let runtime = SherpaOnnxRuntime::new();
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(local_asr_sherpa))]
         {
             runtime.state.lock().offline_loaded = Some(LoadedOfflineModel {
                 alias: "sense-voice-small-zh".into(),
@@ -1233,7 +1233,7 @@ mod tests {
         assert_eq!(text, "你好 world");
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(local_asr_sherpa)]
     #[test]
     fn sherpa_onnx_crate_exposes_online_recognizer_api_for_streaming_phase() {
         let mut config = sherpa_onnx::OnlineRecognizerConfig::default();

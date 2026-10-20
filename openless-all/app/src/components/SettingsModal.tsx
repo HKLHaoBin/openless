@@ -752,7 +752,7 @@ export function SettingsModal({
                         gap: 16,
                       }}
                     >
-                      {section === 'general' && <GeneralTab onOpenLocalModels={openLocalModels} />}
+                      {section === 'general' && <GeneralTab os={os} onOpenLocalModels={openLocalModels} />}
                       {section === 'inputMethod' && <InputMethodTab />}
                       {section === 'shortcuts' && <ShortcutsTab />}
                       {section === 'appearance' && <AppearanceTab />}

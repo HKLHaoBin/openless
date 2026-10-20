@@ -22,6 +22,7 @@ import { MarketplaceSection } from './MarketplaceSection';
 import { PermissionsSection } from './PermissionsSection';
 import { DataStorageSection } from './DataStorageSection';
 import { CloudSyncSection, CustomSyncServerSection } from './CloudSyncSection';
+import { LocalMigrationSection } from './LocalMigrationSection';
 import { LocalModelsSection } from './models/LocalModelsSection';
 import { LocalModelsNavContext } from './models/modelsNav';
 import { DebugToolsSection } from './DebugToolsSection';
@@ -35,6 +36,7 @@ import { AboutSection } from './AboutSection';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../lib/platform';
 import { listChannels } from '../../lib/ipc';
 import type { PlatformCapabilities } from '../../lib/types';
+import { type OS } from '../../components/WindowChrome';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { emitSaved } from '../../lib/savedEvent';
 import { SettingRow, Toggle, ExperimentalSectionTitle, segmentedTrackStyle } from './shared';
@@ -62,13 +64,13 @@ function usePlatformCaps(): PlatformCapabilities | null {
 }
 
 // Recording & input: from recording to text insertion, plus phone input.
-export function GeneralTab({ onOpenLocalModels }: { onOpenLocalModels?: () => void } = {}) {
+export function GeneralTab({ os, onOpenLocalModels }: { os?: OS; onOpenLocalModels?: () => void } = {}) {
   const platformCaps = usePlatformCaps();
   const showRemoteInput = platformCaps?.platform === 'desktop';
 
   return (
     <>
-      <RecordingInputSection onOpenLocalModels={onOpenLocalModels} />
+      <RecordingInputSection forcedOs={os} onOpenLocalModels={onOpenLocalModels} />
       <SelectionWorkspaceSection showShortcut={false} />
       {showRemoteInput && <RemoteInputSection />}
     </>
@@ -378,6 +380,7 @@ export function PrivacyTab() {
       </div>
       <PermissionsSection />
       <DataStorageSection />
+      <LocalMigrationSection />
       <CloudSyncSection />
     </>
   );
