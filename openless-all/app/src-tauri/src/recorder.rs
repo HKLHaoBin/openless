@@ -1930,6 +1930,44 @@ where
     device.build_input_stream(config, data_callback, error_callback, None)
 }
 
+fn handle_microphone_stream_error(
+    state: &StreamState,
+    error: cpal::Error,
+    runtime_error_tx: &Sender<RecorderError>,
+) {
+    if !state.accepting_audio.load(Ordering::Acquire) {
+        return;
+    }
+    let error_kind = cpal_error_kind_code(&error);
+    let recoverable_xrun = error.kind() == cpal::ErrorKind::Xrun;
+    let error_count = state.diagnostics.microphone.record_error();
+    state.diagnostics.event(
+        "P2",
+        "[\"H1\",\"H2\",\"H3\"]",
+        "microphone_stream_error",
+        if recoverable_xrun {
+            "xrun_recoverable"
+        } else {
+            "fatal_candidate"
+        },
+        &format!(
+            "{{\"stream_role\":\"microphone\",\"error_kind\":\"{}\",\"accepting_audio\":true,\"error_count\":{},\"callback_count\":{}}}",
+            error_kind,
+            error_count,
+            state.diagnostics.microphone.callbacks.load(Ordering::Relaxed),
+        ),
+    );
+    if recoverable_xrun {
+        // CPAL can report a discontinuity and deliver the next capture packet immediately.
+        // Do not cancel usable capture or refresh liveness here: the existing watchdog must
+        // still detect a stream that stops delivering data after this notification.
+        log::warn!("[recorder] microphone xrun; continuing capture (error_count={error_count})");
+        return;
+    }
+    log::error!("[recorder] stream error: {error}");
+    let _ = runtime_error_tx.send(RecorderError::EngineFailed(format!("stream: {error}")));
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_stream_for_format(
     device: &cpal::Device,
@@ -1951,30 +1989,7 @@ fn build_stream_for_format(
             let runtime_error_for_error = runtime_error_tx.clone();
             let error_state = Arc::clone(&state);
             let err_cb = move |err| {
-                if !error_state.accepting_audio.load(Ordering::Acquire) {
-                    return;
-                }
-                let error_kind = cpal_error_kind_code(&err);
-                let error_count = error_state.diagnostics.microphone.record_error();
-                error_state.diagnostics.event(
-                    "P2",
-                    "[\"H1\",\"H2\",\"H3\"]",
-                    "microphone_stream_error",
-                    if error_kind == "xrun" {
-                        "xrun_candidate"
-                    } else {
-                        "fatal_candidate"
-                    },
-                    &format!(
-                        "{{\"stream_role\":\"microphone\",\"error_kind\":\"{}\",\"accepting_audio\":true,\"error_count\":{},\"callback_count\":{}}}",
-                        error_kind,
-                        error_count,
-                        error_state.diagnostics.microphone.callbacks.load(Ordering::Relaxed),
-                    ),
-                );
-                log::error!("[recorder] stream error: {err}");
-                let _ = runtime_error_for_error
-                    .send(RecorderError::EngineFailed(format!("stream: {err}")));
+                handle_microphone_stream_error(&error_state, err, &runtime_error_for_error);
             };
             build_input_stream_compat::<$t, _, _>(
                     device,
@@ -2579,6 +2594,95 @@ fn build_wav_header(data_size: u32) -> [u8; 44] {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex as StdMutex};
+
+    #[test]
+    fn microphone_xrun_keeps_capture_and_error_channel_open() {
+        let state = StreamState::new();
+        let (sender, receiver) = channel();
+        handle_microphone_stream_error(
+            &state,
+            cpal::Error::new(cpal::ErrorKind::Xrun),
+            &sender,
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        assert!(state.accepting_audio.load(Ordering::Acquire));
+        assert!(state.last_callback_time.lock().is_none());
+        assert_eq!(state.diagnostics.microphone.record_callback(), (1, true));
+        assert_eq!(
+            state.diagnostics.microphone.errors.load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn repeated_xruns_do_not_refresh_the_watchdog_or_hide_device_loss() {
+        let state = StreamState::new();
+        let last_callback = std::time::Instant::now() - std::time::Duration::from_secs(10);
+        *state.last_callback_time.lock() = Some(last_callback);
+        let (sender, receiver) = channel();
+        for _ in 0..8 {
+            handle_microphone_stream_error(
+                &state,
+                cpal::Error::new(cpal::ErrorKind::Xrun),
+                &sender,
+            );
+        }
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        assert_eq!(*state.last_callback_time.lock(), Some(last_callback));
+        assert!(state.accepting_audio.load(Ordering::Acquire));
+        handle_microphone_stream_error(
+            &state,
+            cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable),
+            &sender,
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(RecorderError::EngineFailed(_))
+        ));
+    }
+
+    #[test]
+    fn microphone_non_xrun_errors_remain_fatal() {
+        for kind in [
+            cpal::ErrorKind::DeviceNotAvailable,
+            cpal::ErrorKind::StreamInvalidated,
+            cpal::ErrorKind::PermissionDenied,
+            cpal::ErrorKind::BackendError,
+            cpal::ErrorKind::Other,
+        ] {
+            let state = StreamState::new();
+            let (sender, receiver) = channel();
+            handle_microphone_stream_error(&state, cpal::Error::new(kind), &sender);
+            assert!(
+                matches!(receiver.try_recv(), Ok(RecorderError::EngineFailed(_))),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn microphone_stream_errors_after_stop_are_ignored() {
+        let state = StreamState::new();
+        state.accepting_audio.store(false, Ordering::Release);
+        let (sender, receiver) = channel();
+        for kind in [cpal::ErrorKind::Xrun, cpal::ErrorKind::DeviceNotAvailable] {
+            handle_microphone_stream_error(&state, cpal::Error::new(kind), &sender);
+        }
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        assert_eq!(
+            state.diagnostics.microphone.errors.load(Ordering::Relaxed),
+            0
+        );
+    }
 
     #[test]
     fn diagnostic_callback_marks_only_the_next_callback_after_errors() {
