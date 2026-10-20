@@ -40,6 +40,118 @@ const WAV_ARCHIVE_QUEUE_CAPACITY: usize = 256;
 /// The provisional capture cap is 500 ms at the canonical 16 kHz mono i16 format.
 pub(crate) const STAGED_CAPTURE_MAX_BYTES: usize = TARGET_SAMPLE_RATE as usize;
 
+/// [DEBUG-ISSUE1223] Per-capture state shared by the two native stream roles.
+/// Only the first callback and callbacks immediately following errors are logged.
+struct CaptureDiagnostics {
+    run_id: u64,
+    microphone: StreamDiagnostics,
+    reference: StreamDiagnostics,
+}
+
+#[derive(Default)]
+struct StreamDiagnostics {
+    callbacks: AtomicUsize,
+    errors: AtomicUsize,
+    error_pending: AtomicBool,
+}
+
+impl StreamDiagnostics {
+    fn record_error(&self) -> usize {
+        let count = self.errors.fetch_add(1, Ordering::Relaxed) + 1;
+        self.error_pending.store(true, Ordering::Release);
+        count
+    }
+
+    fn record_callback(&self) -> (usize, bool) {
+        let count = self.callbacks.fetch_add(1, Ordering::Relaxed) + 1;
+        let after_error = self.error_pending.swap(false, Ordering::AcqRel);
+        (count, after_error)
+    }
+}
+
+impl CaptureDiagnostics {
+    fn new() -> Self {
+        static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
+        Self {
+            run_id: NEXT_RUN.fetch_add(1, Ordering::Relaxed),
+            microphone: StreamDiagnostics::default(),
+            reference: StreamDiagnostics::default(),
+        }
+    }
+
+    /// Only code-controlled enums, booleans and numeric facts may enter the payload.
+    /// Use the existing logger; do not open files on native callback threads.
+    fn event(
+        &self,
+        probe_id: &str,
+        hypothesis_ids: &str,
+        event: &str,
+        outcome: &str,
+        safe_json: &str,
+    ) {
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        log::info!(
+            "[DEBUG-ISSUE1223] {{\"schema\":\"diagnosing-bugs.v1\",\"session_id\":\"s1223-20261019\",\"run_id\":\"pid-{}-capture-{}\",\"probe_id\":\"{}\",\"hypothesis_ids\":{},\"event\":\"{}\",\"outcome\":\"{}\",\"safe\":{},\"ts\":{}}}",
+            std::process::id(),
+            self.run_id,
+            probe_id,
+            hypothesis_ids,
+            event,
+            outcome,
+            safe_json,
+            timestamp_ms,
+        );
+    }
+
+    fn data_callback(&self, reference: bool, accepting_audio: bool, frames: usize) {
+        let stream = if reference {
+            &self.reference
+        } else {
+            &self.microphone
+        };
+        let (count, after_error) = stream.record_callback();
+        if count == 1 || after_error {
+            self.event(
+                "P5",
+                "[\"H1\",\"H2\",\"H3\"]",
+                "data_callback",
+                if after_error { "after_error" } else { "first_callback" },
+                &format!(
+                    "{{\"stream_role\":\"{}\",\"accepting_audio\":{},\"callback_count\":{},\"error_count\":{},\"frames\":{}}}",
+                    if reference { "reference" } else { "microphone" },
+                    accepting_audio,
+                    count,
+                    stream.errors.load(Ordering::Relaxed),
+                    frames,
+                ),
+            );
+        }
+    }
+}
+
+fn cpal_error_kind_code(error: &cpal::Error) -> &'static str {
+    match error.kind() {
+        cpal::ErrorKind::DeviceBusy => "device_busy",
+        cpal::ErrorKind::DeviceChanged => "device_changed",
+        cpal::ErrorKind::DeviceNotAvailable => "device_not_available",
+        cpal::ErrorKind::HostUnavailable => "host_unavailable",
+        cpal::ErrorKind::InvalidInput => "invalid_input",
+        cpal::ErrorKind::PermissionDenied => "permission_denied",
+        cpal::ErrorKind::RealtimeDenied => "realtime_denied",
+        cpal::ErrorKind::ResourceExhausted => "resource_exhausted",
+        cpal::ErrorKind::StreamInvalidated => "stream_invalidated",
+        cpal::ErrorKind::UnsupportedConfig => "unsupported_config",
+        cpal::ErrorKind::UnsupportedOperation => "unsupported_operation",
+        cpal::ErrorKind::Xrun => "xrun",
+        cpal::ErrorKind::BackendError => "backend_error",
+        cpal::ErrorKind::Other => "other",
+        _ => "unknown",
+    }
+}
+
 /// Downstream that receives resampled Int16 PCM bytes (little-endian).
 pub trait AudioConsumer: Send + Sync {
     /// Each delivery is a little-endian byte sequence of Int16 samples;
@@ -1360,7 +1472,7 @@ fn run_audio_thread(
     runtime_error_tx: Sender<RecorderError>,
 ) {
     let (reference_stream, reference_buffer) = if processing.echo_cancellation_enabled {
-        match start_reference_stream(&stop_flag) {
+        match start_reference_stream(&stop_flag, &state.diagnostics) {
             Ok((stream, buffer)) => (Some(stream), Some(buffer)),
             Err(error) => {
                 log::warn!("[recorder] playback echo reference unavailable; recording without AEC: {error}");
@@ -1370,6 +1482,21 @@ fn run_audio_thread(
     } else {
         (None, None)
     };
+    state.diagnostics.event(
+        "P1",
+        "[\"H1\",\"H2\",\"H3\"]",
+        "reference_start",
+        if reference_buffer.is_some() {
+            "available"
+        } else {
+            "fallback"
+        },
+        &format!(
+            "{{\"aec_requested\":{},\"reference_available\":{}}}",
+            processing.echo_cancellation_enabled,
+            reference_buffer.is_some(),
+        ),
+    );
     let (processor, frame_tx) = match AudioProcessingWorker::start(
         processing,
         consumer,
@@ -1478,6 +1605,17 @@ fn run_audio_thread(
                                 "[recorder] watchdog: 录音回调已停止 {} 秒，触发错误恢复",
                                 elapsed.as_secs()
                             );
+                            state_for_watchdog.diagnostics.event(
+                                "P4",
+                                "[\"H4\"]",
+                                "watchdog_fault",
+                                "callback_silent",
+                                &format!(
+                                    "{{\"callback_count\":{},\"elapsed_secs\":{}}}",
+                                    state_for_watchdog.diagnostics.microphone.callbacks.load(Ordering::Relaxed),
+                                    elapsed.as_secs(),
+                                ),
+                            );
                             let _ =
                                 runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
                                     format!("录音回调静默停止 {} 秒", elapsed.as_secs()),
@@ -1492,6 +1630,16 @@ fn run_audio_thread(
                             log::error!(
                                 "[recorder] watchdog: {} 秒内未收到首次回调，触发错误恢复",
                                 elapsed.as_secs()
+                            );
+                            state_for_watchdog.diagnostics.event(
+                                "P4",
+                                "[\"H4\"]",
+                                "watchdog_fault",
+                                "first_callback_timeout",
+                                &format!(
+                                    "{{\"callback_count\":0,\"elapsed_secs\":{}}}",
+                                    elapsed.as_secs(),
+                                ),
                             );
                             let _ =
                                 runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
@@ -1806,6 +1954,24 @@ fn build_stream_for_format(
                 if !error_state.accepting_audio.load(Ordering::Acquire) {
                     return;
                 }
+                let error_kind = cpal_error_kind_code(&err);
+                let error_count = error_state.diagnostics.microphone.record_error();
+                error_state.diagnostics.event(
+                    "P2",
+                    "[\"H1\",\"H2\",\"H3\"]",
+                    "microphone_stream_error",
+                    if error_kind == "xrun" {
+                        "xrun_candidate"
+                    } else {
+                        "fatal_candidate"
+                    },
+                    &format!(
+                        "{{\"stream_role\":\"microphone\",\"error_kind\":\"{}\",\"accepting_audio\":true,\"error_count\":{},\"callback_count\":{}}}",
+                        error_kind,
+                        error_count,
+                        error_state.diagnostics.microphone.callbacks.load(Ordering::Relaxed),
+                    ),
+                );
                 log::error!("[recorder] stream error: {err}");
                 let _ = runtime_error_for_error
                     .send(RecorderError::EngineFailed(format!("stream: {err}")));
@@ -1814,7 +1980,9 @@ fn build_stream_for_format(
                     device,
                     *config,
                     move |data: &[$t], _info| {
-                        if !state.accepting_audio.load(Ordering::Acquire) {
+                        let accepting = state.accepting_audio.load(Ordering::Acquire);
+                        state.diagnostics.data_callback(false, accepting, data.len() / channels.max(1));
+                        if !accepting {
                             return;
                         }
                         let mut floats = Vec::with_capacity(data.len());
@@ -1832,6 +2000,17 @@ fn build_stream_for_format(
                                 stop_flag.store(true, Ordering::Release);
                             }
                             Err(TrySendError::Full(_)) => {
+                                state.diagnostics.event(
+                                    "P4",
+                                    "[\"H4\"]",
+                                    "processing_backpressure",
+                                    "queue_full",
+                                    &format!(
+                                        "{{\"queue_capacity\":{},\"callback_count\":{}}}",
+                                        AUDIO_PROCESSING_QUEUE_CAPACITY,
+                                        state.diagnostics.microphone.callbacks.load(Ordering::Relaxed),
+                                    ),
+                                );
                                 if state.accepting_audio.swap(false, Ordering::AcqRel) {
                                     let _ = runtime_error_for_callback.send(
                                         RecorderError::EngineFailed(
@@ -1877,6 +2056,7 @@ fn build_stream_for_format(
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn start_reference_stream(
     stop_flag: &Arc<AtomicBool>,
+    diagnostics: &Arc<CaptureDiagnostics>,
 ) -> Result<(cpal::Stream, Arc<openless_core::ReferenceAudioBuffer>), RecorderError> {
     let host = cpal::default_host();
     let device = host
@@ -1899,6 +2079,7 @@ fn start_reference_stream(
         reference_for_callback,
         channels,
         stop_for_callback,
+        Arc::clone(diagnostics),
     )?;
     stream
         .play()
@@ -1916,6 +2097,7 @@ fn start_reference_stream(
 #[cfg(any(target_os = "android", target_os = "ios"))]
 fn start_reference_stream(
     _stop_flag: &Arc<AtomicBool>,
+    _diagnostics: &Arc<CaptureDiagnostics>,
 ) -> Result<(cpal::Stream, Arc<openless_core::ReferenceAudioBuffer>), RecorderError> {
     Err(RecorderError::EngineFailed(
         "native echo reference is unavailable on mobile".into(),
@@ -1930,22 +2112,45 @@ fn build_reference_stream_for_format(
     reference: Arc<openless_core::ReferenceAudioBuffer>,
     channels: usize,
     stop_flag: Arc<AtomicBool>,
+    diagnostics: Arc<CaptureDiagnostics>,
 ) -> Result<cpal::Stream, RecorderError> {
     macro_rules! make_reference_stream {
         ($t:ty, $to_f32:expr) => {{
             let reference = Arc::clone(&reference);
             let stop_for_callback = Arc::clone(&stop_flag);
+            let callback_diagnostics = Arc::clone(&diagnostics);
+            let error_diagnostics = Arc::clone(&diagnostics);
             build_input_stream_compat::<$t, _, _>(
                 device,
                 *config,
                 move |data: &[$t], _info| {
-                    if stop_for_callback.load(Ordering::Acquire) {
+                    let accepting = !stop_for_callback.load(Ordering::Acquire);
+                    callback_diagnostics.data_callback(true, accepting, data.len() / channels.max(1));
+                    if !accepting {
                         return;
                     }
                     let samples = data.iter().copied().map($to_f32).collect::<Vec<f32>>();
                     reference.push_interleaved(&samples, channels);
                 },
                 move |error| {
+                    let error_kind = cpal_error_kind_code(&error);
+                    let error_count = error_diagnostics.reference.record_error();
+                    error_diagnostics.event(
+                        "P3",
+                        "[\"H1\",\"H2\"]",
+                        "reference_stream_error",
+                        if error_kind == "xrun" {
+                            "reference_xrun"
+                        } else {
+                            "reference_fault"
+                        },
+                        &format!(
+                            "{{\"stream_role\":\"reference\",\"error_kind\":\"{}\",\"error_count\":{},\"callback_count\":{}}}",
+                            error_kind,
+                            error_count,
+                            error_diagnostics.reference.callbacks.load(Ordering::Relaxed),
+                        ),
+                    );
                     log::warn!("[recorder] echo reference stream stopped: {error}");
                 },
             )
@@ -2063,6 +2268,7 @@ impl AudioProcessingWorker {
 
 /// State carried across callbacks: resample leftovers, diagnostic counters and peak.
 struct StreamState {
+    diagnostics: Arc<CaptureDiagnostics>,
     processor_sender: Mutex<Option<SyncSender<AudioProcessingMessage>>>,
     /// Fractional position left unconsumed by the previous callback; linear-interpolation
     /// resampling spans buffers.
@@ -2081,6 +2287,7 @@ struct StreamState {
 impl StreamState {
     fn new() -> Self {
         Self {
+            diagnostics: Arc::new(CaptureDiagnostics::new()),
             processor_sender: Mutex::new(None),
             resample_phase: Mutex::new(0.0),
             last_sample: Mutex::new(0.0),
@@ -2372,6 +2579,46 @@ fn build_wav_header(data_size: u32) -> [u8; 44] {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex as StdMutex};
+
+    #[test]
+    fn diagnostic_callback_marks_only_the_next_callback_after_errors() {
+        let stream = StreamDiagnostics::default();
+        assert_eq!(stream.record_callback(), (1, false));
+        assert_eq!(stream.record_error(), 1);
+        assert_eq!(stream.record_callback(), (2, true));
+        assert_eq!(stream.record_callback(), (3, false));
+        assert_eq!(stream.record_error(), 2);
+        assert_eq!(stream.record_error(), 3);
+        assert_eq!(stream.record_callback(), (4, true));
+        assert_eq!(stream.record_callback(), (5, false));
+        assert_eq!(stream.errors.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn diagnostic_stream_roles_and_capture_runs_are_independent() {
+        let first = CaptureDiagnostics::new();
+        let second = CaptureDiagnostics::new();
+        assert_ne!(first.run_id, second.run_id);
+        first.microphone.record_error();
+        assert_eq!(first.reference.record_callback(), (1, false));
+        assert_eq!(first.microphone.record_callback(), (1, true));
+        assert_eq!(second.microphone.record_callback(), (1, false));
+        assert_eq!(first.reference.errors.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn diagnostic_error_code_uses_only_structured_kind() {
+        let error = cpal::Error::with_message(cpal::ErrorKind::Xrun, "private backend detail");
+        assert_eq!(cpal_error_kind_code(&error), "xrun");
+        assert_eq!(
+            cpal_error_kind_code(&cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable)),
+            "device_not_available",
+        );
+        assert_eq!(
+            cpal_error_kind_code(&cpal::Error::new(cpal::ErrorKind::StreamInvalidated)),
+            "stream_invalidated",
+        );
+    }
 
     #[derive(Default)]
     struct RecordingConsumer {
