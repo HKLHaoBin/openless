@@ -452,15 +452,23 @@ jobs:
       # Tests are tooling, not application payload. A targeted repair checks out
       # immutable app source above, but uses the reviewed workflow commit's smoke
       # script so fixes to test semantics do not require moving a release tag.
-      - name: Checkout installer smoke tooling
+      - name: Fetch installer smoke tooling
         if: matrix.platform == 'windows-latest'
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: release-tooling
-          sparse-checkout: openless-all/app/scripts/windows-ime-install-smoke.ps1
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOOLING_SHA: ${{ github.workflow_sha }}
+        run: |
+          # Fetch only the pinned script: a sparse checkout still visits unrelated
+          # gitlinks during auth cleanup, including optional vendor runtimes.
+          $scriptPath = 'openless-all/app/scripts/windows-ime-install-smoke.ps1'
+          $encoded = gh api "repos/$env:GITHUB_REPOSITORY/contents/$scriptPath" --method GET -f "ref=$env:TOOLING_SHA" --jq '.content'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch pinned installer smoke tooling.' }
+          $bytes = [Convert]::FromBase64String(($encoded -join ''))
+          if ($bytes.Length -eq 0) { throw 'Pinned installer smoke tooling is empty.' }
+          $destination = Join-Path $env:GITHUB_WORKSPACE "release-tooling/$scriptPath"
+          New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
+          [System.IO.File]::WriteAllBytes($destination, $bytes)
 
       - name: Verify Windows installers register TSF IME
         if: matrix.platform == 'windows-latest'
