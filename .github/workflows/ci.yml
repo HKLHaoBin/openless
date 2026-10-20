@@ -354,6 +354,10 @@ jobs:
           OPENLESS_CODEX_TEST_EXE: codex
         run: cargo test --locked -p openless-core hardening_actually_narrows_the_writable_roots -- --ignored --nocapture --test-threads=1
 
+      - name: Test Windows symbol-pair validation
+        if: runner.os == 'Windows'
+        run: python scripts/windows-symbol-pair.test.py
+
       - name: Check Tauri backend (cargo check)
         if: runner.os == 'Windows'
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml

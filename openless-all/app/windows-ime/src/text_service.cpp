@@ -152,9 +152,10 @@ HRESULT OpenLessTextService::EnsureMessageWindow() {
   message_window_ = CreateWindowExW(0, kMessageWindowClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
                                     nullptr, g_module, this);
   if (message_window_ == nullptr) {
+    const DWORD error = GetLastError();
     issue1227_debug::Record("P2", "\"H1\"", "window_create", "failed",
                            "\"present\":false");
-    return HRESULT_FROM_WIN32(GetLastError());
+    return HRESULT_FROM_WIN32(error);
   }
   issue1227_debug::Record("P2", "\"H1\"", "window_create", "succeeded",
                          "\"present\":true");

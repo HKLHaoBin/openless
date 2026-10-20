@@ -66,6 +66,8 @@ mod hotkey;
 mod hotkey;
 mod insertion;
 #[cfg(target_os = "windows")]
+mod issue1227_audio_debug;
+#[cfg(target_os = "windows")]
 mod issue1227_debug;
 mod llm_gemini;
 #[cfg(mobile)]

@@ -1101,6 +1101,8 @@ impl Recorder {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop_flag);
         let state = Arc::new(StreamState::new());
+        #[cfg(target_os = "windows")]
+        state.debug.lifecycle("capture_start", "entered");
         let state_for_thread = Arc::clone(&state);
 
         // Try creating WavArchiveWriter on the synchronous path — success/failure is known
@@ -1134,6 +1136,10 @@ impl Recorder {
             }) {
             Ok(handle) => handle,
             Err(error) => {
+                #[cfg(target_os = "windows")]
+                state
+                    .debug
+                    .lifecycle("capture_start", "thread_spawn_failed");
                 if let Some(archive) = archive_writer.as_ref() {
                     archive.finish();
                 }
@@ -1148,6 +1154,10 @@ impl Recorder {
         let startup_result = match startup_rx.recv() {
             Ok(result) => result,
             Err(error) => {
+                #[cfg(target_os = "windows")]
+                state
+                    .debug
+                    .lifecycle("capture_start", "startup_disconnected");
                 if let Some(archive) = archive_writer.as_ref() {
                     archive.finish();
                 }
@@ -1157,6 +1167,8 @@ impl Recorder {
             }
         };
         if let Err(error) = startup_result {
+            #[cfg(target_os = "windows")]
+            state.debug.lifecycle("capture_start", "failed");
             let _ = join_handle.join();
             if let Some(archive) = archive_writer.as_ref() {
                 archive.finish();
@@ -1164,6 +1176,8 @@ impl Recorder {
             return Err(error);
         }
 
+        #[cfg(target_os = "windows")]
+        state.debug.lifecycle("capture_start", "succeeded");
         Ok((
             Self {
                 stop_flag,
@@ -1197,6 +1211,8 @@ impl Recorder {
             archive_writer,
             state,
         } = self;
+        #[cfg(target_os = "windows")]
+        state.debug.lifecycle("capture_stop", "entered");
         *state.processor_sender.lock() = None;
         stop_flag.store(true, Ordering::SeqCst);
         if let Some(handle) = join_handle.lock().take() {
@@ -1206,6 +1222,11 @@ impl Recorder {
         }
         if let Some(archive) = archive_writer {
             archive.finish();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            state.debug.snapshot("capture_stop_counts");
+            state.debug.lifecycle("capture_stop", "returned");
         }
     }
 }
@@ -1449,6 +1470,8 @@ fn run_audio_thread(
                     break;
                 }
 
+                #[cfg(target_os = "windows")]
+                state_for_watchdog.debug.snapshot("capture_progress");
                 let last_callback = *state_for_watchdog.last_callback_time.lock();
                 match last_callback {
                     Some(last_time) => {
@@ -1494,6 +1517,8 @@ fn run_audio_thread(
     // Stop accepting callback frames before pausing the native stream. This prevents a
     // callback racing with shutdown from adding work after the worker drain begins.
     state.accepting_audio.store(false, Ordering::Release);
+    #[cfg(target_os = "windows")]
+    state.debug.lifecycle("native_shutdown", "entered");
     // Pause explicitly before drop.
     // On macOS coreaudio, cpal 0.15's plain drop(Stream) does not synchronously call
     // AudioOutputUnitStop, so the AudioUnit render callback keeps firing and process_callback
@@ -1503,13 +1528,30 @@ fn run_audio_thread(
     // The subsequent drop handles dispose / resource release. If pause fails, warn only and
     // do not block the drop.
     if let Err(err) = stream.pause() {
+        #[cfg(target_os = "windows")]
+        state.debug.lifecycle("native_pause", "failed");
         log::warn!("[recorder] cpal Stream pause before drop failed: {err}");
     }
+    #[cfg(target_os = "windows")]
+    state.debug.lifecycle("native_drop", "entered");
     drop(stream);
+    #[cfg(target_os = "windows")]
+    {
+        state.debug.native_dropped();
+        state.debug.lifecycle("native_drop", "returned");
+        state.debug.snapshot("native_drop_counts");
+    }
     log::info!("[recorder] cpal Stream dropped (mic released)");
     *state.processor_sender.lock() = None;
     drop(frame_tx);
+    #[cfg(target_os = "windows")]
+    state.debug.lifecycle("processor_drain", "entered");
     processor.finish();
+    #[cfg(target_os = "windows")]
+    {
+        state.debug.lifecycle("processor_drain", "returned");
+        state.debug.snapshot("processor_drained_counts");
+    }
     log::info!("[recorder] audio processor stopped (accepted frames drained)");
 
     // Wait for the watchdog thread to exit
@@ -1638,6 +1680,24 @@ fn start_native_config(
     runtime_error_tx: &Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
     let config = supported.config();
+    #[cfg(target_os = "windows")]
+    state.debug.configuration(
+        config.sample_rate.0,
+        config.channels as usize,
+        match supported.sample_format() {
+            SampleFormat::F32 => "f32",
+            SampleFormat::F64 => "f64",
+            SampleFormat::I8 => "i8",
+            SampleFormat::I16 => "i16",
+            SampleFormat::I32 => "i32",
+            SampleFormat::I64 => "i64",
+            SampleFormat::U8 => "u8",
+            SampleFormat::U16 => "u16",
+            SampleFormat::U32 => "u32",
+            SampleFormat::U64 => "u64",
+            _ => "unsupported",
+        },
+    );
     state.accepting_audio.store(false, Ordering::Release);
     let stream = build_stream_for_format(
         device,
@@ -1654,6 +1714,8 @@ fn start_native_config(
         .play()
         .map_err(|error| classify_default_config_err(format!("play: {error}")))?;
     state.accepting_audio.store(true, Ordering::Release);
+    #[cfg(target_os = "windows")]
+    state.debug.lifecycle("native_play", "succeeded");
     log::info!(
         "[recorder] inputDevice={} inputFormat sampleRate={} channels={} fmt={:?}",
         device.name().unwrap_or_else(|_| "<unknown>".into()),
@@ -1765,6 +1827,8 @@ fn build_stream_for_format(
             let runtime_error_for_error = runtime_error_tx.clone();
             let error_state = Arc::clone(&state);
             let err_cb = move |err| {
+                #[cfg(target_os = "windows")]
+                error_state.debug.stream_error();
                 if !error_state.accepting_audio.load(Ordering::Acquire) {
                     return;
                 }
@@ -1776,7 +1840,11 @@ fn build_stream_for_format(
                 .build_input_stream::<$t, _, _>(
                     config,
                     move |data: &[$t], _info| {
+                        #[cfg(target_os = "windows")]
+                        let _debug_callback = state.debug.callback(data.len(), channels, input_sr);
                         if !state.accepting_audio.load(Ordering::Acquire) {
+                            #[cfg(target_os = "windows")]
+                            state.debug.skipped();
                             return;
                         }
                         let mut floats = Vec::with_capacity(data.len());
@@ -1789,11 +1857,18 @@ fn build_stream_for_format(
                             channels,
                             input_sample_rate: input_sr,
                         })) {
-                            Ok(()) => {}
+                            Ok(()) => {
+                                #[cfg(target_os = "windows")]
+                                state.debug.queued();
+                            }
                             Err(TrySendError::Disconnected(_)) => {
+                                #[cfg(target_os = "windows")]
+                                state.debug.queue_disconnected();
                                 stop_flag.store(true, Ordering::Release);
                             }
                             Err(TrySendError::Full(_)) => {
+                                #[cfg(target_os = "windows")]
+                                state.debug.queue_full();
                                 if state.accepting_audio.swap(false, Ordering::AcqRel) {
                                     let _ = runtime_error_for_callback.send(
                                         RecorderError::EngineFailed(
@@ -1871,6 +1946,8 @@ impl AudioProcessingWorker {
                 while let Ok(message) = receiver.recv() {
                     match message {
                         AudioProcessingMessage::Frame(frame) => {
+                            #[cfg(target_os = "windows")]
+                            state.debug.processing_started();
                             if let Some(chunk) = processor.process(
                                 &frame.samples,
                                 frame.channels,
@@ -1882,6 +1959,13 @@ impl AudioProcessingWorker {
                                 }
                                 level_handler(chunk.level);
                                 update_peak(&state.peak_output_rms_milli, chunk.level);
+                                #[cfg(target_os = "windows")]
+                                state
+                                    .debug
+                                    .processing_completed(Some(chunk.pcm_i16_le.len()));
+                            } else {
+                                #[cfg(target_os = "windows")]
+                                state.debug.processing_completed(None);
                             }
                         }
                         AudioProcessingMessage::Flush(done) => {
@@ -1919,6 +2003,8 @@ impl AudioProcessingWorker {
 
 /// State carried across callbacks: resample leftovers, diagnostic counters and peak.
 struct StreamState {
+    #[cfg(target_os = "windows")]
+    debug: crate::issue1227_audio_debug::CaptureProbe,
     processor_sender: Mutex<Option<SyncSender<AudioProcessingMessage>>>,
     /// Fractional position left unconsumed by the previous callback; linear-interpolation
     /// resampling spans buffers.
@@ -1937,6 +2023,8 @@ struct StreamState {
 impl StreamState {
     fn new() -> Self {
         Self {
+            #[cfg(target_os = "windows")]
+            debug: crate::issue1227_audio_debug::CaptureProbe::new(),
             processor_sender: Mutex::new(None),
             resample_phase: Mutex::new(0.0),
             last_sample: Mutex::new(0.0),

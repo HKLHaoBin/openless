@@ -101,3 +101,9 @@ assert.match(
   /InterlockedDecrement\(&g_object_count\)/,
   'IME edit sessions should release the COM DLL lifetime count when destroyed',
 );
+
+assert.match(
+  textService,
+  /message_window_ = CreateWindowExW[\s\S]*?if \(message_window_ == nullptr\) \{\s*const DWORD error = GetLastError\(\);\s*issue1227_debug::Record[\s\S]*?return HRESULT_FROM_WIN32\(error\);/,
+  'window creation failure must preserve its Win32 error before diagnostic I/O',
+);

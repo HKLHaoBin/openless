@@ -1,4 +1,4 @@
-//! Opt-in issue #1227 runtime probes. The records contain only bounded state facts.
+//! Diagnostic-branch issue #1227 runtime probes. The records contain only bounded state facts.
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -36,7 +36,36 @@ pub(crate) fn record(
     outcome: &'static str,
     safe: serde_json::Value,
 ) {
-    let record = serde_json::json!({
+    record_inner(probe_id, hypothesis_ids, event, outcome, None, safe);
+}
+
+pub(crate) fn record_correlated(
+    probe_id: &'static str,
+    hypothesis_ids: &'static [&'static str],
+    event: &'static str,
+    outcome: &'static str,
+    correlation: (u64, u64),
+    safe: serde_json::Value,
+) {
+    record_inner(
+        probe_id,
+        hypothesis_ids,
+        event,
+        outcome,
+        Some(correlation),
+        safe,
+    );
+}
+
+fn record_inner(
+    probe_id: &'static str,
+    hypothesis_ids: &'static [&'static str],
+    event: &'static str,
+    outcome: &'static str,
+    correlation: Option<(u64, u64)>,
+    safe: serde_json::Value,
+) {
+    let mut record = serde_json::json!({
         "schema": "diagnosing-bugs.v1",
         "session_id": SESSION_ID,
         "run_id": run_id(),
@@ -47,6 +76,10 @@ pub(crate) fn record(
         "safe": safe,
         "ts": unix_millis(),
     });
+    if let Some((operation, sequence)) = correlation {
+        record["operation_id"] = serde_json::json!(format!("capture-{operation}"));
+        record["event_seq"] = serde_json::json!(sequence);
+    }
     let Ok(mut line) = serde_json::to_vec(&record) else {
         return;
     };

@@ -28,6 +28,10 @@ on:
         type: choice
         options: [all, macos, windows]
         default: all
+      windows_symbols:
+        description: Retain matching Windows EXE/PDB for branch diagnostics (not old releases)
+        type: boolean
+        default: false
       release_tag:
         description: Existing draft Stable tag to repair (admin only, Windows only)
         type: string
@@ -292,6 +296,13 @@ jobs:
             Write-Host "[ok] copied real $($t.Folder) dll into bundle.resources payload path"
           }
 
+      - name: Enable Windows diagnostic symbols
+        if: matrix.platform == 'windows-latest' && inputs.windows_symbols && !startsWith(github.ref, 'refs/tags/') && inputs.release_tag == ''
+        shell: bash
+        run: |
+          echo "CARGO_PROFILE_RELEASE_DEBUG=1" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_STRIP=none" >> "$GITHUB_ENV"
+
       # ── Windows tauri build: keep the bash shell, because PowerShell invoking external
       #    commands strips the inner double quotes of '{"bundle":...}' and tauri receives
       #    invalid JSON.
@@ -555,6 +566,30 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz
             openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
             openless-all/app/src-tauri/target/release/bundle/latest-darwin-${{ matrix.updater-arch }}*.json
+          if-no-files-found: error
+
+      - name: Verify Windows EXE/PDB identity
+        if: matrix.platform == 'windows-latest' && inputs.windows_symbols && !startsWith(github.ref, 'refs/tags/') && inputs.release_tag == ''
+        shell: bash
+        run: >-
+          python openless-all/app/scripts/windows-symbol-pair.py
+          openless-all/app/src-tauri/target/release/openless.exe
+          openless-all/app/src-tauri/target/release/openless.pdb
+          openless-all/app/src-tauri/target/release/windows-symbols.json
+          --revision "$GITHUB_SHA"
+          --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      - name: Upload Windows diagnostic symbols
+        if: matrix.platform == 'windows-latest' && inputs.windows_symbols && !startsWith(github.ref, 'refs/tags/') && inputs.release_tag == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-windows-x64-symbols
+          compression-level: 1
+          retention-days: 14
+          path: |
+            openless-all/app/src-tauri/target/release/openless.exe
+            openless-all/app/src-tauri/target/release/openless.pdb
+            openless-all/app/src-tauri/target/release/windows-symbols.json
           if-no-files-found: error
 
       - name: Upload Windows artifacts
