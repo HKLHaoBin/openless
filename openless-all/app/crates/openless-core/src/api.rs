@@ -15735,6 +15735,7 @@ mod tests {
                 credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
                 services: crate::domains::BackendServices::unsupported(),
                 local_asr_runtime: None,
+                voice_activation_runtime: None,
                 marketplace_config: None,
                 selection_runtime: None,
                 selection_polisher: None,
