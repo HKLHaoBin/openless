@@ -12,6 +12,7 @@ pub mod audio;
 pub mod auxiliary;
 pub mod cli;
 mod cloud_providers;
+pub use cloud_providers::parse_temperature;
 pub mod cloud_sync;
 pub mod cloud_sync_e2ee;
 pub mod cloud_sync_e2ee_documents;
@@ -42,6 +43,7 @@ pub mod language_catalog;
 mod less_computer;
 pub mod llm_gemini;
 pub mod llm_protocol;
+pub mod local_migration_bundle;
 mod marketplace;
 pub mod model_store;
 pub mod net;
@@ -67,6 +69,7 @@ mod selection_voice_service;
 pub mod settings;
 pub mod shared_types;
 pub mod silence_auto_stop;
+pub mod siwc;
 pub mod streaming_insert;
 mod style_pack_archive;
 pub mod style_pack_store;
@@ -215,7 +218,7 @@ pub mod contract {
 
 pub use activity::{ActivityDay, ActivityStore, DayStats};
 pub use api::{
-    BackendRepositories, BackendSnapshot, CliDispatchOutcome, DictationHotkeyDispatchOptions,
+    AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome, DictationHotkeyDispatchOptions,
     DictationHotkeyEdge, LessComputerHotkeyAction, LessComputerVoiceFinish,
     LessComputerVoiceOptions, LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult,
     QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
@@ -334,9 +337,9 @@ pub use remote_input_service::{
 pub use selection_voice_intent::SelectionVoiceIntent;
 pub use settings::*;
 pub use shared_types::{
-    CapsulePayload, CapsuleState, CapsuleStyle, CredentialsStatus, HotkeyMode, HotkeyStatus,
-    PendingCorrection, PlatformCapabilities, SelectionPolishOutputMode, UserPreferences,
-    LOCAL_ASR_KEEP_LOADED_FOREVER_SECS,
+    CapsuleDisplayMode, CapsulePayload, CapsuleState, CapsuleStyle, CredentialsStatus, HotkeyMode,
+    HotkeyStatus, PendingCorrection, PlatformCapabilities, SelectionPolishOutputMode,
+    UserPreferences, LOCAL_ASR_KEEP_LOADED_FOREVER_SECS,
 };
 pub use shortcut_types::{
     binding_from_legacy_trigger, binding_requires_mouse_hook, binding_requires_side_aware_hook,
@@ -382,13 +385,16 @@ pub use voice_activation::{
     normalize_phrase, validate_phrase, PhraseValidationError, VoiceActivationCommand,
     VoiceActivationConfig, VoiceActivationDecision, VoiceActivationGeneration,
     VoiceActivationPhase, VoiceActivationSession, VoiceActivationSignal,
-    VoiceActivationStateSnapshot, VoiceActivationStopReason, VoiceCommandMatch,
-    VoiceCommandRecognizer, VoicePhraseMatcher, DEFAULT_FINISH_PHRASE, DEFAULT_TIMEOUT_SECONDS,
-    DEFAULT_WAKE_PHRASE, MAX_PHRASE_CHARS, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS,
+    VoiceActivationStateSnapshot, VoiceActivationStopReason, VoiceActivationTextPolicy,
+    VoiceCommandMatch, VoiceCommandRecognizer, VoicePhraseMatcher, DEFAULT_FINISH_PHRASE,
+    DEFAULT_TIMEOUT_SECONDS, DEFAULT_WAKE_PHRASE, MAX_PHRASE_CHARS, MAX_TIMEOUT_SECONDS,
+    MIN_TIMEOUT_SECONDS,
 };
 pub use voice_edit_session::{
     TextSelection, VoiceEditCommit, VoiceEditContext, VoiceEditError, VoiceEditPhase,
     VoiceEditSession, VoiceEditSnapshot, VoiceEditTarget, VoiceEditTurn,
 };
 
+pub mod ime_cloud;
+pub mod ime_dictionary;
 pub mod preference_patch;

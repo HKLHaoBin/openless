@@ -810,6 +810,9 @@ async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend, owners: &mut Ca
     }
     let _ = app.emit("credentials:changed", snapshot.credentials);
     let _ = app.emit("vocab:updated", ());
+    if let Some(state) = backend.latest_voice_activation_state() {
+        let _ = app.emit("voice-activation:state-changed", state);
+    }
 
     let qa = match backend.services().qa.snapshot().await {
         Ok(snapshot) => Some(snapshot),

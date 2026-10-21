@@ -73,8 +73,8 @@ export function SettingsModal({
   const [requestedSection, setSection] = useState<SettingsSectionId>(
     initialSettingsSection ?? 'general',
   );
-  const [requestedServiceView, setRequestedServiceView] = useState<ServiceViewId | undefined>();
   const [requestedAdvancedPage, setAdvancedPage] = useState<AdvancedPageId | null>(null);
+  const [requestedServiceView, setRequestedServiceView] = useState<ServiceViewId | undefined>();
   const [query, setQuery] = useState('');
   const [platformCaps, setPlatformCaps] = useState(getCachedPlatformCapabilities);
   const experimentalAsr = useExperimentalAsr(platformCaps?.platform === 'desktop' && os === 'mac');
@@ -752,14 +752,14 @@ export function SettingsModal({
                         gap: 16,
                       }}
                     >
-                      {section === 'general' && <GeneralTab onOpenLocalModels={openLocalModels} />}
+                      {section === 'general' && <GeneralTab os={os} onOpenLocalModels={openLocalModels} />}
                       {section === 'inputMethod' && <InputMethodTab />}
                       {section === 'shortcuts' && <ShortcutsTab />}
                       {section === 'appearance' && <AppearanceTab />}
                       {section === 'services' && (
                         <ServicesTab
-                          initialView={requestedServiceView}
                           asrNavigation={asrNavigation}
+                          initialView={requestedServiceView}
                         />
                       )}
                       {section === 'privacy' && <PrivacyTab />}

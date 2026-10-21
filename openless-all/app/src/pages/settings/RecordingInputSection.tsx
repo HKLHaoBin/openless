@@ -1,7 +1,7 @@
 // Recording & input settings: recording mode, audio cues, input behavior, and
 // platform-specific options.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CapsuleStylePreview } from '../../components/TypelessCapsule';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
@@ -14,14 +14,20 @@ import {
   showWindowsOpenlessKeyboardListToggle,
   showWindowsSendInputNewlineMode,
 } from '../../lib/windowsKeyboardListToggle';
+import {
+  isPlainTextInsertionActive,
+  pasteShortcutForPlainTextToggle,
+} from '../../lib/plainTextInsertion';
 import { isTauri, listMicrophoneDevices, setDictationHotkey } from '../../lib/ipc';
 import {
   isVoiceActivationModelMissing,
   VOICE_ACTIVATION_MODEL_ALIAS,
   type VoiceActivationStateSnapshot,
 } from '../../lib/voiceActivation';
+import { getNativeCapsuleStatus } from '../../lib/ipc/settings';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../lib/platform';
 import type {
+  NativeCapsuleStatus,
   CapsuleStyle,
   HotkeyMode,
   MicrophoneDevice,
@@ -34,10 +40,12 @@ import type {
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { Btn, Card, Collapsible } from '../_atoms';
+import { PresenceModal } from '../../components/ui/Modal';
+import { Card, Collapsible, Btn } from '../_atoms';
+import { restartApp } from '../../lib/ipc';
 import { SectionTitle, SettingRow, Toggle, inputStyle, segmentedTrackStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
-import { detectOS } from '../../components/WindowChrome';
+import { detectOS, type OS } from '../../components/WindowChrome';
 
 /** Selectable silence durations (seconds) for "auto-stop after silence"; see issue #860. */
 const silenceAutoStopOptions = [1, 1.5, 2, 3, 4, 5];
@@ -58,12 +66,14 @@ async function autostartDisable(): Promise<void> {
 }
 
 export function RecordingInputSection({
+  forcedOs,
   onOpenLocalModels,
 }: {
+  forcedOs?: OS;
   onOpenLocalModels?: () => void;
 } = {}) {
   const { t } = useTranslation();
-  const os = detectOS();
+  const os = forcedOs ?? detectOS();
   const { prefs, capability, updatePrefs: savePrefs, refresh } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(
     getCachedPlatformCapabilities,
@@ -73,22 +83,14 @@ export function RecordingInputSection({
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
   const [voiceActivationModelMissing, setVoiceActivationModelMissing] = useState(false);
   const voiceActivationStateObservedRef = useRef(false);
+  const [displayModeRestartPending, setDisplayModeRestartPending] = useState(false);
+  const [displayModeRestarting, setDisplayModeRestarting] = useState(false);
+  const displayModeRestartTitleId = useId();
+  const displayModeChangeSequenceRef = useRef(0);
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
-
-  // 兼容旧 Windows 配置：Shift+Insert 仍保留在跨平台类型/后端中，
-  // 但 Windows 已不再提供该选项；进入设置时迁移为 Ctrl+V，避免下拉框无匹配值。
-  useEffect(() => {
-    if (os !== 'win' || prefs?.pasteShortcut !== 'shiftInsert') return;
-    void savePrefs((current) => {
-      if (current.pasteShortcut !== 'shiftInsert') return current;
-      return { ...current, pasteShortcut: 'ctrlV' };
-    }).catch((error) => {
-      console.warn('[settings] migrate Windows paste shortcut failed', error);
-    });
-  }, [os, prefs?.pasteShortcut, savePrefs]);
 
   const loadMicrophoneDevices = useCallback(
     async (signal?: { cancelled: boolean }, options: { showLoading?: boolean } = {}) => {
@@ -174,7 +176,7 @@ export function RecordingInputSection({
   }, [os]);
 
   useEffect(() => {
-    if (!isTauri || os !== 'win' || !prefs?.voiceActivationEnabled) {
+    if (os !== 'win' || !prefs?.voiceActivationEnabled) {
       voiceActivationStateObservedRef.current = false;
       setVoiceActivationModelMissing(false);
       return;
@@ -247,8 +249,38 @@ export function RecordingInputSection({
   const isAndroid = platformCaps?.platform === 'android';
   const showDesktopInsert = showDesktopHotkey;
   const showDesktopStartup = showDesktopHotkey;
-  const effectivePasteShortcut =
-    os === 'win' && prefs.pasteShortcut === 'shiftInsert' ? 'ctrlV' : prefs.pasteShortcut;
+  const plainTextInsertionOn = isPlainTextInsertionActive(os === 'win', prefs.pasteShortcut);
+  const effectiveCapsuleDisplayMode =
+    os === 'win' ||
+    prefs.capsuleDisplayMode === 'cursorScreen' ||
+    prefs.capsuleDisplayMode === 'allScreens'
+      ? (prefs.capsuleDisplayMode ?? 'cursorScreen')
+      : 'cursorScreen';
+
+  const onCapsuleDisplayModeChange = async (next: UserPreferences['capsuleDisplayMode']) => {
+    const previous = prefs.capsuleDisplayMode ?? 'cursorScreen';
+    const changeSequence = ++displayModeChangeSequenceRef.current;
+    await savePrefs({ ...prefs, capsuleDisplayMode: next });
+    if (
+      changeSequence === displayModeChangeSequenceRef.current &&
+      os === 'win' &&
+      previous === 'allScreens' &&
+      next !== 'allScreens'
+    ) {
+      setDisplayModeRestartPending(true);
+    }
+  };
+  const onRestartForDisplayMode = async () => {
+    setDisplayModeRestarting(true);
+    try {
+      await restartApp();
+      setDisplayModeRestartPending(false);
+    } catch (error) {
+      console.error('[settings] restart after capsule display mode change failed', error);
+    } finally {
+      setDisplayModeRestarting(false);
+    }
+  };
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
@@ -266,6 +298,8 @@ export function RecordingInputSection({
     savePrefs({ ...prefs, restoreClipboardAfterPaste });
   const onPasteShortcutChange = (pasteShortcut: PasteShortcut) =>
     savePrefs({ ...prefs, pasteShortcut });
+  const onPlainTextInsertionChange = (on: boolean) =>
+    savePrefs({ ...prefs, pasteShortcut: pasteShortcutForPlainTextToggle(on) });
   const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
     savePrefs({ ...prefs, allowNonTsfInsertionFallback });
   const onWindowsInsertionModeChange = (windowsInsertionMode: WindowsInsertionMode) =>
@@ -526,6 +560,40 @@ export function RecordingInputSection({
             <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
           </SettingRow>
         )}
+        {!isAndroid && (os === 'mac' || os === 'win') && (
+          <SettingRow
+            label={t('settings.recording.capsuleDisplayModeLabel')}
+            desc={t('settings.recording.capsuleDisplayModeDesc')}
+          >
+            <SelectLite
+              value={effectiveCapsuleDisplayMode}
+              onChange={(next) =>
+                void onCapsuleDisplayModeChange(next as UserPreferences['capsuleDisplayMode'])
+              }
+              options={[
+                {
+                  value: 'cursorScreen',
+                  label: t('settings.recording.capsuleDisplayCursorScreen'),
+                },
+                ...(os === 'win'
+                  ? [
+                      {
+                        value: 'primaryScreen',
+                        label: t('settings.recording.capsuleDisplayPrimaryScreen'),
+                      },
+                      {
+                        value: 'foregroundWindowScreen',
+                        label: t('settings.recording.capsuleDisplayForegroundWindowScreen'),
+                      },
+                    ]
+                  : []),
+                { value: 'allScreens', label: t('settings.recording.capsuleDisplayAllScreens') },
+              ]}
+              ariaLabel={t('settings.recording.capsuleDisplayModeLabel')}
+              style={{ maxWidth: 240, minWidth: 200 }}
+            />
+          </SettingRow>
+        )}
         {!isAndroid && (
           <SettingRow label={t('settings.recording.capsuleStyleLabel')}>
             <div style={{ minWidth: 0 }}>
@@ -759,17 +827,40 @@ export function RecordingInputSection({
               desc={t('settings.recording.pasteShortcutDesc')}
             >
               <SelectLite
-                value={effectivePasteShortcut}
+                value={prefs.pasteShortcut}
                 onChange={(next) => onPasteShortcutChange(next as PasteShortcut)}
-                options={[
-                  { value: 'ctrlV', label: t('settings.recording.pasteShortcutCtrlV') },
-                  { value: 'ctrlShiftV', label: t('settings.recording.pasteShortcutCtrlShiftV') },
-                  // 这个「粘贴与剪贴板」组只在 Windows 出现（mac 走
-                  // macEventTap 不显示本行）。Shift+Insert 是 xterm/urxvt 等 X11 终端的粘贴组合，
-                  // 放在 Windows 上纯属误导，故不再作为选项（issue #786）。
-                ]}
+                // 纯文本插入模式开启时，Shift+Insert 由开关接管，这里只读展示。
+                disabled={plainTextInsertionOn}
+                options={
+                  plainTextInsertionOn
+                    ? [
+                        {
+                          value: 'shiftInsert',
+                          label: t('settings.recording.pasteShortcutShiftInsert'),
+                        },
+                      ]
+                    : [
+                        { value: 'ctrlV', label: t('settings.recording.pasteShortcutCtrlV') },
+                        {
+                          value: 'ctrlShiftV',
+                          label: t('settings.recording.pasteShortcutCtrlShiftV'),
+                        },
+                      ]
+                }
                 ariaLabel={t('settings.recording.pasteShortcutLabel')}
                 style={{ ...inputStyle, maxWidth: 220 }}
+              />
+            </SettingRow>
+          )}
+          {os === 'win' && capability.adapter !== 'macEventTap' && (
+            <SettingRow
+              label={t('settings.recording.plainTextInsertionLabel')}
+              desc={t('settings.recording.plainTextInsertionDesc')}
+            >
+              <Toggle
+                on={plainTextInsertionOn}
+                onToggle={onPlainTextInsertionChange}
+                label={t('settings.recording.plainTextInsertionLabel')}
               />
             </SettingRow>
           )}
@@ -891,12 +982,35 @@ export function RecordingInputSection({
               onToggle={(next) => void savePrefs({ ...prefs, streamingInsertSaveClipboard: next })}
             />
           </SettingRow>
+          {capability.adapter === 'windowsLowLevel' && prefs.windowsInsertionMode === 'tsf' && (
+            <SettingRow
+              label={t('settings.advanced.windowsCompositionInputLabel')}
+              desc={t('settings.advanced.windowsCompositionInputDesc')}
+            >
+              <Toggle
+                on={!!prefs.windowsCompositionInput}
+                onToggle={(next) => void savePrefs({ ...prefs, windowsCompositionInput: next })}
+              />
+            </SettingRow>
+          )}
         </Collapsible>
       )}
       {/* ─── Startup (collapsed) ──────────────────────────────────────────── */}
       {showDesktopStartup && (
         <Collapsible title={t('settings.recording.startupGroupTitle')} defaultOpen>
           <AutostartRow />
+          <SettingRow
+            label={t('settings.recording.lowMemoryBackgroundLabel')}
+            desc={t('settings.recording.lowMemoryBackgroundDesc')}
+          >
+            <Toggle
+              on={prefs.lowMemoryBackgroundEnabled ?? false}
+              onToggle={(lowMemoryBackgroundEnabled) =>
+                savePrefs({ ...prefs, lowMemoryBackgroundEnabled })
+              }
+            />
+          </SettingRow>
+          <LowMemoryRuntimeNotice enabled={prefs.lowMemoryBackgroundEnabled ?? false} />
           <SettingRow label={t('settings.recording.startMinimizedLabel')}>
             <Toggle on={prefs.startMinimized} onToggle={onStartMinimizedChange} />
           </SettingRow>
@@ -905,12 +1019,123 @@ export function RecordingInputSection({
           </SettingRow>
         </Collapsible>
       )}
+      <PresenceModal
+        open={displayModeRestartPending}
+        onClose={() => {
+          if (!displayModeRestarting) setDisplayModeRestartPending(false);
+        }}
+        zIndex={1000}
+        width="min(420px, calc(100vw - 32px))"
+        style={{ padding: 18 }}
+        labelledBy={displayModeRestartTitleId}
+        render={() => (
+          <>
+            <h2 id={displayModeRestartTitleId} style={{ fontSize: 17, margin: 0 }}>
+              {t('settings.recording.capsuleDisplayModeRestartTitle')}
+            </h2>
+            <p style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-3)' }}>
+              {t('settings.recording.capsuleDisplayModeRestartDesc')}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <Btn
+                size="sm"
+                disabled={displayModeRestarting}
+                onClick={() => setDisplayModeRestartPending(false)}
+              >
+                {t('common.cancel')}
+              </Btn>
+              <Btn
+                variant="blue"
+                size="sm"
+                disabled={displayModeRestarting}
+                onClick={() => void onRestartForDisplayMode()}
+              >
+                {t('settings.about.updateDialog.restartNow')}
+              </Btn>
+            </div>
+          </>
+        )}
+      />
     </>
   );
 }
 
 // 不存进 prefs：autostart 状态由 OS 持有（mac LaunchAgent plist /
 // windows HKCU\Run），prefs 缓存反而会与 OS 真相不一致。issue #194。
+// 低内存模式只在启动时读取一次开关；此处对比运行态与已保存的开关值，
+// 不一致时提示重启，并顺带显示 sidecar 启动及运行失败的健康告警。
+function LowMemoryRuntimeNotice({ enabled }: { enabled: boolean }) {
+  const { t } = useTranslation();
+  const [runtime, setRuntime] = useState<NativeCapsuleStatus | null>(null);
+  useEffect(() => {
+    if (!isTauri) return;
+    let cancelled = false;
+    let revision = 0;
+    let unlisten: (() => void) | undefined;
+    const refresh = async () => {
+      const current = ++revision;
+      try {
+        const status = await getNativeCapsuleStatus();
+        if (!cancelled && current === revision) setRuntime(status);
+      } catch (error) {
+        if (!cancelled) console.error('[low-memory] status failed', error);
+      }
+    };
+    void import('@tauri-apps/api/event')
+      .then(async ({ listen }) => {
+        const dispose = await listen('native-capsule:health-changed', () => void refresh());
+        if (cancelled) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+        await refresh();
+      })
+      .catch((error: unknown) => console.error('[low-memory] health listener failed', error));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [enabled]);
+  if (!runtime) return null;
+  const needsRestart = runtime.active !== enabled;
+  const capsuleBroken = runtime.active && !runtime.available;
+  if (!needsRestart && !capsuleBroken) return null;
+  return (
+    <>
+      {needsRestart ? (
+        <SettingRow
+          label={t('settings.recording.lowMemoryRestartLabel')}
+          desc={t('settings.recording.lowMemoryRestartDesc')}
+        >
+          <Btn variant="blue" size="sm" onClick={restartApp}>
+            {t('settings.recording.lowMemoryRestartNow')}
+          </Btn>
+        </SettingRow>
+      ) : null}
+      {capsuleBroken ? (
+        <SettingRow
+          label={t('settings.recording.lowMemoryCapsuleErrorLabel')}
+          desc={t('settings.recording.lowMemoryCapsuleErrorDesc')}
+        >
+          {runtime.error ? (
+            <span
+              style={{
+                fontSize: 11,
+                color: 'var(--ol-ink-3)',
+                maxWidth: 220,
+                wordBreak: 'break-all',
+              }}
+            >
+              {runtime.error}
+            </span>
+          ) : null}
+        </SettingRow>
+      ) : null}
+    </>
+  );
+}
+
 function AutostartRow() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);

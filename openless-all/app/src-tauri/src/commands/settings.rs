@@ -222,7 +222,11 @@ pub(crate) fn persist_strict_settings(
 pub(crate) fn sync_low_latency_capture_preferences(prefs: &UserPreferences) {
     let warm_hub = crate::recorder::warm_capture_hub();
     warm_hub.configure(
-        prefs.low_latency_dictation_enabled || warm_hub.activation_is_active(),
+        crate::recorder::warm_capture_enabled(
+            prefs.low_latency_dictation_enabled,
+            crate::desktop_resources::active(),
+            warm_hub.activation_is_active(),
+        ),
         (!prefs.microphone_device_name.trim().is_empty())
             .then(|| prefs.microphone_device_name.clone()),
         openless_core::AudioProcessingConfig {

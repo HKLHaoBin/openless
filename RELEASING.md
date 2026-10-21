@@ -44,16 +44,71 @@ updater manifest; NSIS uses its supported numeric fallback for file metadata.
 See [the pinned NSIS bundler](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.10.1/crates/tauri-bundler/src/bundle/windows/nsis/mod.rs#L149).
 
 These tags build the macOS, Windows, and Android Tauri hosts in parallel. Linux is
-independent: `.github/workflows/release-linux-egui.yml` is manual-only, runs the
-same Core/host/deb/rpm verification as CI, and uploads Actions artifacts. It does
-not react to Tauri tags or change a GitHub Release. After Linux product acceptance,
-an administrator may run it against the accepted existing release tag, verify its
-commit and package checksums, and explicitly attach the deb/rpm files to that
-Release. Linux has no in-app updater manifest or AppImage.
+triggered separately so an unaccepted package can never ride along with a desktop
+release: `.github/workflows/release-linux-egui.yml` is manual-only, requires the
+release tag as an input, checks it out, runs the same Core/host/deb/rpm
+verification as CI, and then **attaches the verified packages to that same
+Release automatically**. Nothing is uploaded by hand. Linux has no in-app updater
+manifest or AppImage.
+
+HarmonyOS rides in the same Release through `.github/workflows/release-harmony.yml`.
+It is manual-only as well and requires the same tag. It builds, signs and attaches
+`OpenLess_harmony_arm64.hap` plus the `OpenLess_harmony.hap` alias, then uploads
+the same HAP to HUAWEI AppGallery Connect.
+
+The build needs the official HarmonyOS command-line tools (SDK + hvigor + ohpm +
+bundled node). Huawei's download page wants an account, but the same archive is
+mirrored publicly - the mirror `k2-fsa/sherpa-onnx`'s own `harmony-os` workflow
+uses - so `scripts/prepare-harmony-sdk.sh` downloads
+`commandline-tools-linux-x64-6.0.1.251.zip` from it, verifies the pinned SHA-256
+and lays it out under `~/.local/share/harmony/current`. **No repository variable
+and no self-hosted runner is required**; the toolchain is cached by
+`actions/cache` under the tools version.
+
+Override `HARMONY_SDK_URL` / `HARMONY_SDK_SHA256` to move to a newer tools
+release, or set `HARMONY_TOOLCHAIN` and dispatch with
+`runner_labels: ["self-hosted","harmony"]` on a machine that already has the
+tools installed. Do not commit the archive: the SDK licence does not permit
+redistribution, which is also why it is fetched at job time rather than vendored.
+
+### Which channel gets which package
+
+| Channel | Artifact | Signing | Where it goes |
+| --- | --- | --- | --- |
+| Repository / GitHub Release | `OpenLess_harmony_arm64.hap` (+ `OpenLess_harmony.hap`) | **unsigned** | Release assets, `SHA256SUMS` |
+| AppGallery 正式版 | `OpenLess_harmony_arm64-signed.hap` | `release.*` material | AppGallery only, never a Release asset |
+| 测试渠道 | `OpenLess_harmony_arm64-signed.hap` | `test.*` material | AppGallery test channel |
+
+Dispatch the workflow with `channel: release` (default) or `channel: test`; the
+input selects both the signing prefix (`release.cer/p7b/p12` vs
+`test.cer/p7b/p12`) and the AppGallery upload label. The workflow artifact
+bundle carries both packages, the Release step uploads only the unsigned pair,
+and the AppGallery step uploads only the signed one.
+
+A local machine without store certificates can still produce a package:
+`OPENLESS_HARMONY_CHANNEL=none` builds and ships the unsigned HAP only, and
+`scripts/verify-harmony-hap.sh <hap> <toolchain> <name> <code> --allow-unsigned`
+checks its contents without a device.
 For each new Linux package candidate, increment `openless-all/app/linux-egui/package-revision`
 from the last `-N` suffix (for example `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`).
 Both local packaging and the shared CI/tag build use this explicit revision; never drop
 it or derive it from the Tauri tag, whose SemVer remains `2.0.0-Beta.2`.
+
+## Direct download aliases
+
+The release workflows also publish stable, version-independent asset names for the official website:
+
+- macOS Apple Silicon: `OpenLess_macos_aarch64.dmg`
+- macOS Intel: `OpenLess_macos_x86_64.dmg`
+- Windows x64: `OpenLess_windows_x86_64-setup.exe`
+- Android: `OpenLess_android_<abi>.apk` (one each for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`)
+- Linux: `OpenLess_linux_x86_64.deb` and `OpenLess_linux_x86_64.rpm`
+
+Stable website links use `https://github.com/Open-Less/openless/releases/latest/download/<asset-name>`.
+Beta links must use the release tag because `latest` excludes pre-releases:
+`https://github.com/Open-Less/openless/releases/download/<tag>/<asset-name>`.
+
+The Tauri and Android workflows attach their aliases automatically. Linux remains administrator-attached after product acceptance, so the administrator must attach the two files from the `openless-linux-egui-direct-download` Actions artifact to the accepted Release as well as the versioned packages. Do not replace the versioned assets; the aliases are an additional website-facing contract.
 
 Under the [2026-09-06 2.0 requirements](docs/2.0-requirements.md), Windows and macOS must fully retain their respective Tauri 1.x features. The egui team owns Linux Host/UI work and Linux product acceptance. Linux application gaps do not block the Windows/macOS delivery, but shared Core defects do. Linux packages must not be attached before their own product acceptance. Existing Android builds do not expand this scope into a new full-support commitment.
 
@@ -99,13 +154,49 @@ The script takes a plain `X.Y.Z`; for a prerelease version such as
    or manual cask edit is needed. Do not publish via an asset workflow's
    `GITHUB_TOKEN`, which does not emit the downstream release event.
 
-Before independently attaching Linux assets, additionally require all of the following:
+Before dispatching the Linux release build, additionally require all of the following:
 
 1. The egui team has completed the [Linux Host/UI gaps and acceptance](docs/linux-egui-handoff/07-acceptance.md). The existing `eframe::App` is a starting implementation; its presence and successful packaging alone do not establish product completeness.
 2. Linux core/host tests, dependency gates, and secret-surface gates are green on Ubuntu.
 3. The Linux workflow verifies ELF dependencies, deb/rpm contents, desktop metadata, fcitx5 plugin paths and package SHA-256 checksums. There is no AppImage, minisign key or Linux updater manifest.
-4. The manual build targets the same existing tag whose commit, CI and Linux product acceptance were reviewed. `workflow_dispatch` only uploads Actions artifacts; an administrator separately uploads the verified packages to that Release.
-5. Attach the Linux checksum file as `SHA256SUMS-linux` so it does not replace an existing desktop/Android checksum file.
+4. The dispatch pins the tag as an input; the workflow checks that tag out and rejects a `package.json` version mismatch, so the packages provably come from the reviewed commit.
+5. The checksum file is produced and attached as `SHA256SUMS-linux` so it does not replace an existing desktop/Android checksum file.
+
+## HarmonyOS signing material and AppGallery credentials
+
+The HAP build reads everything from the environment; no key material is ever
+committed, cached or printed.
+
+| Kind | Name | Purpose |
+|---|---|---|
+| Secret | `HARMONY_KEYSTORE_BASE64` | base64 of the release `.p12` keystore |
+| Secret | `HARMONY_CERT_BASE64` | base64 of the release `.cer` certificate |
+| Secret | `HARMONY_PROFILE_BASE64` | base64 of the release `.p7b` provisioning profile |
+| Secret | `HARMONY_KEYSTORE_PASSWORD` | keystore password |
+| Secret | `HARMONY_KEY_PASSWORD` | key password (falls back to the keystore password) |
+| Variable | `HARMONY_KEY_ALIAS` | key alias inside the keystore |
+| Variable | `HARMONY_TOOLCHAIN` | absolute path of the DevEco / HarmonyOS SDK on a self-hosted runner |
+| Variable (optional) | `HARMONY_SDK_URL` | override the tools archive URL |
+| Variable (optional) | `HARMONY_SDK_SHA256` | SHA-256 of that archive |
+
+The `test` channel reads the same three Secrets (`HARMONY_KEYSTORE_BASE64`,
+`HARMONY_CERT_BASE64`, `HARMONY_PROFILE_BASE64`). Store the test profile there
+and switch channels by dispatching with `channel: test`, so one secret set at a
+time matches the channel being built.
+| Secret | `APPGALLERY_CLIENT_ID` | AppGallery Connect API client id |
+| Secret | `APPGALLERY_CLIENT_SECRET` | AppGallery Connect API client secret |
+| Secret | `APPGALLERY_APP_ID` | AppGallery Connect app id of the HarmonyOS app |
+
+The upload replaces the candidate package in AppGallery Connect; it never submits
+the app for review, because AGC requires a human submission. Without the
+`APPGALLERY_*` secrets the workflow still attaches the HAP to the GitHub Release
+and reports that the store upload was skipped.
+
+`versionName`/`versionCode` in `openless-all/app/harmony/AppScope/app.json5` are a
+development placeholder; the packaging script rewrites them for the build
+(`versionName` from `package.json`, `versionCode` from
+`linux-egui/package-revision`, which only increases) and restores the file
+afterwards.
 
 ## Release notes and contributor attribution
 
