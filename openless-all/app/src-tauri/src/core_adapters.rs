@@ -141,7 +141,11 @@ pub(crate) fn backend_dependencies(
     {
         let prefs = preferences.get();
         warm_hub.configure(
-            prefs.low_latency_dictation_enabled,
+            crate::recorder::warm_capture_enabled(
+                prefs.low_latency_dictation_enabled,
+                prefs.low_memory_background_enabled || crate::desktop_resources::active(),
+                false,
+            ),
             (!prefs.microphone_device_name.trim().is_empty())
                 .then(|| prefs.microphone_device_name.clone()),
             openless_core::AudioProcessingConfig {
@@ -1989,7 +1993,11 @@ impl openless_core::VoiceActivationRuntime for TauriVoiceActivationRuntime {
                 None
             };
             let preferences_snapshot = preferences.get();
-            let fallback_warm_capture_enabled = preferences_snapshot.low_latency_dictation_enabled;
+            let fallback_warm_capture_enabled = crate::recorder::warm_capture_enabled(
+                preferences_snapshot.low_latency_dictation_enabled,
+                crate::desktop_resources::active(),
+                false,
+            );
             let audio_processing = openless_core::AudioProcessingConfig {
                 enhancement_enabled: preferences_snapshot.audio_enhancement_enabled,
             };
@@ -2247,7 +2255,11 @@ impl openless_core::VoiceActivationHandle for TauriVoiceActivationHandle {
             if owns_activation {
                 let prefs = preferences.get();
                 warm_hub.configure(
-                    prefs.low_latency_dictation_enabled,
+                    crate::recorder::warm_capture_enabled(
+                        prefs.low_latency_dictation_enabled,
+                        crate::desktop_resources::active(),
+                        false,
+                    ),
                     (!prefs.microphone_device_name.trim().is_empty())
                         .then(|| prefs.microphone_device_name.clone()),
                     openless_core::AudioProcessingConfig {

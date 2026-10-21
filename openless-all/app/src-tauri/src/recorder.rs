@@ -107,6 +107,15 @@ pub(crate) fn voice_diagnostic(
     let _ = (probe_id, hypothesis_ids, event, outcome, safe);
 }
 
+/// Low-memory mode suppresses optional prewarming, not an explicitly active voice listener.
+pub(crate) fn warm_capture_enabled(
+    low_latency: bool,
+    low_memory: bool,
+    voice_activation: bool,
+) -> bool {
+    voice_activation || (low_latency && !low_memory)
+}
+
 fn voice_capture_key(generation: u64) -> u64 {
     generation | VOICE_CAPTURE_KEY_PREFIX
 }
@@ -2825,6 +2834,19 @@ mod tests {
             &[vec![1, 2, 3, 4, 0x00, 0x40, 0x00, 0x40]]
         );
     }
+    #[test]
+    fn low_memory_disables_only_optional_warm_capture() {
+        for low_latency in [false, true] {
+            for low_memory in [false, true] {
+                assert!(warm_capture_enabled(low_latency, low_memory, true));
+            }
+        }
+        assert!(warm_capture_enabled(true, false, false));
+        assert!(!warm_capture_enabled(true, true, false));
+        assert!(!warm_capture_enabled(false, false, false));
+        assert!(!warm_capture_enabled(false, true, false));
+    }
+
     #[test]
     fn activation_vad_skips_silence_and_preserves_speech_onset() {
         let sink = WarmCaptureSink::new(STAGED_CAPTURE_MAX_BYTES);

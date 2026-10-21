@@ -434,6 +434,9 @@ pub struct UserPreferences {
     /// This is opt-in because the OS microphone indicator remains active while enabled.
     #[serde(default)]
     pub low_latency_dictation_enabled: bool,
+    /// Desktop-only UI resource policy. Applied on the next application launch.
+    #[serde(default)]
+    pub low_memory_background_enabled: bool,
     /// Play an instantly synthesized cue when the recording hotkey enters the
     /// recording state ("recording started"). Default on; can be disabled in
     /// the "Recording & Input" settings. The cue is synthesized by the capsule
@@ -1023,6 +1026,8 @@ struct UserPreferencesWire {
     stable_transcription_enabled: bool,
     #[serde(default)]
     low_latency_dictation_enabled: bool,
+    #[serde(default)]
+    low_memory_background_enabled: bool,
     #[serde(default = "default_true")]
     audio_cue_on_record: bool,
     #[serde(default)]
@@ -1302,6 +1307,7 @@ impl Default for UserPreferencesWire {
             audio_enhancement_enabled: prefs.audio_enhancement_enabled,
             stable_transcription_enabled: prefs.stable_transcription_enabled,
             low_latency_dictation_enabled: prefs.low_latency_dictation_enabled,
+            low_memory_background_enabled: prefs.low_memory_background_enabled,
             audio_cue_on_record: prefs.audio_cue_on_record,
             silence_auto_stop_enabled: prefs.silence_auto_stop_enabled,
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
@@ -1520,6 +1526,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             audio_enhancement_enabled: wire.audio_enhancement_enabled,
             stable_transcription_enabled: wire.stable_transcription_enabled,
             low_latency_dictation_enabled: wire.low_latency_dictation_enabled,
+            low_memory_background_enabled: wire.low_memory_background_enabled,
             audio_cue_on_record: wire.audio_cue_on_record,
             silence_auto_stop_enabled: wire.silence_auto_stop_enabled,
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
@@ -1914,6 +1921,7 @@ impl Default for UserPreferences {
             audio_enhancement_enabled: false,
             stable_transcription_enabled: false,
             low_latency_dictation_enabled: false,
+            low_memory_background_enabled: false,
             audio_cue_on_record: true,
             silence_auto_stop_enabled: false,
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
@@ -3963,5 +3971,24 @@ mod capsule_transcript_preferences_tests {
                 .capsule_transcript_font_size,
             12
         );
+    }
+}
+
+#[cfg(test)]
+mod low_memory_background_preferences_tests {
+    use super::UserPreferences;
+
+    #[test]
+    fn low_memory_background_is_opt_in_and_keeps_low_latency_preference() {
+        let old: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!old.low_memory_background_enabled);
+        let preferences: UserPreferences = serde_json::from_str(
+            r#"{"lowMemoryBackgroundEnabled":true,"lowLatencyDictationEnabled":true}"#,
+        )
+        .unwrap();
+        let restored: UserPreferences =
+            serde_json::from_value(serde_json::to_value(preferences).unwrap()).unwrap();
+        assert!(restored.low_memory_background_enabled);
+        assert!(restored.low_latency_dictation_enabled);
     }
 }

@@ -30,6 +30,7 @@ export {
   updateSettingFields,
   getDefaultStyleSystemPrompts,
   setSettings,
+  getNativeCapsuleStatus,
 } from './settings';
 
 // asr-credentials
