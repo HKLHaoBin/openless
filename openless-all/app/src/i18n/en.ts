@@ -1607,6 +1607,8 @@ export const en: typeof zhCN = {
       voiceActivationDesc: 'Listen locally for a wake phrase to start dictation.',
       voiceActivationLocalOnly:
         'Recognition stays on this device; standby audio is not uploaded or archived.',
+      voiceActivationMultimodalModels:
+        'Prepare the voice activation model here. Dictation still uses your current multimodal service.',
       voiceActivationModelMissing: 'The local Zipformer model is not installed.',
       voiceActivationDownloadZipformer: 'Download Zipformer',
       voiceActivationWakeEnabled: 'Wake phrase',

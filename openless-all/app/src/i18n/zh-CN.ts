@@ -1455,6 +1455,7 @@ export const zhCN = {
         '仅在 Windows 桌面端启用本地语音命令唤醒听写。待机音频只在内存中处理，不会上传或保存；会增加功耗并保持麦克风指示灯亮起。',
       voiceActivationLocalOnly:
         '本地识别：说“开始语音录入”开始，说“完成语音录入”结束。需要已安装本地 Zipformer 模型。',
+      voiceActivationMultimodalModels: '此处准备语音唤醒模型，听写仍使用当前多模态服务。',
       voiceActivationModelMissing: '请先在“AI 服务与模型”的本地模型页准备 Zipformer。',
       voiceActivationDownloadZipformer: '前往 AI 服务与模型下载 Zipformer',
       voiceActivationWakeEnabled: '启用开始命令',
@@ -1462,7 +1463,8 @@ export const zhCN = {
       voiceActivationFinishEnabled: '启用完成命令',
       voiceActivationFinishPhrase: '完成命令',
       voiceActivationTimeoutEnabled: '超时自动结束',
-      voiceActivationTimeoutSeconds: '超时秒数',      muteDuringRecordingLabel: '录音时静音',
+      voiceActivationTimeoutSeconds: '超时秒数',
+      muteDuringRecordingLabel: '录音时静音',
       muteDuringRecordingDesc: '录音期间临时静音系统输出，避免扬声器回音。',
       audioCueLabel: '录音提示音',
       audioCueDesc: '按下热键开始录音时播放一段合成提示音，提醒已开始录音。胶囊隐藏时也会响。',

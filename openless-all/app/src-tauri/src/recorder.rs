@@ -66,8 +66,15 @@ pub(crate) fn voice_diagnostic(
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         static DROPPED: AtomicU64 = AtomicU64::new(0);
         static RUN: OnceLock<String> = OnceLock::new();
-        let run = RUN.get_or_init(|| format!("r{:x}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+        let run = RUN.get_or_init(|| {
+            format!(
+                "r{:x}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            )
+        });
         let writer = WRITER.get_or_init(|| {
             let (tx, rx) = sync_channel::<serde_json::Value>(4096);
             std::thread::Builder::new().name("voice-1003-diagnostics".into()).spawn(move || {
@@ -390,9 +397,7 @@ struct WarmCaptureSink {
     activation_consumer: Mutex<Option<Arc<dyn AudioConsumer>>>,
     activation_consumer_during_capture: AtomicBool,
     activation_generation: Mutex<Option<u64>>,
-    activation_fault_handler: Mutex<
-        Option<(u64, Arc<dyn Fn(RecorderError) + Send + Sync>)>,
-    >,
+    activation_fault_handler: Mutex<Option<(u64, Arc<dyn Fn(RecorderError) + Send + Sync>)>>,
     activation_vad: Mutex<ActivationVad>,
     max_bytes: usize,
 }
@@ -434,11 +439,6 @@ impl ActivationVad {
                 end_of_speech: false,
             };
         }
-        WarmCaptureSink::append_bounded(
-            &mut self.pre_roll,
-            pcm,
-            ACTIVATION_VAD_PRE_ROLL_BYTES,
-        );
         let speech = pcm_rms_level(pcm) >= ACTIVATION_VAD_RMS_THRESHOLD;
         if speech {
             let mut output = if self.speech_active {
@@ -446,9 +446,9 @@ impl ActivationVad {
             } else {
                 self.pre_roll.iter().copied().collect()
             };
-            if output.is_empty() {
-                output.extend_from_slice(pcm);
-            }
+            // The current block can be a complete handoff buffer, not just a device chunk.
+            output.extend_from_slice(pcm);
+            self.pre_roll.clear();
             self.speech_active = true;
             self.hangover_chunks = ACTIVATION_VAD_HANGOVER_CHUNKS;
             return ActivationVadOutput {
@@ -463,6 +463,7 @@ impl ActivationVad {
                 end_of_speech: false,
             };
         }
+        WarmCaptureSink::append_bounded(&mut self.pre_roll, pcm, ACTIVATION_VAD_PRE_ROLL_BYTES);
         let end_of_speech = self.speech_active;
         self.speech_active = false;
         ActivationVadOutput {
@@ -539,11 +540,17 @@ impl WarmCaptureSink {
         static BLOCKS: AtomicU64 = AtomicU64::new(0);
         let blocks = BLOCKS.fetch_add(1, Ordering::Relaxed);
         if was_active != active || gated.end_of_speech || blocks % 64 == 0 {
-            voice_diagnostic("P1", &["H1"], "vad_gate", "observed", serde_json::json!({
-                "bytes": pcm.len(), "active": active, "hangover": hangover,
-                "forwarded": gated.pcm.is_some(), "boundary": gated.end_of_speech,
-                "count": blocks,
-            }));
+            voice_diagnostic(
+                "P1",
+                &["H1"],
+                "vad_gate",
+                "observed",
+                serde_json::json!({
+                    "bytes": pcm.len(), "active": active, "hangover": hangover,
+                    "forwarded": gated.pcm.is_some(), "boundary": gated.end_of_speech,
+                    "count": blocks,
+                }),
+            );
         }
         if let Some(pcm) = gated.pcm {
             consumer.consume_pcm_chunk(&pcm);
@@ -2774,11 +2781,12 @@ mod tests {
         let sink = WarmCaptureSink::new(STAGED_CAPTURE_MAX_BYTES);
         let formal = Arc::new(RecordingConsumer::default());
         let finish = Arc::new(RecordingConsumer::default());
-        sink.arm(7, false).unwrap();
+        sink.arm_with_limit(7, false, VOICE_STAGED_CAPTURE_MAX_BYTES)
+            .unwrap();
         sink.set_activation_consumer_during_capture(Some(
-            Arc::clone(&finish) as Arc<dyn AudioConsumer>,
+            Arc::clone(&finish) as Arc<dyn AudioConsumer>
         ));
-        let speech = [0x00, 0x40, 0x00, 0x40];
+        let speech = [0x00, 0x40].repeat(16_000);
         sink.consume_pcm_chunk(&speech);
 
         sink.promote(
@@ -2831,6 +2839,29 @@ mod tests {
         let chunks = activation.chunks.lock().unwrap();
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].ends_with(&speech));
+    }
+
+    #[test]
+    fn activation_vad_preserves_large_blocks_and_does_not_replay_forwarded_audio() {
+        let mut vad = ActivationVad::default();
+        let silence = vec![0; ACTIVATION_VAD_PRE_ROLL_BYTES + 320];
+        assert!(vad.gate(&silence).pcm.is_none());
+        let speech = [0x00, 0x40].repeat(16_000);
+        let first = vad.gate(&speech).pcm.unwrap();
+        assert_eq!(first.len(), ACTIVATION_VAD_PRE_ROLL_BYTES + speech.len());
+        assert_eq!(
+            &first[..ACTIVATION_VAD_PRE_ROLL_BYTES],
+            &silence[..ACTIVATION_VAD_PRE_ROLL_BYTES]
+        );
+        assert_eq!(&first[ACTIVATION_VAD_PRE_ROLL_BYTES..], &speech);
+        assert_eq!(vad.gate(&speech[..320]).pcm.unwrap(), speech[..320]);
+        for _ in 0..ACTIVATION_VAD_HANGOVER_CHUNKS {
+            assert_eq!(vad.gate(&[0; 320]).pcm.unwrap(), [0; 320]);
+        }
+        assert!(vad.gate(&[0; 320]).end_of_speech);
+        let next = vad.gate(&speech[..320]).pcm.unwrap();
+        assert_eq!(next.len(), 640);
+        assert_eq!(&next[320..], &speech[..320]);
     }
 
     #[test]

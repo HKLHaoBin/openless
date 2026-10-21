@@ -1582,6 +1582,8 @@ export const ko: typeof zhCN = {
       voiceActivationDesc: '받아쓰기 시작 구문을 로컬에서 감지합니다.',
       voiceActivationLocalOnly:
         '인식은 이 기기에서만 수행되며 대기 오디오는 업로드하거나 보관하지 않습니다.',
+      voiceActivationMultimodalModels:
+        '여기에서 음성 활성화 모델을 준비합니다. 받아쓰기는 현재 멀티모달 서비스를 계속 사용합니다.',
       voiceActivationModelMissing: '로컬 Zipformer 모델이 설치되지 않았습니다.',
       voiceActivationDownloadZipformer: 'Zipformer 다운로드',
       voiceActivationWakeEnabled: '시작 구문',

@@ -174,7 +174,7 @@ export function RecordingInputSection({
   }, [os]);
 
   useEffect(() => {
-    if (!isTauri || os !== 'win' || !prefs?.voiceActivationEnabled) {
+    if (os !== 'win' || !prefs?.voiceActivationEnabled) {
       voiceActivationStateObservedRef.current = false;
       setVoiceActivationModelMissing(false);
       return;

@@ -1631,6 +1631,8 @@ export const es: typeof zhCN = {
       voiceActivationDesc: 'Escucha localmente una frase de activación para iniciar el dictado.',
       voiceActivationLocalOnly:
         'El reconocimiento permanece en este dispositivo; el audio de espera no se sube ni se archiva.',
+      voiceActivationMultimodalModels:
+        'Prepara aquí el modelo de activación por voz. El dictado sigue usando el servicio multimodal actual.',
       voiceActivationModelMissing: 'El modelo local Zipformer no está instalado.',
       voiceActivationDownloadZipformer: 'Descargar Zipformer',
       voiceActivationWakeEnabled: 'Frase de activación',

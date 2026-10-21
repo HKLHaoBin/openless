@@ -1639,6 +1639,8 @@ export const de: typeof zhCN = {
       voiceActivationDesc: 'Lokal auf eine Aktivierungsphrase warten, um das Diktat zu starten.',
       voiceActivationLocalOnly:
         'Die Erkennung bleibt auf diesem Gerät; Bereitschaftsaudio wird weder hochgeladen noch archiviert.',
+      voiceActivationMultimodalModels:
+        'Hier das Sprachaktivierungsmodell vorbereiten. Das Diktat nutzt weiterhin den aktuellen multimodalen Dienst.',
       voiceActivationModelMissing: 'Das lokale Zipformer-Modell ist nicht installiert.',
       voiceActivationDownloadZipformer: 'Zipformer herunterladen',
       voiceActivationWakeEnabled: 'Aktivierungsphrase',

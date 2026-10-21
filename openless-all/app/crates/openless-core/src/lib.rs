@@ -384,9 +384,10 @@ pub use voice_activation::{
     normalize_phrase, validate_phrase, PhraseValidationError, VoiceActivationCommand,
     VoiceActivationConfig, VoiceActivationDecision, VoiceActivationGeneration,
     VoiceActivationPhase, VoiceActivationSession, VoiceActivationSignal,
-    VoiceActivationStateSnapshot, VoiceActivationStopReason, VoiceCommandMatch,
-    VoiceCommandRecognizer, VoicePhraseMatcher, DEFAULT_FINISH_PHRASE, DEFAULT_TIMEOUT_SECONDS,
-    DEFAULT_WAKE_PHRASE, MAX_PHRASE_CHARS, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS,
+    VoiceActivationStateSnapshot, VoiceActivationStopReason, VoiceActivationTextPolicy,
+    VoiceCommandMatch, VoiceCommandRecognizer, VoicePhraseMatcher, DEFAULT_FINISH_PHRASE,
+    DEFAULT_TIMEOUT_SECONDS, DEFAULT_WAKE_PHRASE, MAX_PHRASE_CHARS, MAX_TIMEOUT_SECONDS,
+    MIN_TIMEOUT_SECONDS,
 };
 pub use voice_edit_session::{
     TextSelection, VoiceEditCommit, VoiceEditContext, VoiceEditError, VoiceEditPhase,

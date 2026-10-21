@@ -1594,6 +1594,8 @@ export const ja: typeof zhCN = {
       voiceActivationDesc: '起動フレーズをローカルで待ち受けて音声入力を開始します。',
       voiceActivationLocalOnly:
         '認識はこの端末内で行われます。待機中の音声は送信・保存されません。',
+      voiceActivationMultimodalModels:
+        'ここで音声起動用モデルを準備します。音声入力には引き続き現在のマルチモーダルサービスを使用します。',
       voiceActivationModelMissing: 'ローカル Zipformer モデルがインストールされていません。',
       voiceActivationDownloadZipformer: 'Zipformer をダウンロード',
       voiceActivationWakeEnabled: '起動フレーズ',

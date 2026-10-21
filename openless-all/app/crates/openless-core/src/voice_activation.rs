@@ -4,7 +4,7 @@
 //! only consumes revised recognition text and produces command decisions, so a
 //! standby listener can never accidentally publish normal transcript events.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use unicode_normalization::UnicodeNormalization;
 
@@ -386,23 +386,32 @@ impl VoiceActivationGeneration {
     }
 }
 
+/// Commands frozen for a voice-started session; ordinary dictation has no policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceActivationTextPolicy {
+    pub wake_phrase: String,
+    pub finish_phrase: Option<String>,
+}
+
+impl VoiceActivationTextPolicy {
+    pub fn clean(&self, text: &str) -> String {
+        let body = strip_phrase_prefix(text, &self.wake_phrase).unwrap_or_else(|| text.to_owned());
+        self.finish_phrase
+            .as_ref()
+            .and_then(|phrase| strip_phrase_suffix(&body, phrase))
+            .unwrap_or(body)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VoiceActivationSession {
     pub generation: VoiceActivationGeneration,
     pub session_id: SessionId,
-    pub started_at: Instant,
     pub timeout: Option<Duration>,
-    pub wake_phrase: String,
-    pub finish_enabled: bool,
-    pub finish_phrase: String,
+    pub commands: VoiceActivationTextPolicy,
 }
 
 impl VoiceActivationSession {
-    pub fn timed_out_at(&self, now: Instant) -> bool {
-        self.timeout
-            .is_some_and(|timeout| now.saturating_duration_since(self.started_at) >= timeout)
-    }
-
     pub fn accepts(&self, generation: VoiceActivationGeneration, session_id: SessionId) -> bool {
         self.generation == generation && self.session_id == session_id
     }
@@ -519,11 +528,11 @@ mod tests {
         let session = VoiceActivationSession {
             generation: VoiceActivationGeneration(7),
             session_id,
-            started_at: Instant::now(),
             timeout: Some(Duration::from_secs(1)),
-            wake_phrase: DEFAULT_WAKE_PHRASE.into(),
-            finish_enabled: true,
-            finish_phrase: DEFAULT_FINISH_PHRASE.into(),
+            commands: VoiceActivationTextPolicy {
+                wake_phrase: DEFAULT_WAKE_PHRASE.into(),
+                finish_phrase: Some(DEFAULT_FINISH_PHRASE.into()),
+            },
         };
         assert!(session.accepts(VoiceActivationGeneration(7), session_id));
         assert!(!session.accepts(VoiceActivationGeneration(6), session_id));
@@ -540,16 +549,17 @@ mod tests {
             config.normalized().unwrap().timeout_seconds,
             MIN_TIMEOUT_SECONDS
         );
-        let session = VoiceActivationSession {
-            generation: VoiceActivationGeneration(1),
-            session_id: SessionId::new(),
-            started_at: Instant::now(),
-            timeout: Some(Duration::from_secs(1)),
-            wake_phrase: DEFAULT_WAKE_PHRASE.into(),
-            finish_enabled: true,
-            finish_phrase: DEFAULT_FINISH_PHRASE.into(),
-        };
-        assert!(!session.timed_out_at(Instant::now()));
-        assert!(session.timed_out_at(session.started_at + Duration::from_secs(1)));
+        assert_eq!(
+            config.normalized().unwrap().timeout(),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(
+            VoiceActivationConfig {
+                timeout_enabled: false,
+                ..config
+            }
+            .timeout(),
+            None
+        );
     }
 }
