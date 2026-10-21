@@ -3570,11 +3570,13 @@ mod tests {
                 polisher.clone(),
             )
             .with_polish_failure_policy(policy);
-            let mut context = DictationContext::default();
-            context.voice_activation = Some(crate::voice_activation::VoiceActivationTextPolicy {
-                wake_phrase: "开始语音录入".into(),
-                finish_phrase: Some("完成语音录入".into()),
-            });
+            let context = DictationContext {
+                voice_activation: Some(crate::voice_activation::VoiceActivationTextPolicy {
+                    wake_phrase: "开始语音录入".into(),
+                    finish_phrase: Some("完成语音录入".into()),
+                }),
+                ..Default::default()
+            };
             let id = SessionId::new();
             let progress = Arc::new(RecordingProgress::default());
             engine
