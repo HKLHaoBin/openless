@@ -340,6 +340,15 @@ export interface StylePackRuntimeDiagnostics {
   previewOmitsFrontApp: boolean;
 }
 
+/** Runtime health of the disposable native capsule sidecar (desktop only). */
+export interface NativeCapsuleStatus {
+  /** Whether the launch-time low-memory background switch is active. */
+  active: boolean;
+  /** False when the sidecar helper is missing or failed to initialize. */
+  available: boolean;
+  error: string | null;
+}
+
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   dictationHotkey: ShortcutBinding;
@@ -352,7 +361,8 @@ export interface UserPreferences {
   showCapsule: boolean;
   /** Recording capsule appearance; synced to the capsule window on save. */
   capsuleStyle: CapsuleStyle;
-  capsuleDisplayMode: 'cursorScreen' | 'allScreens';
+  capsuleDisplayMode: 'cursorScreen' | 'primaryScreen' | 'foregroundWindowScreen' | 'allScreens';
+  capsuleDisplayModeV2?: UserPreferences['capsuleDisplayMode'];
   capsuleTranscriptEnabled: boolean;
   capsuleTranscriptFontSize: number;
   /** Temporarily mutes system output during recording; restores the original mute state on stop/cancel/error. */
@@ -361,10 +371,20 @@ export interface UserPreferences {
   stableTranscriptionEnabled: boolean;
   /** Keep a bounded microphone pre-roll in memory to reduce the delay before first speech is captured. */
   lowLatencyDictationEnabled: boolean;
+  /** Desktop resource policy, applied after restarting the application. */
+  lowMemoryBackgroundEnabled: boolean;
   /** Apply conservative noise suppression, lightweight gain, and soft limiting to local microphone input. Disabled by default. */
   audioEnhancementEnabled: boolean;
   /** Use a desktop render/monitor reference for best-effort echo cancellation. Disabled by default. */
   echoCancellationEnabled: boolean;
+  /** Enable local-only voice activation while idle (Windows desktop only). */
+  voiceActivationEnabled: boolean;
+  voiceActivationWakeEnabled: boolean;
+  voiceActivationFinishEnabled: boolean;
+  voiceActivationWakePhrase: string;
+  voiceActivationFinishPhrase: string;
+  voiceActivationTimeoutEnabled: boolean;
+  voiceActivationTimeoutSeconds: number;
   /** When the recording hotkey enters the recording state, plays a synthesized cue that recording has started.
    *  On by default; synthesized with the Web Audio API in the capsule window, independent of showCapsule. */
   audioCueOnRecord: boolean;
@@ -495,6 +515,8 @@ export interface UserPreferences {
   sherpaOnnxLanguageHint: string;
   /** Seconds the Windows sherpa-onnx model stays loaded in the runtime. */
   sherpaOnnxKeepLoadedSecs: number;
+  /** When a cloud ASR provider fails, transcribe the recording with the selected sherpa-onnx model. */
+  localAsrFallbackEnabled: boolean;
   /** History retention days. 0 = no time-based cleanup (the 200-entry cap still applies). Default 7. */
   historyRetentionDays: number;
   /** Conversation-aware polish context window (minutes). 0 = off. Default 5. See PR-A. */
@@ -521,6 +543,8 @@ export interface UserPreferences {
   /** Whether to write the final polished text back to the clipboard after a successful streaming insert.
    *  When on, Cmd+V can re-paste that output, matching the one-shot path. Default true. */
   streamingInsertSaveClipboard: boolean;
+  /** Windows TSF: show the live transcript as an underlined composition in the target. */
+  windowsCompositionInput: boolean;
   /** Whether to send the text near the cursor in the document the user is writing to LLM polish as context.
    *  Default false — when on, every dictation reads cursor-local text for the configured LLM provider.
    *  Available on macOS, Windows and Android (IME); password fields / Secure Input (macOS) /
@@ -805,7 +829,7 @@ export type PermissionStatus =
   'granted' | 'denied' | 'notDetermined' | 'restricted' | 'notApplicable' | 'noDevice';
 
 /** Runtime platform kind returned by `get_platform_capabilities`. */
-export type PlatformKind = 'desktop' | 'android' | 'mobile';
+export type PlatformKind = 'desktop' | 'android' | 'harmony' | 'mobile';
 
 /** Feature flags for desktop vs Android APK UI gating. Mirrors src-tauri PlatformCapabilities. */
 export interface PlatformCapabilities {
