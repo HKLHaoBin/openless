@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run the native recorder tests without building Tauri/MLX or fetching ASR submodules.
+"""Run native recorder and audio cue tests without Tauri/MLX or ASR submodules.
 
 The bridge trait below matches the only core interface used by recorder.rs.
-This checks the production recorder module; it does not replace a desktop cargo check.
+This checks both production audio modules; it does not replace a desktop cargo check.
 """
 import json
 from pathlib import Path
@@ -35,5 +35,6 @@ log = "0.4"
         "pub use audio::{AudioProcessingConfig, AudioProcessor, ReferenceAudioBuffer};\n"
         "pub trait AudioConsumer: Send + Sync { fn consume_pcm_chunk(&self, pcm: &[u8]); }\n"
         + "#[path = " + json.dumps(str(recorder), ensure_ascii=False) + "]\npub mod recorder;\n"
+        + "#[path = " + json.dumps(str(recorder.with_name("native_audio_cue.rs")), ensure_ascii=False) + "]\npub mod native_audio_cue;\n"
     )
     subprocess.run(["cargo", "test", "--manifest-path", str(root / "Cargo.toml"), *sys.argv[1:]], check=True)
