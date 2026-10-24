@@ -2256,6 +2256,22 @@ impl TauriCoordinatorHost {
         let app = self
             .app()
             .ok_or_else(|| "Tauri AppHandle is not bound".to_string())?;
+        #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+        {
+            use crate::issue1266_debug::{Event, Operation, Outcome, Probe, Facts};
+            let operation = Operation::new(Probe::P2);
+            operation.mark(Event::Requested);
+            let result = app.run_on_main_thread(move || {
+                let _scope = operation.scope();
+                operation.mark(Event::Entered);
+                task();
+                operation.record(Event::Returned, Outcome::Returned, Facts::default());
+            }).map_err(|error| error.to_string());
+            operation.record(Event::DispatchReturned,
+                if result.is_ok() { Outcome::Ok } else { Outcome::Error }, Facts::default());
+            result
+        }
+        #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
         app.run_on_main_thread(task)
             .map_err(|error| error.to_string())
     }

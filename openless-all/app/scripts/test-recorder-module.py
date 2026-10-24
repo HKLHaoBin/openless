@@ -36,6 +36,7 @@ log = "0.4"
         + "#[path = " + json.dumps(str(recorder.parents[2] / "crates/openless-core/src/audio.rs"), ensure_ascii=False) + "]\npub mod audio;\n"
         "pub use audio::{AudioProcessingConfig, AudioProcessor};\n"
         "pub trait AudioConsumer: Send + Sync { fn consume_pcm_chunk(&self, pcm: &[u8]); }\n"
+        + "#[path = " + json.dumps(str(recorder.with_name("issue1266_debug.rs")), ensure_ascii=False) + "]\nmod issue1266_debug;\n"
         + "#[path = " + json.dumps(str(recorder), ensure_ascii=False) + "]\npub mod recorder;\n"
     )
     subprocess.run(["cargo", "test", "--manifest-path", str(root / "Cargo.toml"), *sys.argv[1:]], check=True)

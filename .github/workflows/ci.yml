@@ -737,6 +737,17 @@ jobs:
         # recompiled the whole dependency graph anyway (measured: 6.4 min of it).
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --no-run
 
+      # Feature-on production cfg must compile too; standalone tests below actually run
+      # the sink on Windows/macOS without optional Tauri runtime DLL entrypoints.
+      - name: Compile opt-in Windows hang diagnostics host
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --features issue-1266-diagnostics
+
+      - name: Run isolated Windows hang diagnostics tests (off/on)
+        run: python scripts/test-windows-hang-diagnostics.py
+
+      - name: Run Windows symbol-pair format tests
+        run: python scripts/windows-symbol-pair.test.py
+
       - name: Run Rust-only backend unit tests (Windows)
         # The standalone test crate does not link the full Tauri app lib; it verifies the public
         # Core contract only. Windows-specific Tauri tests on this runner only get the cfg/link

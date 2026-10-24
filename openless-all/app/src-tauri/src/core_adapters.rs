@@ -3485,6 +3485,11 @@ impl ActiveRecording for TauriActiveRecording {
 
     fn stop(mut self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
         Box::pin(async move {
+            use crate::issue1266_debug::{Event, Facts, Kind, Operation, Outcome, Probe};
+            let operation = Operation::new(Probe::P5);
+            let _scope = operation.scope();
+            operation.record(Event::Requested, Outcome::Observed,
+                Facts { kind: Kind::ActiveRecording, ..Facts::default() });
             let recorder = self.recorder.take();
             let warm_capture = self.warm_capture.take();
             let cold_capture_hub = self.cold_capture_hub.take();
@@ -3498,6 +3503,7 @@ impl ActiveRecording for TauriActiveRecording {
                 ));
             }
             let stop_result = tauri::async_runtime::spawn_blocking(move || {
+                operation.mark(Event::Entered);
                 if let Some(recorder) = recorder {
                     recorder.stop();
                 }
@@ -3513,6 +3519,7 @@ impl ActiveRecording for TauriActiveRecording {
                         warm_hub.resume_after_cold_capture();
                     }
                 }
+                operation.record(Event::Returned, Outcome::Returned, Facts::default());
                 Ok(())
             })
             .await
@@ -3522,6 +3529,7 @@ impl ActiveRecording for TauriActiveRecording {
                     format!("join Tauri recorder stop task: {error}"),
                 )
             })?;
+            operation.mark(Event::AckReceived);
             if reconfigure_voice_activation {
                 let backend = {
                     let slot = backend.lock();

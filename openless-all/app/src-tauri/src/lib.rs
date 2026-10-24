@@ -71,6 +71,7 @@ mod hotkey;
 #[path = "mobile_stubs/hotkey.rs"]
 mod hotkey;
 mod insertion;
+mod issue1266_debug;
 mod llm_gemini;
 #[cfg(mobile)]
 mod mobile_runtime;
@@ -204,6 +205,7 @@ pub(crate) fn set_backend_preferences_for_test(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    issue1266_debug::initialize();
     tls_crypto::install_tls_crypto_provider();
     // Explicit acceptance in a debug bundle bypasses UI, microphone and the
     // system credential vault, but exercises the actual shared/native engines.
@@ -547,6 +549,8 @@ macro_rules! app_invoke_handler_desktop {
             restart_app,
             reset_accessibility_permission_and_restart_app,
             log_client_error,
+            #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+            issue1266_health,
             set_windows_caption_theme,
         ]
     };
@@ -788,6 +792,12 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::sherpa_onnx_asr_reveal_model_dir,
         ]
     };
+}
+
+#[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+#[tauri::command]
+fn issue1266_health() -> issue1266_debug::Health {
+    issue1266_debug::health()
 }
 
 #[cfg(not(mobile))]
@@ -1052,7 +1062,10 @@ fn run_desktop() {
         .invoke_handler(app_invoke_handler_desktop!())
         .build(context)
         .expect("error while building tauri application")
-        .run(|app, event| match event {
+        .run(|app, event| {
+            #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+            observe_issue1266_lifecycle(&event);
+            match event {
             RunEvent::Ready => {
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
                 coordinator.start_hotkey_supervisors_when_ready();
@@ -1105,7 +1118,35 @@ fn run_desktop() {
                 });
             }
             _ => {}
+            }
         });
+}
+
+#[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+fn observe_issue1266_lifecycle(event: &RunEvent) {
+    use issue1266_debug::{Event, Facts, Kind, Operation, Outcome, Probe};
+    let (event, kind) = match event {
+        RunEvent::Ready => (Event::Ready, Kind::None),
+        RunEvent::ExitRequested { .. } => (Event::ExitRequested, Kind::None),
+        RunEvent::Exit => (Event::Exit, Kind::None),
+        RunEvent::WindowEvent { label, event, .. } => {
+            let event = match event {
+                tauri::WindowEvent::CloseRequested { .. } => Event::CloseRequested,
+                tauri::WindowEvent::Destroyed => Event::Destroyed,
+                _ => return,
+            };
+            let kind = match label.as_str() {
+                "main" => Kind::MainWindow,
+                "qa" => Kind::QaWindow,
+                "capsule" => Kind::CapsuleWindow,
+                "less-computer" => Kind::LessWindow,
+                _ => Kind::OtherWindow,
+            };
+            (event, kind)
+        }
+        _ => return,
+    };
+    Operation::new(Probe::P6).record(event, Outcome::Observed, Facts { kind, ..Facts::default() });
 }
 
 #[cfg(not(mobile))]
