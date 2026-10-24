@@ -131,6 +131,8 @@ fn evaluate_inner(
     }
 
     let mut engine = Engine::new();
+    engine.set_module_resolver(rhai::module_resolvers::StaticModuleResolver::new());
+    engine.disable_symbol("import");
     engine.on_print(|_| {});
     engine.on_debug(|_, _, _| {});
     engine.set_max_operations(MAX_OPERATIONS);
@@ -349,6 +351,25 @@ mod tests {
             &value,
         );
         assert_eq!(decision, Some(PolishStrategyDecision::Skip));
+    }
+
+    #[test]
+    fn filesystem_imports_fail_open_even_when_the_module_exists() {
+        let path =
+            std::env::temp_dir().join(format!("openless-strategy-{}.rhai", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "fn decision() { #{ action: \"skip\" } }").unwrap();
+        let module = serde_json::to_string(path.with_extension("").to_str().unwrap()).unwrap();
+        let direct =
+            format!("import {module} as external; fn strategy(input) {{ external::decision() }}");
+        let dynamic = format!(
+            "fn strategy(input) {{ eval({}); #{{ action: \"skip\" }} }}",
+            serde_json::to_string(&format!("import {module} as external;")).unwrap()
+        );
+        let direct_result = evaluate(&config(&direct), &input("hello"));
+        let dynamic_result = evaluate(&config(&dynamic), &input("hello"));
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(direct_result, None);
+        assert_eq!(dynamic_result, None);
     }
 
     #[test]

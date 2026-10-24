@@ -9,9 +9,12 @@ pub mod android_types;
 pub mod api;
 pub mod asr;
 pub mod audio;
+pub mod audio_dsp;
+pub use audio_dsp::{AudioDspConfig, AudioDspStage, NoiseReduction};
 pub mod auxiliary;
 pub mod cli;
 mod cloud_providers;
+pub use cloud_providers::parse_temperature;
 pub mod cloud_sync;
 pub mod cloud_sync_e2ee;
 pub mod cloud_sync_e2ee_documents;
@@ -42,6 +45,7 @@ pub mod language_catalog;
 mod less_computer;
 pub mod llm_gemini;
 pub mod llm_protocol;
+pub mod local_migration_bundle;
 mod marketplace;
 pub mod model_store;
 pub mod net;
@@ -68,6 +72,7 @@ mod selection_voice_service;
 pub mod settings;
 pub mod shared_types;
 pub mod silence_auto_stop;
+pub mod siwc;
 pub mod streaming_insert;
 mod style_pack_archive;
 pub mod style_pack_store;
@@ -75,6 +80,7 @@ pub mod style_packs;
 pub mod testing;
 pub mod types;
 pub mod vocabulary;
+pub mod voice_activation;
 pub mod voice_edit_session;
 mod voice_session;
 
@@ -215,14 +221,15 @@ pub mod contract {
 
 pub use activity::{ActivityDay, ActivityStore, DayStats};
 pub use api::{
-    BackendRepositories, BackendSnapshot, CliDispatchOutcome, DictationHotkeyDispatchOptions,
-    DictationHotkeyEdge, LessComputerHotkeyAction, LessComputerVoiceFinish,
-    LessComputerVoiceOptions, LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult,
-    QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
+    AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome,
+    DictationHotkeyDispatchOptions, DictationHotkeyEdge, DictationTranslationTarget,
+    LessComputerHotkeyAction, LessComputerVoiceFinish, LessComputerVoiceOptions,
+    LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult, QaVoiceCaptureSession,
+    StartupSnapshot, VoiceTranscriptionSession,
 };
 pub use audio::{
-    encode_dictation_wav, AudioEnhancer, AudioProcessingConfig, AudioProcessor, NormalizedPcmChunk,
-    PcmNormalizer, DICTATION_SAMPLE_RATE,
+    encode_dictation_wav, AudioProcessingConfig, AudioProcessor, NormalizedPcmChunk, PcmNormalizer,
+    DICTATION_SAMPLE_RATE,
 };
 pub use auxiliary::{
     AsrCallLabel, AuxiliaryApi, RepolishRequest, RetranscriptionFailure, RetranscriptionResult,
@@ -306,7 +313,9 @@ pub use ports::{
     PendingAudioCapture, PolishOutput, RecordingArchive, RecordingControlSink, RecordingEvent,
     RecordingProgressSink, ResourceResolver, TextInserter, TextInsertionSession, TextPolisher,
     TextStreamChunk, TextStreamSink, TranscriptMetadata, TranscriptOutput, TranscriptionEngine,
-    TranscriptionSession, UnsupportedTextInserter, VoiceCapture,
+    TranscriptionSession, UnsupportedTextInserter, UnsupportedVoiceActivationRuntime,
+    VoiceActivationError, VoiceActivationHandle, VoiceActivationRuntime, VoiceActivationSink,
+    VoiceCapture, VoiceDictationHandoff, VoiceDictationHandoffRequest,
 };
 pub use preferences::PreferencesStore;
 pub use prompt_compose::{
@@ -380,9 +389,20 @@ pub use vocabulary::{
     builtin_vocab_presets, list_vocab_presets, resolve_vocab_presets, save_vocab_presets,
     DictionaryStore,
 };
+pub use voice_activation::{
+    normalize_phrase, validate_phrase, PhraseValidationError, VoiceActivationCommand,
+    VoiceActivationConfig, VoiceActivationDecision, VoiceActivationGeneration,
+    VoiceActivationPhase, VoiceActivationSession, VoiceActivationSignal,
+    VoiceActivationStateSnapshot, VoiceActivationStopReason, VoiceActivationTextPolicy,
+    VoiceCommandMatch, VoiceCommandRecognizer, VoicePhraseMatcher, DEFAULT_FINISH_PHRASE,
+    DEFAULT_TIMEOUT_SECONDS, DEFAULT_WAKE_PHRASE, MAX_PHRASE_CHARS, MAX_TIMEOUT_SECONDS,
+    MIN_TIMEOUT_SECONDS,
+};
 pub use voice_edit_session::{
     TextSelection, VoiceEditCommit, VoiceEditContext, VoiceEditError, VoiceEditPhase,
     VoiceEditSession, VoiceEditSnapshot, VoiceEditTarget, VoiceEditTurn,
 };
 
+pub mod ime_cloud;
+pub mod ime_dictionary;
 pub mod preference_patch;
