@@ -218,10 +218,16 @@ export function RecordingInputSection({
   }, [prefs?.voiceActivationEnabled]);
 
   useEffect(() => {
-    if (!isTauri && os === 'win') {
-      void getVoiceActivationState().then(setVoiceActivationState);
-    }
-  }, [os, prefs?.voiceActivationEnabled, prefs?.voiceActivationHotkeyLinked]);
+    if (isTauri || os !== 'win') return;
+    let cancelled = false;
+    void getVoiceActivationState()
+      .then((snapshot) => {
+        if (!cancelled) setVoiceActivationState(snapshot);
+      })
+      .catch(console.error);
+    return () => { cancelled = true; };
+    // The confirmed preference snapshot also changes after an optimistic write.
+  }, [os, prefs]);
 
   const saveKeyboardListAffectingPrefs = useCallback(
     async (nextPrefs: UserPreferences) => {

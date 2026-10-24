@@ -121,7 +121,7 @@ fn fixture() -> (Directory, Arc<OpenLessBackend>, Arc<Runtime>, FixtureDictation
     let dir = Directory(std::env::temp_dir().join(format!(
         "openless-voice-link-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        SessionId::new()
     )));
     let runtime = Arc::new(Runtime::default());
     let engine = FixtureDictationEngine::successful("body", "body");
