@@ -3885,6 +3885,7 @@ impl VocabPlacementState {
         self.anchors.lock().begin(id);
     }
 
+    #[cfg(target_os = "windows")]
     pub(crate) fn source_is_current(&self, id: u64) -> bool {
         self.observed_targets
             .lock()

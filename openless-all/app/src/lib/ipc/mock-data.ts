@@ -138,7 +138,12 @@ export let mockSettings: UserPreferences = {
   windowsCompositionInput: false,
   cursorContextEnabled: false,
   vocabularyLearningEnabled: false,
-  vocabularyLearningSettings: { observationSeconds: 60, suggestionSeconds: 10, maxPhraseChars: 12 },
+  vocabularyLearningSettings: {
+    observationSeconds: 60,
+    suggestionSeconds: 10,
+    maxPhraseChars: 12,
+    suggestionPosition: 'nearInput',
+  },
   showOverviewActivityHeatmap: true,
   stackedRowLayout: false,
   conservativeLayout: false,

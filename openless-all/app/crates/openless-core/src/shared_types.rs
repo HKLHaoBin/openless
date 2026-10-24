@@ -322,6 +322,15 @@ pub const INSERT_FALLBACK_REASON_INSERT_FAILED: &str = "insertFailed";
 /// having no reject list.
 pub const VOCAB_SUGGESTION_TTL_MS: u64 = 10_000;
 
+/// Windows suggestion-card placement; other platforms retain their native presentation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VocabularySuggestionPosition {
+    #[default]
+    NearInput,
+    BottomRight,
+}
+
 /// Local-only tuning. Consent and sensitive-field protections remain separate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -329,6 +338,7 @@ pub struct VocabularyLearningSettings {
     pub observation_seconds: u32,
     pub suggestion_seconds: u32,
     pub max_phrase_chars: u32,
+    pub suggestion_position: VocabularySuggestionPosition,
 }
 
 impl Default for VocabularyLearningSettings {
@@ -337,6 +347,7 @@ impl Default for VocabularyLearningSettings {
             observation_seconds: 60,
             suggestion_seconds: 10,
             max_phrase_chars: 12,
+            suggestion_position: VocabularySuggestionPosition::default(),
         }
     }
 }
@@ -347,6 +358,7 @@ impl VocabularyLearningSettings {
             observation_seconds: self.observation_seconds.clamp(10, 60),
             suggestion_seconds: self.suggestion_seconds.clamp(5, 60),
             max_phrase_chars: self.max_phrase_chars.clamp(2, 32),
+            suggestion_position: self.suggestion_position,
         }
     }
 }

@@ -144,6 +144,11 @@ fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
             height,
             VOCAB_CARD_EDGE_MARGIN,
             &observation_ids,
+            inner
+                .backend
+                .get_preferences()
+                .vocabulary_learning_settings
+                .suggestion_position,
         ) {
             log::warn!("[vocab-card] position failed: {e}");
             hide_vocab_suggestion_card(&inner);

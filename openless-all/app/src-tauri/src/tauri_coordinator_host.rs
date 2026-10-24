@@ -1599,6 +1599,7 @@ impl TauriCapsuleWindow {
         height: f64,
         edge_margin: f64,
         observation_ids: &[Option<u64>],
+        position: openless_core::shared_types::VocabularySuggestionPosition,
     ) -> tauri::Result<()> {
         #[cfg(target_os = "windows")]
         {
@@ -1660,7 +1661,8 @@ impl TauriCapsuleWindow {
                         right: bounds.right,
                         bottom: bounds.bottom,
                     };
-                    if unchanged
+                    if position == openless_core::shared_types::VocabularySuggestionPosition::NearInput
+                        && unchanged
                         && current == snapshot.window_rect
                         && id.is_some_and(|id| {
                             state
@@ -1744,7 +1746,7 @@ impl TauriCapsuleWindow {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = observation_ids;
+            let _ = (observation_ids, position);
             let Some(window) = self.window() else {
                 return Ok(());
             };

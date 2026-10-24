@@ -197,6 +197,7 @@ Microsoft 建议通用 UIA 客户端在无窗口的独立 MTA 线程调用 UIA�
 - 卡片使用目标屏物理坐标、DPI 与工作区，空间不足向上翻转；移动/缩放使用 `SWP_NOACTIVATE`。卡片点击处理 native `WM_MOUSEACTIVATE`，严格显示路径失败不回退 activating show，不改变普通胶囊策略。
 - 共享窗口的 card mode 停止常规 layout watcher；show/hide 按 presentation epoch 丢弃旧任务，末端重读建议和活动会话。
 - 新增 std-only 定位/registry/epoch 回归，并由独立 `backend-tests` 入口在 Windows Actions 实际执行。当前尚未运行这些测试或构建；待 Bugbot 审查后提交推送，使用该分支准确 SHA 触发 CI、桌面及 Android 产物。
-- 未新增位置偏好或 Android UI。微信实际 provider 能力、候选框重叠和真实焦点行为仍是安装桌面包后的实机验收项目，不以纯逻辑测试代替。
+- 按追加需求，在“实验与拓展 → 手改学词／修改学习”现有子页增加 Windows 建议卡位置选择，不在普通设置新增入口。可选“输入位置附近”（默认）和“固定右下角”，后者跳过近端 anchor，仍使用原输入目标所在屏幕的工作区。旧配置缺少字段时默认靠近输入；恢复默认参数同时恢复此选项。更改后按现有规则结束观察、清除待确认建议，下次听写生效。
+- 不新增 Android UI，不改变其他平台的卡片定位。微信实际 provider 能力、候选框重叠和真实焦点行为仍是安装桌面包后的实机验收项目，不以纯逻辑测试代替。
 
-审查记录：Review Bugbot 首轮两个 MEDIUM（重复 hide 清理、长听写 target 过期）已修复并补回归；同一 reviewer 复审明确返回 `No bugs found`。远程 CI/产物尚待本次提交推送后触发。
+审查记录：Review Bugbot 首轮两个 MEDIUM（重复 hide 清理、长听写 target 过期）已修复并补回归，复审明确返回 `No bugs found`；追加的位置选项审查也返回 `No bugs found`。首轮远程 CI/Android 完整日志揭示测试 fixture 漏初始化 epoch、Windows 专用目标校验未按平台编译两处问题，已补齐初始化并限定 Windows 编译；将复审后为新提交重新触发三项工作流。远程通过不替代上述实机验收。
