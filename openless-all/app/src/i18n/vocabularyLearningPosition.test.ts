@@ -1,4 +1,3 @@
-import assert from 'node:assert/strict';
 import { de } from './de';
 import { en } from './en';
 import { es } from './es';
@@ -16,10 +15,16 @@ for (const [locale, messages] of Object.entries({ de, en, es, fr, ja, ko, zhCN, 
     'positionNearInput',
     'positionBottomRight',
   ] as const) {
-    assert.ok(learning[key].trim(), `${locale}: missing vocabulary learning ${key}`);
+    if (!learning[key].trim()) {
+      throw new Error(`${locale}: missing vocabulary learning ${key}`);
+    }
   }
-  assert.notEqual(learning.positionNearInput, learning.positionBottomRight);
-  assert.match(learning.suggestionPositionHint, /Windows/);
+  if (learning.positionNearInput === learning.positionBottomRight) {
+    throw new Error(`${locale}: vocabulary position choices need distinct labels`);
+  }
+  if (!learning.suggestionPositionHint.includes('Windows')) {
+    throw new Error(`${locale}: vocabulary position hint must state the Windows-only scope`);
+  }
 }
 
 console.log('vocabulary learning position translations cover both Windows choices');
