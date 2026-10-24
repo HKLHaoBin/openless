@@ -248,7 +248,7 @@ mod sink {
         sender: SyncSender<Record>,
         pub(super) health: Arc<HealthState>,
         started: Instant,
-        run: u128,
+        pub(super) run: u128,
     }
 
     impl Sink {
