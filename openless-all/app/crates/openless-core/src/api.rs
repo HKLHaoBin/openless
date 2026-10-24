@@ -2667,6 +2667,7 @@ struct HistoryProviderAttribution {
 }
 
 struct CoreEditObservationSink {
+    session_id: SessionId,
     settings: crate::shared_types::VocabularyLearningSettings,
     expected_generation: u64,
     generation: Arc<AtomicU64>,
@@ -2676,6 +2677,14 @@ struct CoreEditObservationSink {
 }
 
 impl EditObservationSink for CoreEditObservationSink {
+    fn observation_id(&self) -> Option<u64> {
+        Some(self.expected_generation)
+    }
+
+    fn session_id(&self) -> Option<SessionId> {
+        Some(self.session_id)
+    }
+
     fn observation_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.settings.observation_seconds as u64)
     }
@@ -2751,6 +2760,7 @@ fn queue_pending_correction_state(
         }
         let suggestion = PendingCorrection {
             id: uuid::Uuid::new_v4().to_string(),
+            observation_id: generation.map(|(_, expected)| expected),
             expires_at_ms: now + i64::from(suggestion_seconds.clamp(5, 60)) * 1000,
             pattern,
             replacement,
@@ -7342,6 +7352,7 @@ impl OpenLessBackend {
         }
         let expected_generation = self.edit_observation_generation.load(Ordering::Acquire);
         let sink = Arc::new(CoreEditObservationSink {
+            session_id,
             settings: self
                 .get_preferences()
                 .vocabulary_learning_settings
@@ -9541,6 +9552,7 @@ mod tests {
             )
             .unwrap();
         let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
             settings: backend.get_preferences().vocabulary_learning_settings,
             expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
             generation: Arc::clone(&backend.edit_observation_generation),
@@ -9589,6 +9601,7 @@ mod tests {
     fn observed_spelling_correction_saves_only_the_complete_confirmed_word() {
         let (backend, _) = backend();
         let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
             settings: backend.get_preferences().vocabulary_learning_settings,
             expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
             generation: Arc::clone(&backend.edit_observation_generation),
@@ -9601,6 +9614,8 @@ mod tests {
         ));
         let suggestions = backend.pending_corrections();
         assert_eq!(suggestions.len(), 2);
+        assert_eq!(suggestions[0].observation_id, sink.observation_id());
+        assert_eq!(suggestions[1].observation_id, sink.observation_id());
         assert_eq!(suggestions[0].pattern, "ZIP");
         assert_eq!(suggestions[0].replacement, "VIP");
         assert_eq!(suggestions[1].pattern, "codx");
@@ -12063,6 +12078,8 @@ mod tests {
             .queue_pending_correction("扣的爱思".into(), "Codex".into())
             .unwrap()
             .unwrap();
+        assert_eq!(first.observation_id, None);
+        assert!(serde_json::to_value(&first).unwrap().get("observationId").is_none());
         assert!(backend
             .queue_pending_correction("扣的爱思".into(), "Codex".into())
             .unwrap()

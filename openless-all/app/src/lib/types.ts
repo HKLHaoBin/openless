@@ -124,6 +124,7 @@ export interface HostDocumentReadResult {
 /** A correction suggestion awaiting user confirmation (Tier2). The backend keeps it only in memory
  *  and it is lost on restart — suggestions are ephemeral; repeating the same mistake regenerates one. */
 export interface PendingCorrection {
+  observationId?: number;
   expiresAtMs: number;
   id: string;
   pattern: string;

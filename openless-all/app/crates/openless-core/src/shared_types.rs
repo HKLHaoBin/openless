@@ -265,6 +265,9 @@ pub use crate::types::{CorrectionRule, RuleSource};
 #[serde(rename_all = "camelCase")]
 pub struct PendingCorrection {
     pub id: String,
+    /// Host presentation correlation only; absent for manually queued suggestions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_id: Option<u64>,
     /// Absolute deadline shared by native and web confirmation surfaces.
     pub expires_at_ms: i64,
     /// The (wrong) pre-correction spelling. Only shown on the card so the
