@@ -34,7 +34,7 @@ assert.match(
   'Windows artifact must publish the provenance manifest beside installers',
 );
 const checkout = steps.find((s) => s.uses === 'actions/checkout@v4');
-assert.equal(checkout.with.ref, '${{ inputs.release_tag || github.ref }}');
+assert.equal(checkout.with.ref, '${{ inputs.release_tag || github.sha }}');
 const guard = steps.find((s) => s.name === 'Validate targeted draft release repair');
 assert.equal(guard.if, "inputs.release_tag != ''");
 assert.match(guard.run, /permission.*admin/);

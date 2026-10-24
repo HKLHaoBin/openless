@@ -749,6 +749,19 @@ jobs:
         if: runner.os == 'Windows'
         run: python scripts/test-recorder-module.py
 
+      - name: Compile Windows heap diagnostics (opt-in production path)
+        if: runner.os == 'Windows'
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --features issue-1261-diagnostics
+
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Windows'
+        with:
+          python-version: '3.12'
+
+      - name: Test Windows symbol identity parser
+        if: runner.os == 'Windows'
+        run: python -I scripts/windows-symbol-pair.test.py
+
       - name: Check Tauri backend with Rust 1.99 MSRV
         if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'
         run: cargo +1.99.0 check --locked --manifest-path src-tauri/Cargo.toml

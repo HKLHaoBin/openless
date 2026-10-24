@@ -19,6 +19,7 @@ use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TrySe
 use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 
+use crate::issue1261_debug::{CaptureProbe, Event as HeapEvent, Outcome as HeapOutcome};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 use parking_lot::Mutex;
@@ -1969,6 +1970,7 @@ fn run_audio_thread(
     // Stop accepting callback frames before pausing the native stream. This prevents a
     // callback racing with shutdown from adding work after the worker drain begins.
     state.accepting_audio.store(false, Ordering::Release);
+    if let Some(probe) = &state.heap_probe { probe.boundary(HeapEvent::CaptureClosing, HeapOutcome::Observed); }
     // Pause explicitly before drop.
     // On macOS coreaudio, cpal 0.15's plain drop(Stream) does not synchronously call
     // AudioOutputUnitStop, so the AudioUnit render callback keeps firing and process_callback
@@ -1977,14 +1979,21 @@ fn run_audio_thread(
     // backend it calls AudioOutputUnitStop directly, terminating the callback synchronously.
     // The subsequent drop handles dispose / resource release. If pause fails, warn only and
     // do not block the drop.
-    if let Err(err) = stream.pause() {
+    let pause_result = stream.pause();
+    if let Some(probe) = &state.heap_probe {
+        probe.boundary(HeapEvent::PauseReturned, if pause_result.is_ok() { HeapOutcome::Ok } else { HeapOutcome::Failed });
+        probe.boundary(HeapEvent::DropStarted, HeapOutcome::Observed);
+    }
+    if let Err(err) = pause_result {
         log::warn!("[recorder] cpal Stream pause before drop failed: {err}");
     }
     drop(stream);
+    if let Some(probe) = &state.heap_probe { probe.dropped(); }
     log::info!("[recorder] cpal Stream dropped (mic released)");
     *state.processor_sender.lock() = None;
     drop(frame_tx);
     processor.finish();
+    if let Some(probe) = &state.heap_probe { probe.boundary(HeapEvent::ProcessorJoined, HeapOutcome::Observed); }
     log::info!("[recorder] audio processor stopped (accepted frames drained)");
 
     // Wait for the watchdog thread to exit
@@ -2237,6 +2246,9 @@ fn build_stream_for_format(
     channels: usize,
     runtime_error_tx: Sender<RecorderError>,
 ) -> Result<cpal::Stream, RecorderError> {
+    if let Some(probe) = &state.heap_probe {
+        probe.configured(input_sr, channels, matches!(sample_format, SampleFormat::F32 | SampleFormat::F64));
+    }
     macro_rules! make_stream {
         ($t:ty, $to_f32:expr) => {{
             let frame_tx = frame_tx.clone();
@@ -2257,7 +2269,9 @@ fn build_stream_for_format(
                 .build_input_stream::<$t, _, _>(
                     config,
                     move |data: &[$t], _info| {
+                        let _callback = state.heap_probe.as_deref().map(|probe| probe.callback(data.len()));
                         if !state.accepting_audio.load(Ordering::Acquire) {
+                            if let Some(probe) = &state.heap_probe { probe.skipped(); }
                             return;
                         }
                         if !data.is_empty() {
@@ -2273,8 +2287,9 @@ fn build_stream_for_format(
                             channels,
                             input_sample_rate: input_sr,
                         })) {
-                            Ok(()) => {}
+                            Ok(()) => { if let Some(probe) = &state.heap_probe { probe.queued(); } }
                             Err(TrySendError::Disconnected(_)) => {
+                                if let Some(probe) = &state.heap_probe { probe.queue_failed(false); }
                                 if state.accepting_audio.swap(false, Ordering::AcqRel) {
                                     let _ = runtime_error_for_callback.send(
                                         RecorderError::EngineFailed("audio processing worker disconnected".into()),
@@ -2283,6 +2298,7 @@ fn build_stream_for_format(
                                 stop_flag.store(true, Ordering::Release);
                             }
                             Err(TrySendError::Full(_)) => {
+                                if let Some(probe) = &state.heap_probe { probe.queue_failed(true); }
                                 if state.accepting_audio.swap(false, Ordering::AcqRel) {
                                     let _ = runtime_error_for_callback.send(
                                         RecorderError::EngineFailed(
@@ -2467,7 +2483,9 @@ impl AudioProcessingWorker {
             .spawn(move || {
                 let mut processor = openless_core::AudioProcessor::new(processing);
                 let mut enhancement_enabled = processing.enhancement_enabled;
+                if let Some(probe) = &state.heap_probe { probe.enhancement(enhancement_enabled); }
                 let deliver = |chunk: openless_core::audio::NormalizedPcmChunk| {
+                    if let Some(probe) = &state.heap_probe { probe.output(chunk.pcm_i16_le.len()); }
                     state.note_first_pcm(true);
                     consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
                     if let Some(archiver) = &archiver {
@@ -2501,6 +2519,7 @@ impl AudioProcessingWorker {
                             if let Some(chunk) = processor.finish() {
                                 deliver(chunk);
                             }
+                            if let Some(probe) = &state.heap_probe { probe.audio(HeapEvent::AudioFlush); }
                             // A warm microphone reuses this worker across recording segments.
                             processor = openless_core::AudioProcessor::new(processing);
                             enhancement_enabled = processing.enhancement_enabled;
@@ -2510,6 +2529,7 @@ impl AudioProcessingWorker {
                             if let Some(chunk) = processor.finish() {
                                 deliver(chunk);
                             }
+                            if let Some(probe) = &state.heap_probe { probe.audio(HeapEvent::AudioShutdown); }
                             break;
                         }
                     }
@@ -2543,6 +2563,7 @@ impl AudioProcessingWorker {
 
 /// State carried across callbacks: resample leftovers, diagnostic counters and peak.
 struct StreamState {
+    heap_probe: Option<Arc<CaptureProbe>>,
     capture_id: u64,
     created_at: std::time::Instant,
     first_raw_pcm_us: AtomicU64,
@@ -2565,6 +2586,7 @@ struct StreamState {
 impl StreamState {
     fn new() -> Self {
         Self {
+            heap_probe: CaptureProbe::new(),
             capture_id: NEXT_CAPTURE_ID.fetch_add(1, Ordering::Relaxed),
             created_at: std::time::Instant::now(),
             first_raw_pcm_us: AtomicU64::new(0),

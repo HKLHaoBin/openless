@@ -1166,10 +1166,28 @@ impl TauriCapsuleWindow {
     where
         F: FnOnce(Self) + Send + 'static,
     {
+        self.run_on_main_thread_for_probe(1, task)
+    }
+
+    fn run_on_main_thread_for_probe<F>(&self, source: u64, task: F) -> Result<(), String>
+    where
+        F: FnOnce(Self) + Send + 'static,
+    {
+        use crate::issue1261_debug::{self, Event, Fact, Key, Operation, Outcome, Probe};
+        let operation = Operation::new(Probe::Main);
+        operation.record(Event::DispatchRequested, Outcome::Observed, &[
+            (Key::Source, Fact::Count(source)),
+            (Key::MacTypePresent, Fact::Flag(issue1261_debug::mac_type_present())),
+        ]);
         let capsule = self.clone();
-        self.app
-            .run_on_main_thread(move || task(capsule))
-            .map_err(|error| error.to_string())
+        let result = self.app.run_on_main_thread(move || {
+            let _span = operation.span(Event::TaskEntered, Event::TaskReturned,
+                &[(Key::Source, Fact::Count(source))]);
+            task(capsule)
+        }).map_err(|error| error.to_string());
+        operation.record(Event::DispatchReturned,
+            if result.is_ok() { Outcome::Ok } else { Outcome::Failed }, &[]);
+        result
     }
 
     fn restore_translation_menu(&self, owner: Option<(&str, openless_core::SessionId)>) -> Result<bool, String> {
@@ -1351,7 +1369,7 @@ impl TauriCapsuleWindow {
     /// Apply the user's display-target choice on the native main thread.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(crate) fn sync_capsule_mirrors(&self) {
-        let _ = self.run_on_main_thread(|capsule| capsule.apply_capsule_mirrors());
+        let _ = self.run_on_main_thread_for_probe(2, |capsule| capsule.apply_capsule_mirrors());
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1413,6 +1431,12 @@ impl TauriCapsuleWindow {
         } else {
             Vec::new()
         };
+
+        {
+            use crate::issue1261_debug::{Event, Fact, Key, Operation, Outcome, Probe};
+            Operation::new(Probe::Main).record(Event::LayoutObserved, Outcome::Observed,
+                &[(Key::MirrorTargets, Fact::Count(targets.len() as u64))]);
+        }
 
         // Reuse a bounded set of webviews. Recreating WKWebViews on every
         // recording/mode switch accumulates native resources on macOS.
@@ -1764,6 +1788,11 @@ impl TauriCapsuleWindow {
             return;
         };
         let layout_changed = self.state.layout.lock().as_ref() != Some(&next);
+        {
+            use crate::issue1261_debug::{Event, Fact, Key, Operation, Outcome, Probe};
+            Operation::new(Probe::Main).record(Event::LayoutObserved, Outcome::Observed,
+                &[(Key::LayoutChanged, Fact::Flag(layout_changed))]);
+        }
         if layout_changed {
             #[cfg(target_os = "windows")]
             let position_result = self
@@ -1846,8 +1875,11 @@ impl TauriCapsuleWindow {
                 if capsule.state.layout_watch_epoch.load(Ordering::SeqCst) != epoch {
                     break;
                 }
-                let _ = capsule.run_on_main_thread(move |capsule| {
+                let _ = capsule.run_on_main_thread_for_probe(3, move |capsule| {
                     if capsule.state.layout_watch_epoch.load(Ordering::SeqCst) != epoch {
+                        use crate::issue1261_debug::{Event, Fact, Key, Operation, Outcome, Probe};
+                        Operation::new(Probe::Main).record(Event::EpochSkipped, Outcome::Observed,
+                            &[(Key::EpochCurrent, Fact::Flag(false))]);
                         return;
                     }
                     let Some(window) = capsule.window() else {

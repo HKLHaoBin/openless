@@ -41,3 +41,6 @@ windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Thre
 # Exercise the production recorder worker without the retired Linux Tauri host.
 cpal = "0.15.3"
 parking_lot = "0.12"
+
+[features]
+issue-1261-diagnostics = []

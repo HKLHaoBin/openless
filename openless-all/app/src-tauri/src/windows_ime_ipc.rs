@@ -450,6 +450,35 @@ mod windows_message {
     pub fn submit_text_to_window(
         request: ImeSubmitRequest,
     ) -> WindowsImeIpcResult<ImeSubmitStatus> {
+        use crate::issue1261_debug::{Event, Fact, Key, Operation, Outcome, Probe};
+        use crate::windows_ime_protocol::ImeSubmitOp;
+        let diagnostic = Operation::new(Probe::Ime);
+        let operation = match request.op {
+            ImeSubmitOp::Commit => 1, ImeSubmitOp::Update => 2,
+            ImeSubmitOp::Finish => 3, ImeSubmitOp::Cancel => 4,
+        };
+        diagnostic.record(Event::ImeStarted, Outcome::Observed,
+            &[(Key::ImeOperation, Fact::Count(operation))]);
+        let mut query_count = 0;
+        let result = submit_text_to_window_inner(request, diagnostic, &mut query_count);
+        let unknown = result.as_ref().err().is_some_and(|error| error.is_outcome_unknown());
+        let outcome = match &result {
+            Ok(ImeSubmitStatus::Committed) => Outcome::Ok,
+            Ok(_) => Outcome::Observed,
+            Err(_) if unknown => Outcome::Unknown,
+            Err(_) => Outcome::Failed,
+        };
+        diagnostic.record(Event::ImeReturned, outcome,
+            &[(Key::OutcomeUnknown, Fact::Flag(unknown)), (Key::QueryCount, Fact::Count(query_count))]);
+        result
+    }
+
+    fn submit_text_to_window_inner(
+        request: ImeSubmitRequest,
+        diagnostic: crate::issue1261_debug::Operation,
+        query_count: &mut u64,
+    ) -> WindowsImeIpcResult<ImeSubmitStatus> {
+        use crate::issue1261_debug::{Event, Fact, Key, Outcome};
         let target = request.target.ok_or(WindowsImeIpcError::NoReadyClient)?;
         let token = next_submit_token();
         let payload = if request.op == crate::windows_ime_protocol::ImeSubmitOp::Commit {
@@ -528,12 +557,15 @@ mod windows_message {
                 request.op.label()
             ),
         );
+        diagnostic.record(Event::ImeAcknowledged, Outcome::Observed,
+            &[(Key::ReplyCode, Fact::Count(reply as u64))]);
         classify_submit_reply(reply)?;
 
         let deadline = Instant::now() + IME_SUBMIT_TIMEOUT;
         let query = encode_query_payload(token);
         loop {
             std::thread::sleep(IME_QUERY_INTERVAL);
+            *query_count = query_count.saturating_add(1);
             match send_copy_data(
                 window.hwnd,
                 IME_COPYDATA_QUERY,

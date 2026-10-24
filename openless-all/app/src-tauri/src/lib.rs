@@ -71,6 +71,7 @@ mod hotkey;
 #[path = "mobile_stubs/hotkey.rs"]
 mod hotkey;
 mod insertion;
+mod issue1261_debug;
 mod llm_gemini;
 #[cfg(mobile)]
 mod mobile_runtime;
