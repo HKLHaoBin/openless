@@ -797,7 +797,7 @@ pub(super) fn less_computer_modifier_bridge_loop(
                     handle_less_computer_modifier_pressed(&inner_cloned, press_id, at).await
                 });
             }
-            HotkeyEvent::Released { press_id, at } => {
+            HotkeyEvent::Released { press_id, at, .. } => {
                 if inner.less_computer_press_generation.load(Ordering::SeqCst) != press_id {
                     continue;
                 }
@@ -1457,7 +1457,9 @@ pub(super) fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<Com
                 if matches!(
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
                     crate::types::HotkeyMode::Hold
-                ) {
+                ) && !(inner_cloned.backend.get_preferences().voice_activation_enabled
+                    && inner_cloned.backend.get_preferences().voice_activation_hotkey_linked)
+                {
                     let press_id = current_press_id;
                     let task_inner = Arc::clone(&inner_cloned);
                     let _ = inner_cloned.host.spawn(async move {
@@ -1474,7 +1476,9 @@ pub(super) fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<Com
                 if matches!(
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
                     crate::types::HotkeyMode::Hold
-                ) {
+                ) && !(inner_cloned.backend.get_preferences().voice_activation_enabled
+                    && inner_cloned.backend.get_preferences().voice_activation_hotkey_linked)
+                {
                     let task_inner = Arc::clone(&inner_cloned);
                     let _ = inner_cloned.host.spawn(async move {
                         handle_released_edge(&task_inner, at, press_id).await;
@@ -2209,7 +2213,9 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                 if matches!(
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
                     crate::types::HotkeyMode::Hold
-                ) {
+                ) && !(inner_cloned.backend.get_preferences().voice_activation_enabled
+                    && inner_cloned.backend.get_preferences().voice_activation_hotkey_linked)
+                {
                     let task_inner = Arc::clone(&inner_cloned);
                     let _ = inner_cloned.host.spawn(async move {
                         handle_pressed_edge(&task_inner, at, press_id).await;
@@ -2220,11 +2226,19 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                     });
                 }
             }
-            HotkeyEvent::Released { at, press_id } => {
+            HotkeyEvent::Released { at, press_id, combined } => {
+                if combined {
+                    // The abort bridge may lag this FIFO. Suppress linked clicks
+                    // using the verdict captured before native key-up was sent.
+                    inner_cloned.backend.accept_voice_activation_hotkey_edge(
+                        openless_core::DictationHotkeyEdge::Combined { at, press_id });
+                }
                 if matches!(
                     hotkey_runtime_target(&inner_cloned).dictation_mode,
                     crate::types::HotkeyMode::Hold
-                ) {
+                ) && !(inner_cloned.backend.get_preferences().voice_activation_enabled
+                    && inner_cloned.backend.get_preferences().voice_activation_hotkey_linked)
+                {
                     let task_inner = Arc::clone(&inner_cloned);
                     let _ = inner_cloned.host.spawn(async move {
                         handle_released_edge(&task_inner, at, press_id).await;
@@ -2990,6 +3004,7 @@ pub(crate) mod windows_less_computer_tests {
                 tx.send(HotkeyEvent::Released {
                     at: released,
                     press_id: 47,
+                    combined: false,
                 })
                 .unwrap();
                 drop(tx);

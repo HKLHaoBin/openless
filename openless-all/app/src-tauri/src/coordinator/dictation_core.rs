@@ -51,6 +51,17 @@ async fn dispatch(
     if !inner.backend.snapshot().running {
         inner.backend.start().await?;
     }
+    if let Some(changed) = inner.backend.accept_voice_activation_hotkey_edge(edge) {
+        if changed {
+            let backend = Arc::clone(&inner.backend);
+            inner.host.spawn(async move {
+                if let Err(error) = backend.reconcile_voice_activation_hotkey().await {
+                    log::warn!("[voice-activation] linked hotkey failed: {error}");
+                }
+            });
+        }
+        return Ok(openless_core::CliDispatchOutcome::Noop);
+    }
     inner.backend.dispatch_dictation_hotkey_edge(edge).await
 }
 
