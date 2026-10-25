@@ -35,7 +35,24 @@ assert.deepEqual([...probes.matchAll(/^\s+(P\d),/gm)].map((m) => m[1]), ['P1', '
 assert.match(coordinator, /issue1266_debug::lock_host\(&self\.inner\.settings_host_gate/);
 assert.doesNotMatch(coordinator + loops, /settings_host_gate\.lock\(\)/);
 assert.equal((loops.match(/lock_host\(&inner\.settings_host_gate/g) ?? []).length, 8);
-assert.match(host, /operation\.mark\(Event::Entered\);\s*task\(\);/);
+// Both adapters target the same native queue; neither whole-file token presence nor
+// the old host-only dispatcher is sufficient coverage of the reported capsule task.
+const capsuleHost = host.slice(host.indexOf('impl TauriCapsuleWindow {'), host.indexOf('pub(crate) struct TauriCoordinatorHost'));
+const coordinatorHost = host.slice(host.indexOf('pub(crate) struct TauriCoordinatorHost'));
+assert.match(capsuleHost, /run_on_main_thread_observed\(crate::issue1266_debug::Kind::CapsuleDispatch, task\)/);
+assert.match(capsuleHost, /MainDispatch::new\(kind\)/);
+assert.match(capsuleHost, /self\.app\.run_on_main_thread\(dispatch\.wrap\(move \|\| task\(capsule\)\)\)/);
+assert.match(capsuleHost, /Kind::MirrorDispatch/);
+assert.match(capsuleHost, /Kind::LayoutDispatch/);
+assert.match(coordinatorHost, /MainDispatch::new\(Kind::HostDispatch\)/);
+assert.match(coordinatorHost, /app\.run_on_main_thread\(dispatch\.wrap\(task\)\)/);
+assert.match(helper, /EXECUTING\.with\(Cell::get\)/);
+assert.match(helper, /current\.replace\(Some\(self\.operation\)\)/);
+assert.match(helper, /current\.set\(self\.previous\)/);
+assert.match(helper, /self\.record\(Event::Entered, Outcome::Observed\);\s*task\(\);\s*self\.record\(Event::Returned, Outcome::Returned\)/);
+assert.match(helper, /thread_label: main_dispatch::thread_label\(\)/);
+assert.match(helper, /"thread_label": record\.thread_label/);
+assert.doesNotMatch(helper, /GetCurrentThreadId|std::thread::current|std::thread::ThreadId/);
 assert.match(loops, /DebugEvent::Consumed/);
 assert.match(loops, /handle_pressed_edge[\s\S]*?DebugEvent::HandlerReturned/);
 assert.match(loops, /DebugEvent::AckTimedOut/);

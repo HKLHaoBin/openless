@@ -1166,10 +1166,29 @@ impl TauriCapsuleWindow {
     where
         F: FnOnce(Self) + Send + 'static,
     {
+        self.run_on_main_thread_observed(crate::issue1266_debug::Kind::CapsuleDispatch, task)
+    }
+
+    fn run_on_main_thread_observed<F>(&self, kind: crate::issue1266_debug::Kind, task: F)
+        -> Result<(), String>
+    where
+        F: FnOnce(Self) + Send + 'static,
+    {
         let capsule = self.clone();
-        self.app
-            .run_on_main_thread(move || task(capsule))
-            .map_err(|error| error.to_string())
+        #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
+        {
+            let dispatch = crate::issue1266_debug::MainDispatch::new(kind);
+            let result = self.app.run_on_main_thread(dispatch.wrap(move || task(capsule)))
+                .map_err(|error| error.to_string());
+            dispatch.dispatched(result.is_ok());
+            result
+        }
+        #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
+        {
+            let _ = kind;
+            self.app.run_on_main_thread(move || task(capsule))
+                .map_err(|error| error.to_string())
+        }
     }
 
     fn restore_translation_menu(&self, owner: Option<(&str, openless_core::SessionId)>) -> Result<bool, String> {
@@ -1351,7 +1370,8 @@ impl TauriCapsuleWindow {
     /// Apply the user's display-target choice on the native main thread.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(crate) fn sync_capsule_mirrors(&self) {
-        let _ = self.run_on_main_thread(|capsule| capsule.apply_capsule_mirrors());
+        let _ = self.run_on_main_thread_observed(crate::issue1266_debug::Kind::MirrorDispatch,
+            |capsule| capsule.apply_capsule_mirrors());
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1846,7 +1866,7 @@ impl TauriCapsuleWindow {
                 if capsule.state.layout_watch_epoch.load(Ordering::SeqCst) != epoch {
                     break;
                 }
-                let _ = capsule.run_on_main_thread(move |capsule| {
+                let _ = capsule.run_on_main_thread_observed(crate::issue1266_debug::Kind::LayoutDispatch, move |capsule| {
                     if capsule.state.layout_watch_epoch.load(Ordering::SeqCst) != epoch {
                         return;
                     }
@@ -2258,17 +2278,11 @@ impl TauriCoordinatorHost {
             .ok_or_else(|| "Tauri AppHandle is not bound".to_string())?;
         #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
         {
-            use crate::issue1266_debug::{Event, Operation, Outcome, Probe, Facts};
-            let operation = Operation::new(Probe::P2);
-            operation.mark(Event::Requested);
-            let result = app.run_on_main_thread(move || {
-                let _scope = operation.scope();
-                operation.mark(Event::Entered);
-                task();
-                operation.record(Event::Returned, Outcome::Returned, Facts::default());
-            }).map_err(|error| error.to_string());
-            operation.record(Event::DispatchReturned,
-                if result.is_ok() { Outcome::Ok } else { Outcome::Error }, Facts::default());
+            use crate::issue1266_debug::{Kind, MainDispatch};
+            let dispatch = MainDispatch::new(Kind::HostDispatch);
+            let result = app.run_on_main_thread(dispatch.wrap(task))
+                .map_err(|error| error.to_string());
+            dispatch.dispatched(result.is_ok());
             result
         }
         #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
