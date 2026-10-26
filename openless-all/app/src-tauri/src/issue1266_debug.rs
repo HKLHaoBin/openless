@@ -5,6 +5,9 @@
 
 use serde::Serialize;
 
+pub(crate) const ATTEMPT: &str = "A1-owner-thread-target";
+pub(crate) const CHANGE: &str = "C1-windows-target-storage";
+
 pub(crate) const SESSION: &str = "issue-1266-2e2c7a47";
 pub(crate) const LOG_NAME: &str = "openless-issue-1266-2e2c7a47-session.ndjson";
 
@@ -26,11 +29,11 @@ impl Probe {
     fn hypotheses(self) -> &'static [&'static str] {
         match self {
             Self::P1 => &["H1", "H5"],
-            Self::P2 => &["H1", "H5", "H1227-1"],
+            Self::P2 => &["H1", "H5", "H1227-1", "H1266R2-1", "H1266R2-2"],
             Self::P3 => &["H2"],
             Self::P4 => &["H3"],
             Self::P5 => &["H4"],
-            Self::P6 => &["H1", "H2", "H3", "H4", "H5", "H1227-4"],
+            Self::P6 => &["H1", "H2", "H3", "H4", "H5", "H1227-4", "H1266R2-1", "H1266R2-2"],
         }
     }
 }
@@ -38,7 +41,7 @@ impl Probe {
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Event {
-    Requested, Acquired, Released, DispatchReturned, Entered, Returned,
+    Requested, Acquired, Released, DispatchReturned, HandleCloneEntered, HandleCloneReturned, Entered, Returned,
     Consumed, HandlerEntered, HandlerReturned, ScopeLeft,
     AckWait, AckReceived, AckTimedOut, WindowFound, SubmitAck, QueryCount,
     ProcessorLock, ProcessorReleased, StopSignalled, JoinLock, JoinEntered,
@@ -131,6 +134,13 @@ mod main_dispatch {
             let dispatch = Self { operation, kind };
             dispatch.record(Event::Requested, Outcome::Observed);
             dispatch
+        }
+
+        pub(crate) fn clone_handle<R>(self, clone: impl FnOnce() -> R) -> R {
+            self.record(Event::HandleCloneEntered, Outcome::Observed);
+            let result = clone();
+            self.record(Event::HandleCloneReturned, Outcome::Returned);
+            result
         }
 
         pub(crate) fn wrap(self, task: impl FnOnce() + Send + 'static)
@@ -376,7 +386,7 @@ mod sink {
         let mut line = serde_json::to_vec(&serde_json::json!({
             "schema": "diagnosing-bugs.v1", "session_id": SESSION,
             "run_id": format!("r{run:x}"), "build_id": build_id(),
-            "attempt_id": "A0-observation", "change_id": "C0-no-behavior-change",
+            "attempt_id": ATTEMPT, "change_id": CHANGE,
             "probe_id": operation.probe, "hypothesis_ids": operation.probe.hypotheses(),
             "operation_id": operation.id, "parent_operation_id": (operation.parent != 0).then_some(operation.parent),
             "thread_label": record.thread_label,
@@ -560,6 +570,31 @@ mod main_dispatch_tests {
     }
 
     #[test]
+    fn handle_clone_is_observed_before_dispatch_or_entry() {
+        let records = sink::capture(|| {
+            let dispatch = MainDispatch::new(Kind::HostDispatch);
+            let absent: Option<()> = dispatch.clone_handle(|| None);
+            assert!(absent.is_none());
+            dispatch.dispatched(false);
+        });
+        assert_eq!(events(&records), ["requested", "handle_clone_entered", "handle_clone_returned", "dispatch_returned"]);
+        assert_eq!(records[0]["attempt_id"], super::ATTEMPT);
+        assert_eq!(records[0]["change_id"], super::CHANGE);
+        assert!(records.iter().all(|r| r["operation_id"] == records[0]["operation_id"]));
+        assert_eq!(records[3]["outcome"], "error");
+    }
+
+    #[test]
+    fn clone_unwind_does_not_claim_clone_return_or_task_entry() {
+        let records = sink::capture(|| {
+            let dispatch = MainDispatch::new(Kind::CapsuleDispatch);
+            let result = std::panic::catch_unwind(|| dispatch.clone_handle(|| panic!("clone unwind")));
+            assert!(result.is_err());
+        });
+        assert_eq!(events(&records), ["requested", "handle_clone_entered"]);
+    }
+
+    #[test]
     fn inline_execution_preserves_the_real_dispatch_order() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = Arc::clone(&calls);
@@ -573,7 +608,7 @@ mod main_dispatch_tests {
         assert!(records.iter().all(|r| r["parent_operation_id"].is_null()));
         assert!(records.iter().all(|r| r["thread_label"] == records[0]["thread_label"]));
         assert!(records[0]["thread_label"].as_u64().unwrap() > 0);
-        assert_eq!(records[0]["hypothesis_ids"], serde_json::json!(["H1", "H5", "H1227-1"]));
+        assert_eq!(records[0]["hypothesis_ids"], serde_json::json!(["H1", "H5", "H1227-1", "H1266R2-1", "H1266R2-2"]));
         assert_eq!(records[0]["safe"]["kind"], "capsule_dispatch");
     }
 

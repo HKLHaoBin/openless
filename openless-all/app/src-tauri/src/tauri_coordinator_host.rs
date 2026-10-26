@@ -1174,10 +1174,10 @@ impl TauriCapsuleWindow {
     where
         F: FnOnce(Self) + Send + 'static,
     {
-        let capsule = self.clone();
         #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
         {
             let dispatch = crate::issue1266_debug::MainDispatch::new(kind);
+            let capsule = dispatch.clone_handle(|| self.clone());
             let result = self.app.run_on_main_thread(dispatch.wrap(move || task(capsule)))
                 .map_err(|error| error.to_string());
             dispatch.dispatched(result.is_ok());
@@ -1186,6 +1186,7 @@ impl TauriCapsuleWindow {
         #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
         {
             let _ = kind;
+            let capsule = self.clone();
             self.app.run_on_main_thread(move || task(capsule))
                 .map_err(|error| error.to_string())
         }
@@ -2273,21 +2274,23 @@ impl TauriCoordinatorHost {
     where
         F: FnOnce() + Send + 'static,
     {
-        let app = self
-            .app()
-            .ok_or_else(|| "Tauri AppHandle is not bound".to_string())?;
         #[cfg(all(target_os = "windows", feature = "issue-1266-diagnostics"))]
         {
             use crate::issue1266_debug::{Kind, MainDispatch};
             let dispatch = MainDispatch::new(Kind::HostDispatch);
-            let result = app.run_on_main_thread(dispatch.wrap(task))
-                .map_err(|error| error.to_string());
+            let app = dispatch.clone_handle(|| self.app());
+            let result = app.ok_or_else(|| "Tauri AppHandle is not bound".to_string())
+                .and_then(|app| app.run_on_main_thread(dispatch.wrap(task))
+                    .map_err(|error| error.to_string()));
             dispatch.dispatched(result.is_ok());
             result
         }
         #[cfg(not(all(target_os = "windows", feature = "issue-1266-diagnostics")))]
-        app.run_on_main_thread(task)
-            .map_err(|error| error.to_string())
+        {
+            let app = self.app()
+                .ok_or_else(|| "Tauri AppHandle is not bound".to_string())?;
+            app.run_on_main_thread(task).map_err(|error| error.to_string())
+        }
     }
 
     pub(crate) fn spawn<F>(&self, future: F) -> tauri::async_runtime::JoinHandle<F::Output>

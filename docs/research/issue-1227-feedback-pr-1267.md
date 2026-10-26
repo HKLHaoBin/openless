@@ -134,3 +134,7 @@ P2/P6 的修正不声称覆盖 H1227-2/3。单凭 unsafe、ntdll、所有 captur
    若崩溃，受控提供与该 EXE/PDB 匹配的 WER/dump。不要在公开 Issue 上传 dump、录音或完整应用日志。
 5. 若证据使某项具体变更 ACTIONABLE，在同一探针修订上只改该变量，分配 attempt/change，再经 Bugbot/Actions
    交付修复实验。现场同合同判 EFFECTIVE/INEFFECTIVE/INCONCLUSIVE；用户明确确认前不清除探针或日志。
+
+## 2026-10-26 后续证据
+
+[第二批现场与匹配 dump 分析](issue-1266-feedback-6416406209.md) 已把旧 Run2 的消失定位为一次 `0xc000001d` 异常，不能继续称为已证明的非崩溃退出。该转储不是两次新堆崩溃的 dump；新报告选择 A1 所有权实验，不改写本报告记录的上一轮 A0 判断。

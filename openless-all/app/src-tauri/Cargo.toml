@@ -200,3 +200,7 @@ lto = "thin"
 codegen-units = 1
 # Xcode 27 beta 的 strip 会损坏 proc-macro dylib；本地构建加 CARGO_PROFILE_RELEASE_STRIP=none。
 strip = "symbols"
+
+# A1: Windows event-loop targets must not follow Send/Sync runtime handle clones.
+[patch.crates-io]
+tauri-runtime-wry = { path = "vendor/tauri-runtime-wry" }

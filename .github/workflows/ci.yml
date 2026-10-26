@@ -745,6 +745,13 @@ jobs:
       - name: Run isolated Windows hang diagnostics tests (off/on)
         run: python scripts/test-windows-hang-diagnostics.py
 
+      - name: Run owner-thread target ownership tests
+        run: python scripts/test-windows-runtime-target.py
+
+      - name: Run real Windows runtime ownership lifecycle
+        if: runner.os == 'Windows'
+        run: python scripts/test-windows-runtime-target.py --runtime
+
       - name: Run Windows symbol-pair format tests
         run: python scripts/windows-symbol-pair.test.py
 
