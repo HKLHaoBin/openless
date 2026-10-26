@@ -827,16 +827,16 @@ pub struct UserPreferences {
     /// Whether to send original text near the cursor from the document the
     /// user is writing as LLM polish context.
     ///
-    /// **Default false, and must stay false.** When on, every dictation
+    /// **Default true.** When on, every dictation
     /// reads the front app's body and sends part of it to the LLM vendor —
     /// data the user never handed over voluntarily, so only they may opt in.
     /// When off, `host_document` issues zero AX calls and prompts are
     /// byte-identical to before this feature existed.
     ///
-    /// macOS-only today; Windows / Linux degrade gracefully to no context.
+    /// macOS, Windows and Android support it today; Linux degrades gracefully to no context.
     /// Password boxes / Secure Input / password managers / terminals are
     /// hard-blocked regardless of this switch.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub cursor_context_enabled: bool,
     /// Observe corrections locally after insertion; independent of LLM context.
     #[serde(default)]
@@ -1211,7 +1211,7 @@ struct UserPreferencesWire {
     streaming_insert_save_clipboard: bool,
     #[serde(default)]
     windows_composition_input: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     cursor_context_enabled: bool,
     #[serde(default)]
     vocabulary_learning_enabled: bool,
@@ -2032,7 +2032,7 @@ impl Default for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
             windows_composition_input: false,
-            cursor_context_enabled: false,
+            cursor_context_enabled: true,
             vocabulary_learning_enabled: false,
             vocabulary_learning_settings: VocabularyLearningSettings::default(),
             show_overview_activity_heatmap: true,
@@ -3707,6 +3707,17 @@ mod tests {
 
         let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(from_empty.paste_shortcut, PasteShortcut::CtrlV);
+    }
+
+    #[test]
+    fn cursor_context_defaults_to_enabled_and_round_trips() {
+        assert!(UserPreferences::default().cursor_context_enabled);
+        let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(from_empty.cursor_context_enabled);
+
+        let disabled: UserPreferences =
+            serde_json::from_str(r#"{"cursorContextEnabled":false}"#).unwrap();
+        assert!(!disabled.cursor_context_enabled);
     }
 
     #[test]

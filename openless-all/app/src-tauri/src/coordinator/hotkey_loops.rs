@@ -2559,6 +2559,7 @@ pub(crate) mod less_computer_test_support {
             last_capsule_state: Mutex::new(None),
             capsule_event_epoch: AtomicU64::new(0),
             capsule_event_lock: Mutex::new(()),
+            voice_activation_feedback: Mutex::new(VoiceActivationFeedback::default()),
             selection_polish_capsule_active: AtomicBool::new(false),
             qa_context: Arc::new(TauriQaHostContext::default()),
             shutdown: AtomicBool::new(false),

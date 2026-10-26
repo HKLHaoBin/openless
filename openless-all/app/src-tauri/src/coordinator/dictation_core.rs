@@ -53,6 +53,9 @@ async fn dispatch(
     }
     if let Some(changed) = inner.backend.accept_voice_activation_hotkey_edge(edge) {
         if changed {
+            inner.voice_activation_feedback.lock().request(
+                inner.backend.voice_activation_hotkey_intent(),
+            );
             let backend = Arc::clone(&inner.backend);
             inner.host.spawn(async move {
                 if let Err(error) = backend.reconcile_voice_activation_hotkey().await {

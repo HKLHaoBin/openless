@@ -3522,6 +3522,16 @@ impl OpenLessBackend {
         Some(changed)
     }
 
+    /// Runtime-only intent token for host feedback; never changes saved preferences.
+    pub fn voice_activation_hotkey_intent(&self) -> Option<(bool, u64)> {
+        let preferences = self.get_preferences();
+        if !preferences.voice_activation_enabled || !preferences.voice_activation_hotkey_linked {
+            return None;
+        }
+        let state = self.voice_activation_link.lock().expect("voice link lock poisoned");
+        Some((state.requested, state.revision))
+    }
+
     pub async fn reconcile_voice_activation_hotkey(&self) -> Result<(), BackendError> {
         let paused_session = self.voice_activation_link.lock()
             .expect("voice link lock poisoned").finalize_session;
@@ -13536,6 +13546,9 @@ mod tests {
         )
         .unwrap();
 
+        let mut preferences = backend.get_preferences();
+        preferences.cursor_context_enabled = false;
+        backend.set_preferences(preferences).unwrap();
         let context = backend
             .capture_host_dictation_context(DictationStartOptions::default())
             .await
@@ -13732,6 +13745,7 @@ mod tests {
         .unwrap();
         let mut preferences = backend.get_preferences();
         preferences.vocabulary_learning_enabled = true;
+        preferences.cursor_context_enabled = false;
         assert!(
             !preferences.cursor_context_enabled,
             "learning must not require uploading cursor context"

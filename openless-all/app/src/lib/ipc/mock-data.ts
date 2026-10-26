@@ -137,7 +137,7 @@ export let mockSettings: UserPreferences = {
   streamingInsertDefaultMigrated: true,
   streamingInsertSaveClipboard: true,
   windowsCompositionInput: false,
-  cursorContextEnabled: false,
+  cursorContextEnabled: true,
   vocabularyLearningEnabled: false,
   vocabularyLearningSettings: { observationSeconds: 60, suggestionSeconds: 10, maxPhraseChars: 12 },
   showOverviewActivityHeatmap: true,

@@ -1607,13 +1607,6 @@ fn map_permission_state(
     }
 }
 
-fn current_permission_snapshot() -> openless_core::PermissionSnapshot {
-    openless_core::PermissionSnapshot {
-        microphone: map_permission_state(crate::permissions::check_microphone()),
-        accessibility: map_permission_state(crate::permissions::check_accessibility()),
-    }
-}
-
 impl openless_core::PlatformApi for TauriPlatformApi {
     fn capabilities(
         &self,
@@ -1651,13 +1644,26 @@ impl openless_core::PlatformApi for TauriPlatformApi {
     fn microphone_permission(
         &self,
     ) -> BoxFuture<'static, Result<openless_core::PermissionSnapshot, BackendError>> {
-        Box::pin(async { Ok(current_permission_snapshot()) })
+        Box::pin(async {
+            Ok(openless_core::PermissionSnapshot {
+                microphone: map_permission_state(crate::permissions::check_microphone()),
+                accessibility: map_permission_state(crate::permissions::check_accessibility()),
+            })
+        })
     }
 
     fn accessibility_permission(
         &self,
     ) -> BoxFuture<'static, Result<openless_core::PermissionSnapshot, BackendError>> {
-        Box::pin(async { Ok(current_permission_snapshot()) })
+        // Windows microphone checks open a temporary native input stream. The UI queries
+        // both permissions concurrently, so querying the microphone here would open a
+        // second stream solely to discard its result in check_accessibility_permission.
+        Box::pin(async {
+            Ok(openless_core::PermissionSnapshot {
+                microphone: openless_core::PermissionState::Unknown,
+                accessibility: map_permission_state(crate::permissions::check_accessibility()),
+            })
+        })
     }
 
     fn request_microphone_permission(&self) -> BoxFuture<'static, Result<(), BackendError>> {

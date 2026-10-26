@@ -798,9 +798,9 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "cursor_context_enabled",
         key: "cursorContextEnabled",
-        class: PreferenceClass::Excluded,
+        class: PreferenceClass::Portable,
         shape: PreferenceShape::Boolean,
-        reason: "local_consent_or_secret",
+        reason: "portable_setting",
     },
     PreferenceField {
         rust_name: "vocabulary_learning_enabled",
