@@ -55,8 +55,8 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
     const knob = element.querySelector<HTMLElement>('.ol-switch-thumb')!;
     const finished: number[] = [];
     const controlledXs: number[] = [];
-    const onRun = (event: TransitionEvent) => {
-      if (event.target !== knob || event.propertyName !== 'transform') return;
+    const sampleTransition = () => {
+      if (controlledXs.length > 0) return;
       const transition = knob
         .getAnimations()
         .find(
@@ -79,6 +79,9 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
       if (startTime !== null) transition.startTime = startTime;
       else transition.currentTime = currentTime;
     };
+    const onRun = (event: TransitionEvent) => {
+      if (event.target === knob && event.propertyName === 'transform') sampleTransition();
+    };
     const onEnd = (event: TransitionEvent) => {
       if (event.target === knob && event.propertyName === 'transform') {
         finished.push(event.elapsedTime);
@@ -86,6 +89,10 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
     };
     knob.addEventListener('transitionrun', onRun);
     knob.addEventListener('transitionend', onEnd);
+    // WebKit can dispatch transitionrun after the animation has already ended.
+    // Observe the state commit and flush styles while the real transition is live.
+    const stateObserver = new MutationObserver(sampleTransition);
+    stateObserver.observe(element, { attributes: true, attributeFilter: ['aria-checked'] });
     const sampling = (async () => {
       const xs: number[] = [];
       for (let frame = 0; frame < 45; frame++) {
@@ -95,6 +102,7 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
       }
       knob.removeEventListener('transitionrun', onRun);
       knob.removeEventListener('transitionend', onEnd);
+      stateObserver.disconnect();
       return { xs, controlledXs, finished };
     })();
     (element as HTMLElement & { __olMotionSample?: typeof sampling }).__olMotionSample = sampling;
@@ -170,6 +178,34 @@ async function openSection(dialog: Locator, name: string) {
     .getByRole('button', { name, exact: true })
     .click();
 }
+
+test('switch sampling does not depend on transitionrun delivery', async ({ page }) => {
+  await page.setContent(`
+    <style>
+      button { position: relative; width: 42px; height: 24px; }
+      .ol-switch-thumb {
+        position: absolute; left: 2px; top: 2px; width: 16px; height: 16px;
+        background: blue; transform: translateX(0); transition: transform 180ms ease-out;
+      }
+      [aria-checked="true"] .ol-switch-thumb { transform: translateX(20px); }
+    </style>
+    <button role="switch" aria-label="fixture switch" aria-checked="false">
+      <span class="ol-switch-thumb"></span>
+    </button>
+    <script>
+      const control = document.querySelector('[role="switch"]');
+      control.addEventListener('click', () => {
+        control.setAttribute('aria-checked', String(control.getAttribute('aria-checked') !== 'true'));
+      });
+      // A late transitionrun can arrive after getAnimations() no longer exposes
+      // the transition. Withhold it entirely to test the earlier observation seam.
+      window.addEventListener('transitionrun', (event) => event.stopImmediatePropagation(), true);
+    </script>
+  `);
+  const control = (await page.getByRole('switch', { name: 'fixture switch' }).elementHandle())!;
+  expectAnimated(await flip(page, control));
+  expectAnimated(await flip(page, control));
+});
 
 test('every settings switch slides between on and off', async ({ page }) => {
   test.setTimeout(180_000);
