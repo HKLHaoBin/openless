@@ -593,11 +593,11 @@ async fn optional_runtime_files_are_not_download_progress() {
     let directory = f.store.model_dir(&Model::TextStream.target()).unwrap();
     std::fs::create_dir_all(directory.join(".runtime/cache")).unwrap();
     let unrelated = std::fs::File::create(directory.join(".runtime/cache/wheels")).unwrap();
-    // A modestly oversized cache file is enough to prove optional runtime
-    // content is ignored, while remaining portable on Windows filesystems.
+    // A modest non-model file is enough to catch accidental runtime-directory
+    // accounting without relying on sparse-file support from the host filesystem.
     unrelated.set_len(5 * 1024 * 1024).unwrap();
-    // Windows keeps open file handles from being renamed during the model
-    // staging commit; the cache file itself remains part of the fixture.
+    // Release the handle before the download commits a replacement model directory;
+    // Windows otherwise reports access denied while removing the fixture tree.
     drop(unrelated);
     let status = f.service.status().unwrap();
     assert_eq!(status[Model::TextStream.index()].downloaded_bytes, 0);
