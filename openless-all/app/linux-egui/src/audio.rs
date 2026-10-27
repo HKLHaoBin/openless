@@ -561,7 +561,7 @@ fn try_start_audio_stream(
     let device = select_input_device(host, preferred_device_name).map_err(|error| {
         BackendError::new(error.code, format!("{backend} backend: {}", error.message))
     })?;
-    let stream = try_start_microphone_stream(&device, frame_tx, stop, runtime_error)?;
+    let stream = try_start_microphone_stream(&device, backend, frame_tx, stop, runtime_error)?;
     let reference_stream = if echo_cancellation_enabled && backend != "alsa" {
         match start_reference_stream(host, backend, reference_slot, stop) {
             Ok(stream) => Some(stream),
@@ -691,6 +691,7 @@ fn start_reference_stream(
 #[cfg(target_os = "linux")]
 fn try_start_microphone_stream(
     device: &cpal::Device,
+    backend: &str,
     frame_tx: &SyncSender<RawAudioFrame>,
     stop: &Arc<std::sync::atomic::AtomicBool>,
     runtime_error: &Arc<std::sync::Mutex<Option<BackendError>>>,
@@ -1105,6 +1106,14 @@ fn classify_audio_error(context: &str, message: String) -> BackendError {
     BackendError::new(code, format!("Linux audio {context} failed: {message}"))
 }
 
+#[cfg(target_os = "linux")]
+fn capture_time(info: &cpal::InputCallbackInfo) -> std::time::Instant {
+    let now = std::time::Instant::now();
+    let timestamp = info.timestamp();
+    let delay = timestamp.callback.duration_since(timestamp.capture);
+    now.checked_sub(delay).unwrap_or(now)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1183,25 +1192,7 @@ mod tests {
     fn audio_backends_are_ordered_from_desktop_server_to_universal_fallback() {
         assert_eq!(audio_backend_order(), ["pipewire", "pulseaudio", "alsa"]);
     }
-}
 
-#[cfg(target_os = "linux")]
-fn capture_time(info: &cpal::InputCallbackInfo) -> std::time::Instant {
-    let now = std::time::Instant::now();
-    let timestamp = info.timestamp();
-    match timestamp.callback.duration_since(&timestamp.capture) {
-        Some(delay) => now.checked_sub(delay).unwrap_or(now),
-        None => timestamp
-            .capture
-            .duration_since(&timestamp.callback)
-            .and_then(|ahead| now.checked_add(ahead))
-            .unwrap_or(now),
-    }
-}
-
-#[cfg(test)]
-mod playback_reference_tests {
-    use super::is_default_playback_reference;
     #[test]
     fn monitor_selection_uses_route_ids_not_translated_display_names() {
         let sink = "alsa_output.usb-interface.analog-stereo";
