@@ -30,7 +30,10 @@ for (const gate of [
   'Run Rust backend unit tests',
   'Run native recorder module tests (Windows)',
 ]) {
-  assert.ok(crossPlatform.steps.some((step) => step.name === gate), `${gate} must remain enabled`);
+  assert.ok(
+    crossPlatform.steps.some((step) => step.name === gate),
+    `${gate} must remain enabled`,
+  );
 }
 
 console.log('ci-macos-runner-contract.test.mjs passed');

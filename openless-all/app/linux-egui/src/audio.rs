@@ -38,6 +38,7 @@ const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 64;
 
 #[cfg(target_os = "linux")]
 struct RawAudioFrame {
+    captured_at: std::time::Instant,
     samples: Vec<f32>,
     channels: usize,
     input_sample_rate: u32,
@@ -89,11 +90,11 @@ impl AudioProcessingWorker {
                         .lock()
                         .expect("Linux echo reference lock poisoned")
                         .clone();
-                    let reference_rate = reference.as_ref().map(|buffer| buffer.sample_rate());
                     let reference_samples = reference.as_ref().and_then(|buffer| {
-                        buffer.take_for_input(
+                        buffer.take_for_input_at(
                             frame.samples.len() / frame.channels.max(1),
                             frame.input_sample_rate,
+                            frame.captured_at,
                         )
                     });
                     if let Some(chunk) = processor.process_with_reference(
@@ -101,7 +102,6 @@ impl AudioProcessingWorker {
                         frame.channels,
                         frame.input_sample_rate,
                         reference_samples.as_deref(),
-                        reference_rate.unwrap_or(0),
                     ) {
                         consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
                         if let Some(writer) = &writer {
@@ -116,6 +116,20 @@ impl AudioProcessingWorker {
                         let _ = progress
                             .publish_level(started.elapsed().as_millis() as u64, chunk.level);
                     }
+                }
+                if let Some(chunk) = processor.finish() {
+                    consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
+                    if let Some(writer) = &writer {
+                        if let Err(error) = writer
+                            .lock()
+                            .expect("Linux WAV writer lock poisoned")
+                            .append(&chunk.pcm_i16_le)
+                        {
+                            log::warn!("Linux recording archive write failed: {error}");
+                        }
+                    }
+                    let _ =
+                        progress.publish_level(started.elapsed().as_millis() as u64, chunk.level);
                 }
             })
             .map_err(|error| {
@@ -495,6 +509,11 @@ fn run_audio_thread(args: LinuxAudioThreadArgs) {
             streams
         }
         Err(error) => {
+            log::error!(
+                "[audio] no input backend could open a stream (tried {:?}): {}",
+                audio_backend_order(),
+                error.message
+            );
             drop(frame_tx);
             let _ = processor.finish();
             let _ = startup.send(Err(error));
@@ -573,61 +592,39 @@ fn select_playback_monitor_device(
 ) -> Result<cpal::Device, BackendError> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
-    let default_output_name = host
+    let default_output_id = host
         .default_output_device()
-        .and_then(|device| device.description().ok())
-        .map(|description| description.name().to_ascii_lowercase());
+        .and_then(|device| device.id().ok())
+        .map(|id| id.id().to_owned());
     let devices = host
         .devices()
         .map_err(|error| classify_audio_error("enumerate playback monitors", error.to_string()))?;
-    let mut candidates = Vec::new();
     for device in devices {
         if !device.supports_input() {
             continue;
         }
-        let name = device
-            .description()
-            .map(|description| description.name().to_ascii_lowercase())
-            .unwrap_or_default();
-        let matches_default = !name.is_empty()
-            && default_output_name.as_deref().is_some_and(|default_name| {
-                name == default_name
-                    || name.contains(default_name)
-                    || default_name.contains(name.as_str())
-            });
-        match backend {
-            // PulseAudio exposes sink monitors as input sources whose description contains
-            // "monitor". Prefer the monitor belonging to the current default output route.
-            "pulseaudio" if name.contains("monitor") => {
-                if matches_default {
-                    return Ok(device);
-                }
-                candidates.push(device);
-            }
-            // cpal's PipeWire backend marks sink nodes as duplex and sets
-            // STREAM_CAPTURE_SINK for input streams. Prefer the synthetic default sink, then
-            // a sink matching the current default output route.
-            "pipewire" if name == "default_sink" || name.contains("default sink") => {
-                return Ok(device);
-            }
-            "pipewire" if name.contains("sink") => {
-                if matches_default {
-                    return Ok(device);
-                }
-                candidates.push(device);
-            }
-            _ => {}
+        let Ok(id) = device.id() else {
+            continue;
+        };
+        if is_default_playback_reference(backend, id.id(), default_output_id.as_deref()) {
+            return Ok(device);
         }
-    }
-    if candidates.len() == 1 {
-        return Ok(candidates
-            .pop()
-            .expect("one playback monitor candidate must be present"));
     }
     Err(BackendError::new(
         BackendErrorCode::Unsupported,
-        format!("{backend} playback monitor source for the default output was not found"),
+        format!("{backend} monitor of the default playback output was not found"),
     ))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn is_default_playback_reference(backend: &str, id: &str, default_output: Option<&str>) -> bool {
+    match backend {
+        "pulseaudio" => {
+            default_output.is_some_and(|sink| id.strip_suffix(".monitor") == Some(sink))
+        }
+        "pipewire" => id == "sink_default" || default_output == Some(id),
+        _ => false,
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -719,6 +716,15 @@ fn try_start_microphone_stream(
             .play()
             .map_err(|error| classify_audio_error("start input stream", error.to_string()))?;
         accepting.store(true, std::sync::atomic::Ordering::Release);
+        // 「录到的全是静音」这类问题，第一个要回答的就是：落到哪个后端、哪只
+        // 设备、什么采样格式。以前只有失败时才有日志，成功时什么都看不到。
+        log::info!(
+            "[audio] capture started backend={backend} device={} format={:?} rate={}Hz channels={}",
+            device,
+            supported.sample_format(),
+            supported.sample_rate(),
+            usize::from(supported.channels()),
+        );
         Ok(stream)
     };
     let initial_error = match device.default_input_config() {
@@ -801,18 +807,21 @@ fn build_linux_reference_stream(
     macro_rules! make_stream {
         ($t:ty, $to_f32:expr) => {{
             let reference = Arc::clone(&reference);
+            let error_reference = Arc::clone(&reference);
             let stop_for_callback = Arc::clone(&stop);
             device
                 .build_input_stream(
                     *config,
-                    move |data: &[$t], _| {
+                    move |data: &[$t], info| {
                         if stop_for_callback.load(std::sync::atomic::Ordering::Acquire) {
                             return;
                         }
+                        let captured_at = capture_time(info);
                         let samples = data.iter().copied().map($to_f32).collect::<Vec<f32>>();
-                        reference.push_interleaved(&samples, channels);
+                        reference.push_interleaved_at(&samples, channels, captured_at);
                     },
                     move |error| {
+                        error_reference.invalidate();
                         log::warn!("[linux-audio] playback monitor stream error: {error}");
                     },
                     None,
@@ -850,21 +859,27 @@ fn select_input_device(
         let devices = host
             .input_devices()
             .map_err(|error| classify_audio_error("enumerate input devices", error.to_string()))?;
+        let mut available: Vec<String> = Vec::new();
         for device in devices {
-            if device.to_string() == preferred {
+            let name = device.to_string();
+            if name == preferred {
                 return Ok(device);
             }
+            available.push(name);
         }
+        // 设备名是精确匹配：把候选项一并打出来，省得再猜。
         log::warn!(
-            "preferred Linux microphone was not found; using the default device: {preferred}"
+            "preferred Linux microphone was not found; using the default device: {preferred}; available: {available:?}"
         );
     }
-    host.default_input_device().ok_or_else(|| {
+    let device = host.default_input_device().ok_or_else(|| {
         BackendError::new(
             BackendErrorCode::Platform,
             "no Linux microphone input device is available",
         )
-    })
+    })?;
+    log::info!("[audio] using input device: {}", device);
+    Ok(device)
 }
 
 #[cfg(target_os = "linux")]
@@ -894,14 +909,16 @@ fn build_input_stream(
             device
                 .build_input_stream::<$sample, _, _>(
                     *config,
-                    move |data: &[$sample], _| {
+                    move |data: &[$sample], info| {
                         if !accepting_audio.load(std::sync::atomic::Ordering::Acquire)
                             || stop_for_callback.load(std::sync::atomic::Ordering::Acquire)
                         {
                             return;
                         }
+                        let captured_at = capture_time(info);
                         let samples = data.iter().copied().map($to_f32).collect::<Vec<f32>>();
                         match frame_tx.try_send(RawAudioFrame {
+                            captured_at,
                             samples,
                             channels,
                             input_sample_rate,
@@ -1165,5 +1182,55 @@ mod tests {
     #[test]
     fn audio_backends_are_ordered_from_desktop_server_to_universal_fallback() {
         assert_eq!(audio_backend_order(), ["pipewire", "pulseaudio", "alsa"]);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn capture_time(info: &cpal::InputCallbackInfo) -> std::time::Instant {
+    let now = std::time::Instant::now();
+    let timestamp = info.timestamp();
+    match timestamp.callback.duration_since(&timestamp.capture) {
+        Some(delay) => now.checked_sub(delay).unwrap_or(now),
+        None => timestamp
+            .capture
+            .duration_since(&timestamp.callback)
+            .and_then(|ahead| now.checked_add(ahead))
+            .unwrap_or(now),
+    }
+}
+
+#[cfg(test)]
+mod playback_reference_tests {
+    use super::is_default_playback_reference;
+    #[test]
+    fn monitor_selection_uses_route_ids_not_translated_display_names() {
+        let sink = "alsa_output.usb-interface.analog-stereo";
+        assert!(is_default_playback_reference(
+            "pulseaudio",
+            &format!("{sink}.monitor"),
+            Some(sink)
+        ));
+        assert!(!is_default_playback_reference(
+            "pulseaudio",
+            "another_output.monitor",
+            Some(sink)
+        ));
+        assert!(!is_default_playback_reference(
+            "pulseaudio",
+            sink,
+            Some(sink)
+        ));
+        assert!(!is_default_playback_reference(
+            "pulseaudio",
+            "any.monitor",
+            None
+        ));
+        assert!(is_default_playback_reference(
+            "pipewire",
+            "sink_default",
+            None
+        ));
+        assert!(is_default_playback_reference("pipewire", sink, Some(sink)));
+        assert!(!is_default_playback_reference("alsa", sink, Some(sink)));
     }
 }

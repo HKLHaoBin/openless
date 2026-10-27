@@ -123,14 +123,20 @@ for (const dep of ['fcitx5', 'libpipewire-0.3-0', 'libvulkan1', 'liblzma5', 'lib
   assert.ok(debDeps.includes(dep), `deb must require ${dep}`);
 }
 for (const removed of ['libegl1', 'libgl1', 'libwayland-egl1']) {
-  assert.ok(!debDeps.includes(removed), `deb must not require ${removed} after the Vulkan migration`);
+  assert.ok(
+    !debDeps.includes(removed),
+    `deb must not require ${removed} after the Vulkan migration`,
+  );
 }
 const rpmDeps = pack.match(/^Requires: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
 for (const dep of ['fcitx5', 'pipewire-libs', 'vulkan-loader', 'libwayland-client']) {
   assert.ok(rpmDeps.includes(dep), `rpm must require ${dep}`);
 }
 for (const removed of ['libglvnd-egl', 'libwayland-egl.so.1()(64bit)']) {
-  assert.ok(!rpmDeps.includes(removed), `rpm must not require ${removed} after the Vulkan migration`);
+  assert.ok(
+    !rpmDeps.includes(removed),
+    `rpm must not require ${removed} after the Vulkan migration`,
+  );
 }
 assert.match(pack, /^Recommends: mesa-vulkan-drivers$/m, 'packages must recommend a Vulkan driver');
 for (const [file, size] of [
@@ -152,4 +158,31 @@ assert.doesNotMatch(
   check,
   /cargo (?:build|check|test) --locked --manifest-path src-tauri\/Cargo\.toml/,
 );
+
+// The package installs the fcitx5 plugin, so the packaging job must build it
+// even though `ctest` lives in the parallel test job: dropping it made
+// `package-linux-egui.sh` fail on an empty `test -s` with no output at all.
+{
+  const buildJob = check.match(/  build-linux-egui:[\s\S]*$/)?.[0] ?? '';
+  assert.match(
+    buildJob,
+    /cmake --build build --parallel/,
+    'build-linux-egui must compile the fcitx5 plugin that the package installs',
+  );
+  assert.match(
+    pack,
+    /require_file "\$PLUGIN_ROOT\/libopenless\.so"/,
+    'package-linux-egui.sh must report a missing plugin artifact instead of a bare test -s',
+  );
+}
+
+assert.match(
+  check,
+  /cargo test --locked -p openless-core --lib \\\n\s+api::tests::shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics -- --exact/,
+);
+assert.match(
+  check,
+  /grep -Fq 'test api::tests::shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics \.\.\. ok'/,
+);
+assert.match(check, /needs: \[test-linux-egui, build-linux-egui\]/);
 console.log('linux-egui-release-contract.test.mjs passed');

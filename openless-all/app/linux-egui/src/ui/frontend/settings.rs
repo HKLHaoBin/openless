@@ -631,6 +631,14 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
+            if super::audio_dsp::settings(
+                ui,
+                &mut vm.settings.audio_dsp,
+                lang,
+                vm.settings.audio_enhancement,
+            ) {
+                actions.push(FrontendAction::SettingsAudioDsp(vm.settings.audio_dsp));
+            }
             // #4：录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
             toggle_row(
                 ui,
@@ -3213,6 +3221,19 @@ fn advanced(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
                         ));
                     },
                 );
+                combo_index_row(
+                    ui,
+                    tr_l10n(lang, "settings.debug.log_level_label"),
+                    tr_l10n(lang, "settings.debug.log_level_desc"),
+                    vm.settings.log_level.min(2),
+                    &["info", "debug", "trace"],
+                    |index| {
+                        actions.push(FrontendAction::SettingsCombo(
+                            SettingsComboField::LogLevel,
+                            index,
+                        ));
+                    },
+                );
                 action_row(
                     ui,
                     tr_l10n(lang, "settings.debug.title"),
@@ -4647,6 +4668,10 @@ fn provider_editor_body(
             .color(theme::INK_3),
     );
     ui.add_space(4.0);
+    if editor.auth == SettingsProviderAuth::Siwc {
+        siwc_editor(ui, editor, lang, actions);
+        return;
+    }
     provider_protocol_block(ui, editor, lang, actions);
     ui.label(
         egui::RichText::new(tr_l10n(lang, "providers.credentials"))
@@ -4661,6 +4686,7 @@ fn provider_editor_body(
                     .color(theme::INK_4),
             );
         }
+        SettingsProviderAuth::Siwc => unreachable!("SIWC has its own account form"),
         SettingsProviderAuth::OAuth => {
             ui.label(
                 egui::RichText::new(tr_l10n(lang, "providers.oauth_note"))
@@ -5881,6 +5907,170 @@ pub(crate) fn test_render_shortcuts(
     shortcuts(ui, vm, actions);
 }
 
+fn siwc_editor(
+    ui: &mut egui::Ui,
+    editor: &SettingsProviderEditor,
+    lang: Lang,
+    actions: &mut Vec<FrontendAction>,
+) {
+    let emit = |actions: &mut Vec<FrontendAction>, action: &str, id: Option<String>| {
+        actions.push(FrontendAction::SettingsSiwc {
+            action: action.into(),
+            registration_id: id,
+        })
+    };
+    ui.label(tr_l10n(lang, "siwc.description"));
+    let Some(state) = editor.siwc.as_ref() else {
+        ui.label(tr_l10n(lang, "common.loading"));
+        if ui.button(tr_l10n(lang, "siwc.refreshModels")).clicked() {
+            emit(actions, "refresh", None);
+        }
+        return;
+    };
+    let status = &state.status;
+    let label = match status.state.as_str() {
+        "connected" => "siwc.states.connected",
+        "authorizing" => "siwc.states.authorizing",
+        "usage_disabled" => "siwc.states.usage_disabled",
+        "usage_limited" => "siwc.states.usage_limited",
+        "reauthorization_required" => "siwc.states.reauthorization_required",
+        _ => "siwc.states.signed_out",
+    };
+    ui.strong(tr_l10n(lang, label));
+    egui::ComboBox::from_id_salt(("siwc-account", &editor.channel_id))
+        .selected_text(
+            status
+                .account
+                .as_ref()
+                .map(|a| a.label.as_str())
+                .unwrap_or(tr_l10n(lang, "siwc.account")),
+        )
+        .show_ui(ui, |ui| {
+            for account in &status.accounts {
+                if ui
+                    .selectable_label(
+                        status.account.as_ref().is_some_and(|a| a.id == account.id),
+                        &account.label,
+                    )
+                    .clicked()
+                {
+                    emit(actions, "select", Some(account.id.clone()));
+                }
+            }
+        });
+    ui.horizontal_wrapped(|ui| {
+        if status.state == "authorizing" {
+            if ui.button(tr_l10n(lang, "siwc.cancel")).clicked() {
+                emit(actions, "cancel", None);
+            }
+        } else {
+            let (action, label) = if status.state == "usage_disabled" {
+                ("enable_usage", tr_l10n(lang, "siwc.enableUsage"))
+            } else if status.account.is_some() {
+                ("sign_in", tr_l10n(lang, "siwc.reauthorize"))
+            } else {
+                ("sign_in", "Continue with ChatGPT")
+            };
+            if ui.button(label).clicked() {
+                emit(actions, action, None);
+            }
+            if !status.accounts.is_empty() && ui.button(tr_l10n(lang, "siwc.addAccount")).clicked()
+            {
+                emit(actions, "add_account", None);
+            }
+            if status.account.is_some() && ui.button(tr_l10n(lang, "siwc.disconnect")).clicked() {
+                emit(actions, "disconnect", None);
+            }
+        }
+        if provider_small_button(
+            ui,
+            lang,
+            "siwc.manageUsage",
+            status.state == "usage_limited",
+        ) {
+            ui.ctx()
+                .open_url(egui::OpenUrl::new_tab(openless_core::siwc::USAGE_URL));
+        }
+        if status.state == "usage_limited" && ui.button(tr_l10n(lang, "siwc.retry")).clicked() {
+            emit(actions, "retry", None);
+        }
+    });
+    if let Some(error) = &status.error {
+        if error.code == "remote_revocation_unconfirmed" {
+            ui.label(tr_l10n(lang, "siwc.remoteUnconfirmed"));
+        } else {
+            ui.colored_label(
+                theme::INK_3,
+                format!("{} ({})", tr_l10n(lang, "siwc.failed"), error.code),
+            );
+        }
+    }
+    if let Some(message) = &state.message {
+        if message != "siwc.remoteUnconfirmed"
+            || !status
+                .error
+                .as_ref()
+                .is_some_and(|e| e.code == "remote_revocation_unconfirmed")
+        {
+            ui.label(match message.as_str() {
+                "siwc.remoteUnconfirmed" => tr_l10n(lang, "siwc.remoteUnconfirmed"),
+                "siwc.testSuccess" => tr_l10n(lang, "siwc.testSuccess"),
+                _ => message,
+            });
+        }
+    }
+    if status.welcome_pending {
+        ui.group(|ui| {
+            ui.strong(tr_l10n(lang, "siwc.welcome"));
+            if ui.button(tr_l10n(lang, "siwc.gotIt")).clicked() {
+                emit(actions, "acknowledge", None);
+            }
+        });
+    }
+    if status.state == "connected" {
+        let selected = state.models.iter().find(|m| m.slug == editor.model);
+        if !editor.model.is_empty() && selected.is_none() {
+            ui.label(fmt_l10n(lang, "siwc.modelUnavailable", &[&editor.model]));
+        }
+        if state.models.is_empty() {
+            ui.label(tr_l10n(lang, "siwc.noModels"));
+        }
+        egui::ComboBox::from_id_salt(("siwc-model", &editor.channel_id))
+            .selected_text(
+                selected
+                    .map(|m| m.display_name.as_str())
+                    .unwrap_or(tr_l10n(lang, "siwc.selectModel")),
+            )
+            .show_ui(ui, |ui| {
+                for model in &state.models {
+                    if ui
+                        .selectable_label(editor.model == model.slug, &model.display_name)
+                        .clicked()
+                    {
+                        actions.push(FrontendAction::SettingsProviderModelSelected(
+                            model.slug.clone(),
+                        ));
+                    }
+                }
+            });
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(tr_l10n(lang, "siwc.refreshModels")).clicked() {
+                emit(actions, "refresh", None);
+            }
+            if ui
+                .add_enabled(
+                    selected.is_some(),
+                    egui::Button::new(tr_l10n(lang, "siwc.test")),
+                )
+                .clicked()
+            {
+                emit(actions, "test", None);
+            }
+        });
+        ui.label(tr_l10n(lang, "siwc.testHint"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// 点「验证」后按钮要立刻变成「正在验证…」并禁用，直到结果回包或超时。
@@ -6358,6 +6548,7 @@ mod tests {
         let shapes = [
             SettingsProviderAuth::None,
             SettingsProviderAuth::OAuth,
+            SettingsProviderAuth::Siwc,
             SettingsProviderAuth::Volcengine,
             SettingsProviderAuth::Xfyun,
             SettingsProviderAuth::Other,
@@ -6365,6 +6556,7 @@ mod tests {
         ];
         for auth in shapes {
             let editor = SettingsProviderEditor {
+                siwc: None,
                 channel_id: "channel".to_string(),
                 is_asr: false,
                 is_draft: false,
@@ -6408,6 +6600,7 @@ mod tests {
     fn provider_model_block_follows_the_descriptor() {
         let editor = |static_models: Vec<String>, has_models_url: bool, custom_model: bool| {
             SettingsProviderEditor {
+                siwc: None,
                 channel_id: "channel".to_string(),
                 is_asr: false,
                 is_draft: false,
@@ -6544,6 +6737,7 @@ mod tests {
         let vm = crate::ui::frontend::FrontendViewModel {
             lang: Lang::ZhCn,
             provider_editor: Some(SettingsProviderEditor {
+                siwc: None,
                 channel_id: "channel".to_string(),
                 is_asr: false,
                 is_draft: false,

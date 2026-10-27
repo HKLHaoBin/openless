@@ -23,6 +23,7 @@ import sys
 
 release = '--release' in sys.argv[1:]
 prefix_override = ''
+skip_hap = False
 args = []
 rest = sys.argv[1:]
 while rest:
@@ -31,6 +32,9 @@ while rest:
         if not rest:
             sys.exit('--prefix needs a value')
         prefix_override = rest.pop(0)
+    elif argument == '--skip-hap':
+        # The second pass only signs the App Pack in its own output directory.
+        skip_hap = True
     elif argument.startswith('--'):
         continue
     else:
@@ -48,7 +52,12 @@ if not password:
     if not password_file.is_file():
         sys.exit(f'missing signing password: set HARMONY_KEYSTORE_PASSWORD or {password_file}')
     password = password_file.read_text().strip()
-key_password = os.environ.get('HARMONY_KEY_PASSWORD', '').strip() or password
+key_password = os.environ.get('HARMONY_KEY_PASSWORD', '').strip()
+if not key_password:
+    key_password_file = signing / 'key-password'
+    if key_password_file.is_file():
+        key_password = key_password_file.read_text().strip()
+key_password = key_password or password
 
 required = [signing / f'{prefix}.cer', signing / f'{prefix}.p7b', signing / f'{prefix}.p12']
 missing = [str(path) for path in required if not path.is_file()]
@@ -59,29 +68,43 @@ jar = toolchain / 'sdk/default/openharmony/toolchains/lib/hap-sign-tool.jar'
 if not jar.is_file():
     sys.exit(f'missing hap-sign-tool.jar under {toolchain}')
 
-candidates = sorted(output.glob('*-unsigned.hap'))
-if len(candidates) != 1:
-    sys.exit(f'expected exactly one unsigned HAP in {output}, found {len(candidates)}')
-unsigned = candidates[0]
+# `hap-sign-tool sign-app` also signs an App Pack (`.app`), which is what
+# AppGallery accepts: a bare HAP is rejected with 204144641 "The suffix name of
+# the software package is incorrect". Both inputs are signed the same way.
+hap_candidates = [] if skip_hap else sorted(output.glob('*-unsigned.hap'))
+app_candidates = sorted(output.glob('*-unsigned.app'))
+if not skip_hap and len(hap_candidates) != 1:
+    sys.exit(f'expected exactly one unsigned HAP in {output}, found {len(hap_candidates)}')
+if skip_hap and not app_candidates:
+    sys.exit(f'expected an unsigned App Pack in {output}')
+def sign_package(source, target):
+    """`hap-sign-tool sign-app` handles both a `.hap` and an `.app`."""
+    if target.exists():
+        target.unlink()
+    argv = ['java', '-jar', str(jar), 'sign-app', '-mode', 'localSign',
+            '-keyAlias', key_alias,
+            '-appCertFile', str(signing / f'{prefix}.cer'),
+            '-profileFile', str(signing / f'{prefix}.p7b'),
+            '-inFile', str(source),
+            '-signAlg', 'SHA256withECDSA',
+            '-keystoreFile', str(signing / f'{prefix}.p12'),
+            '-keystorePwd', password, '-keyPwd', key_password,
+            '-outFile', str(target),
+            '-compatibleVersion', '12', '-signCode', '1']
+    result = subprocess.run(argv, capture_output=True, text=True)
+    # Never echo the passwords back, even on failure.
+    print((result.stdout + result.stderr).replace(password, '[redacted]').replace(key_password, '[redacted]'))
+    if result.returncode:
+        sys.exit(result.returncode)
+    print('Signed:', target)
+
+
 # Keep the name the build scripts already reference; `--release` only swaps the
 # signing material, not the artifact name.
-signed = output / 'entry-default-signed.hap'
-if signed.exists():
-    signed.unlink()
+if hap_candidates:
+    signed = output / 'entry-default-signed.hap'
+    sign_package(hap_candidates[0], signed)
 
-command = ['java', '-jar', str(jar), 'sign-app', '-mode', 'localSign',
-           '-keyAlias', key_alias,
-           '-appCertFile', str(signing / f'{prefix}.cer'),
-           '-profileFile', str(signing / f'{prefix}.p7b'),
-           '-inFile', str(unsigned),
-           '-signAlg', 'SHA256withECDSA',
-           '-keystoreFile', str(signing / f'{prefix}.p12'),
-           '-keystorePwd', password, '-keyPwd', key_password,
-           '-outFile', str(signed),
-           '-compatibleVersion', '12', '-signCode', '1']
-result = subprocess.run(command, capture_output=True, text=True)
-# Never echo the passwords back, even on failure.
-print((result.stdout + result.stderr).replace(password, '[redacted]').replace(key_password, '[redacted]'))
-if result.returncode:
-    sys.exit(result.returncode)
-print('Signed HAP:', signed)
+for candidate in app_candidates:
+    app_signed = candidate.with_name(candidate.name.replace('-unsigned', '-signed'))
+    sign_package(candidate, app_signed)

@@ -1,3 +1,4 @@
+import { siwcJa as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 import { en } from './en';
 
@@ -9,6 +10,7 @@ import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const ja: typeof zhCN = {
   ...en,
+  siwc,
   experimentalAsr,
   uiRefinement,
   voiceEdit: {
@@ -308,6 +310,8 @@ export const ja: typeof zhCN = {
     cancelled: 'キャンセルしました',
     error: 'エラーが発生しました',
     inserted: '{{count}} 文字を入力しました',
+    translateTo: '翻訳先',
+    translationChangeFailed: '言語を変更できませんでした。もう一度選択してください。',
     translating: '翻訳中',
     selectionPolish: {
       polishing: '推敲中...',
@@ -337,6 +341,12 @@ export const ja: typeof zhCN = {
     cancel: 'キャンセル',
   },
   qa: {
+    activity: {
+      searchingWeb: 'ウェブを検索中',
+      readingWeb: 'ウェブページを読込中',
+      usingTool: '{{tool}} を使用中',
+      tool: 'ツール',
+    },
     compact: {
       closeError: '閉じられませんでした。再試行してください。',
       sendError: '送信できませんでした。入力は保持されています。再試行してください。',
@@ -490,7 +500,7 @@ export const ja: typeof zhCN = {
     style: 'スタイル',
     marketplace: 'マーケット',
     translation: '翻訳',
-    selectionAsk: '選択追問',
+    selectionAsk: '何でも質問',
     quickNote: '速記',
     corrections: '修正ルール',
     polishMode: '推敲モード',
@@ -1190,8 +1200,22 @@ export const ja: typeof zhCN = {
       fallbackDesc: '翻訳失敗時は原文がそのまま挿入されます。',
     },
   },
+  askAnything: {
+    dictation: '音声入力',
+    translation: '翻訳',
+    question: '何でも質問',
+    dictationHint: '話した内容を文字にする',
+    translationHint: '録音中に翻訳先を選択',
+    questionHint: '文字を選択するか、そのまま質問',
+    description:
+      '組み合わせを押して質問し、もう一度押すと送信します。回答は画面下部に表示されます。',
+    auxiliaryKey: '質問の追加キー',
+    auxiliaryHint: '{{key}} と一緒に押します。録音キーの変更に追従します。',
+    selectionHint:
+      '選択した文字を質問の文脈に使います。選択は任意です。毎回、新しい質問を開始します。',
+  },
   selectionAsk: {
-    title: '選択追問',
+    title: '何でも質問',
     desc: 'テキストを選択して音声で質問。複数ターンの追問対応。',
     shortcutSettings: 'ショートカット設定',
     guide: {
@@ -1485,7 +1509,6 @@ export const ja: typeof zhCN = {
       microphoneMonitorError: '入力レベルの監視に失敗：{{message}}',
       capsuleLabel: '録音カプセル',
       capsuleDesc: '録音 / 転写中、画面下部に半透明のカプセルを表示。',
-      capsuleStyleTypeless: 'Typeless コンパクトスタイル',
       capsuleTranscriptLabel: '文字起こしをリアルタイム表示',
       capsuleTranscriptDesc:
         '音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。',
@@ -1502,19 +1525,47 @@ export const ja: typeof zhCN = {
         'すべての画面表示から切り替えるには、以前のカプセルウィンドウを閉じるため再起動が必要です。今すぐ再起動しますか？',
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
-      capsuleStyleClassic: 'Openless デフォルトスタイル',
+      capsuleStyleClassic: 'OpenLess デフォルトスタイル',
       stableTranscriptionLabel: '安定モード（録音後に文字起こし）',
       stableTranscriptionDesc:
         '有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。',
       lowLatencyDictationLabel: '低遅延キャプチャ',
       lowLatencyDictationDesc:
         'マイクストリームを準備し、最大 500 ミリ秒をメモリに保持して、ホットキー直後の音声が欠落しにくくします。録音を確定するまで音声は保存・アップロードされません。電力を多く使い、マイク使用中の表示が続きます。',
-      audioEnhancementLabel: '軽量マイク拡張',
-      audioEnhancementDesc:
-        'ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。',
+      dsp: {
+        noise: 'Noise reduction',
+        dereverb: 'Comb filter',
+        equalizer: 'Equalizer',
+        gain: 'Input gain',
+        agc: 'Automatic gain',
+        vad: 'Speech gate',
+        title: 'Speech enhancement settings',
+        description:
+          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+        off: 'Off',
+        spectral: 'Spectral subtraction',
+        strength: 'Noise reduction strength',
+        target: 'Target level',
+        attack: 'Attack speed',
+        decay: 'Release speed',
+        vadHint:
+          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+        threshold: 'Speech gate threshold',
+        tone: 'Tone and room adjustments',
+        combHint:
+          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+        preamp: 'Equalizer preamp',
+        order: 'Processing order',
+        up: 'Move up',
+        down: 'Move down',
+        reset: 'Reset enhancement settings',
+      },
       echoCancellationLabel: '再生エコーキャンセル',
       echoCancellationDesc:
-        '再生音を聞きながら、デスクトップの出力を参照してエコーを抑制します。ベストエフォートの機能で、デバイスや Bluetooth、Linux ALSA では利用できない場合があります。',
+        '再生音を止めずにローカルの再生音を参照してエコーを抑制します。macOS は 14.6 以降とシステム音声の収録許可が必要です。非対応デバイス、Bluetooth 経路、Linux ALSA では通常のマイク録音に戻ります。次の収録開始時に適用されます。',
+      audioEnhancementLabel: '音声強調',
+      audioEnhancementDesc:
+        'RNNoise または PureVox のノイズ抑制、自動ゲイン、リミッターを適用します。既定ではオフ。変更は次の録音から有効です。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc:
         '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',
@@ -1734,6 +1785,7 @@ export const ja: typeof zhCN = {
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',
+        chatgptSiwc: 'ChatGPT Plan',
         mimo: 'Xiaomi MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（無料モデル）',
@@ -1818,8 +1870,9 @@ export const ja: typeof zhCN = {
       volcengineAuthModeApiKey: '新版コンソール API Key',
       volcengineMappingNote:
         'Secret Key は現在不要。Resource ID のデフォルトは volc.seedasr.sauc.duration。',
-      volcengineApiKeyNote:
-        '新版スピーチコンソールで作成した API Key で認証します（APP ID 不要）。API Key はスピーチコンソールの「API Key 管理」で作成：console.volcengine.com/speech/new/setting/apikeys。Resource ID のデフォルトは volc.seedasr.sauc.duration。',
+      volcengineApiKeyConsole: 'Doubao Speech · API Key 管理',
+      volcengineApiKeyNote: 'ここで作成した音声用 API Key で認証。Ark のキーは使えません。',
+      volcengineResourceIdNote: 'Resource ID のデフォルトは {{resourceId}} です。',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:

@@ -1,3 +1,4 @@
+import { siwcEn as siwc } from './siwc';
 // English resources — translated from zh-CN.ts. Keep keys in sync.
 
 import type { zhCN } from './zh-CN';
@@ -7,6 +8,7 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const en: typeof zhCN = {
+  siwc,
   experimentalAsr,
   uiRefinement,
   voiceEdit: {
@@ -317,6 +319,8 @@ export const en: typeof zhCN = {
     cancelled: 'Cancelled',
     error: 'Something went wrong',
     inserted: 'Inserted {{count}}',
+    translateTo: 'Translate to',
+    translationChangeFailed: 'Could not change language. Please select it again.',
     translating: 'Translating',
     selectionPolish: {
       polishing: 'Polishing…',
@@ -346,6 +350,12 @@ export const en: typeof zhCN = {
     cancel: 'Cancel',
   },
   qa: {
+    activity: {
+      searchingWeb: 'Searching the web',
+      readingWeb: 'Reading web pages',
+      usingTool: 'Using {{tool}}',
+      tool: 'tool',
+    },
     compact: {
       closeError: 'Could not close. Try again.',
       sendError: 'Could not send. Your draft is kept here; try again.',
@@ -1201,8 +1211,22 @@ export const en: typeof zhCN = {
       fallbackDesc: 'If translation fails, the raw transcript is inserted instead.',
     },
   },
+  askAnything: {
+    dictation: 'Dictate',
+    translation: 'Translate',
+    question: 'Ask anything',
+    dictationHint: 'Speak your thoughts into text',
+    translationHint: 'Choose a language while recording',
+    questionHint: 'Select text or simply ask a question',
+    description:
+      'Press the chord to ask, then again to submit. The answer appears at the bottom of your screen.',
+    auxiliaryKey: 'Ask companion key',
+    auxiliaryHint: 'Press with {{key}}. This follows changes to your recording key.',
+    selectionHint:
+      'Selected text becomes context. A selection is optional. Each shortcut starts a fresh question.',
+  },
   selectionAsk: {
-    title: 'Selection Ask',
+    title: 'Ask anything',
     desc: 'Select text and ask questions by voice, with multi-turn follow-ups.',
     shortcutSettings: 'Shortcut settings',
     guide: {
@@ -1497,7 +1521,6 @@ export const en: typeof zhCN = {
       microphoneMonitorError: 'Failed to monitor input level: {{message}}',
       capsuleLabel: 'Recording capsule',
       capsuleDesc: 'Show a translucent capsule at the bottom of the screen while recording.',
-      capsuleStyleTypeless: 'Typeless compact style',
       capsuleTranscriptLabel: 'Show live transcript',
       capsuleTranscriptDesc:
         'Show recognized speech in the capsule instead of audio bars. Turn off to restore the original display. Non-streaming recognition appears when results arrive.',
@@ -1521,12 +1544,40 @@ export const en: typeof zhCN = {
       lowLatencyDictationLabel: 'Low-latency capture',
       lowLatencyDictationDesc:
         'Keep a microphone stream ready and retain up to 500 ms in memory so speech immediately after the hotkey is less likely to be missed. Audio is not saved or uploaded until you confirm recording; this uses more power and keeps the microphone indicator active.',
-      audioEnhancementLabel: 'Lightweight microphone enhancement',
-      audioEnhancementDesc:
-        'Applies light gain, soft limiting, and conservative noise suppression to the local microphone. It does not include echo cancellation. Off by default.',
+      dsp: {
+        noise: 'Noise reduction',
+        dereverb: 'Comb filter',
+        equalizer: 'Equalizer',
+        gain: 'Input gain',
+        agc: 'Automatic gain',
+        vad: 'Speech gate',
+        title: 'Speech enhancement settings',
+        description:
+          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+        off: 'Off',
+        spectral: 'Spectral subtraction',
+        strength: 'Noise reduction strength',
+        target: 'Target level',
+        attack: 'Attack speed',
+        decay: 'Release speed',
+        vadHint:
+          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+        threshold: 'Speech gate threshold',
+        tone: 'Tone and room adjustments',
+        combHint:
+          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+        preamp: 'Equalizer preamp',
+        order: 'Processing order',
+        up: 'Move up',
+        down: 'Move down',
+        reset: 'Reset enhancement settings',
+      },
       echoCancellationLabel: 'Playback echo cancellation',
       echoCancellationDesc:
-        'Use the desktop audio output as a reference while keeping playback audible. This is best effort and may be unavailable for some devices, Bluetooth routes, or Linux ALSA setups.',
+        'Uses a local playback reference while keeping playback audible. On macOS, requires 14.6+ and System Audio Recording permission. Unsupported devices, Bluetooth routes, or Linux ALSA use microphone-only recording. Applies to the next capture.',
+      audioEnhancementLabel: 'Speech enhancement',
+      audioEnhancementDesc:
+        'Apply RNNoise or PureVox noise reduction, automatic gain and limiting. Off by default; changes apply to the next recording.',
       muteDuringRecordingLabel: 'Mute while recording',
       muteDuringRecordingDesc:
         'Temporarily mute system output during voice input to avoid speaker echo.',
@@ -1746,6 +1797,7 @@ export const en: typeof zhCN = {
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',
+        chatgptSiwc: 'ChatGPT Plan',
         mimo: 'Xiaomi MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter (free models)',
@@ -1831,8 +1883,9 @@ export const en: typeof zhCN = {
       volcengineAuthModeApiKey: 'API Key (new console)',
       volcengineMappingNote:
         'Secret Key is not required right now. Resource ID defaults to volc.seedasr.sauc.duration.',
-      volcengineApiKeyNote:
-        'Authenticate with an API Key created in the new speech console — no APP ID needed. Create it under API Keys management: console.volcengine.com/speech/new/setting/apikeys. Resource ID defaults to volc.seedasr.sauc.duration.',
+      volcengineApiKeyConsole: 'Doubao Speech · API Keys',
+      volcengineApiKeyNote: 'Create a Speech API key here; Ark keys cannot be used.',
+      volcengineResourceIdNote: 'Resource ID defaults to {{resourceId}}.',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:

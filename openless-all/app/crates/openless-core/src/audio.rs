@@ -1,11 +1,11 @@
 //! Framework-independent audio normalization used by native recorder adapters.
 
-use std::collections::VecDeque;
-use std::sync::Mutex;
+#[path = "audio/echo.rs"]
+mod echo;
+pub use echo::ReferenceAudioBuffer;
 
 pub const DICTATION_SAMPLE_RATE: u32 = 16_000;
 const LEVEL_RMS_GAIN: f32 = 4.0;
-const REFERENCE_BUFFER_MAX_SECONDS: usize = 2;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NormalizedPcmChunk {
@@ -17,466 +17,194 @@ pub struct NormalizedPcmChunk {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AudioProcessingConfig {
     pub enhancement_enabled: bool,
-    /// Use a native render/monitor reference when the host can provide one.
-    /// This is deliberately independent from output muting and is best effort:
-    /// a recorder remains usable when the platform has no monitor stream.
     pub echo_cancellation_enabled: bool,
+    pub dsp: crate::audio_dsp::AudioDspConfig,
 }
 
-/// Bounded render samples shared by a native render callback and the processing worker.
-///
-/// The callback only performs a short mutex-protected append and never waits for the
-/// microphone worker. When the buffer is empty, the worker bypasses cancellation for
-/// that microphone chunk instead of treating missing reference samples as silence.
-#[derive(Debug)]
-pub struct ReferenceAudioBuffer {
-    sample_rate: u32,
-    samples: Mutex<VecDeque<f32>>,
-}
-
-impl ReferenceAudioBuffer {
-    pub fn new(sample_rate: u32) -> Self {
-        Self {
-            sample_rate,
-            samples: Mutex::new(VecDeque::with_capacity(
-                sample_rate as usize * REFERENCE_BUFFER_MAX_SECONDS,
-            )),
-        }
-    }
-
-    pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    pub fn push_interleaved(&self, samples: &[f32], channels: usize) {
-        if channels == 0 || self.sample_rate == 0 || samples.is_empty() {
-            return;
-        }
-        let Ok(mut queue) = self.samples.try_lock() else {
-            return;
-        };
-        let capacity = self.sample_rate as usize * REFERENCE_BUFFER_MAX_SECONDS;
-        for frame in samples.chunks_exact(channels) {
-            let mono = frame
-                .iter()
-                .map(|sample| if sample.is_finite() { *sample } else { 0.0 })
-                .sum::<f32>()
-                / channels as f32;
-            if queue.len() == capacity {
-                queue.pop_front();
-            }
-            queue.push_back(mono);
-        }
-    }
-
-    /// Take the render duration corresponding to a microphone callback.
-    /// Returns `None` when the render stream has not produced enough samples yet.
-    pub fn take_for_input(&self, input_frames: usize, input_sample_rate: u32) -> Option<Vec<f32>> {
-        if input_frames == 0 || input_sample_rate == 0 || self.sample_rate == 0 {
-            return None;
-        }
-        let needed = ((input_frames as u64 * self.sample_rate as u64)
-            .saturating_add(input_sample_rate as u64 - 1)
-            / input_sample_rate as u64) as usize;
-        let mut queue = self.samples.lock().expect("reference buffer lock poisoned");
-        if queue.len() < needed {
-            // A partial queue represents an underrun, not silence. Discard it so the next
-            // successful read cannot feed stale pre-gap render samples into the canceller.
-            queue.clear();
-            return None;
-        }
-        Some(queue.drain(..needed).collect())
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.samples
-            .lock()
-            .expect("reference buffer lock poisoned")
-            .len()
-    }
-}
-
-/// Small, deterministic microphone enhancement that does not require a model
-/// or a platform-specific audio dependency.
-#[derive(Debug, Clone, Copy)]
-pub struct AudioEnhancer {
-    enabled: bool,
-    noise_suppressor: NoiseSuppressor,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct NoiseSuppressor {
-    enabled: bool,
-    noise_floor: f32,
-    gain: f32,
-    gate_open: bool,
-    hold_remaining_secs: f32,
-}
-
-impl NoiseSuppressor {
-    const INITIAL_NOISE_FLOOR: f32 = 0.008;
-    const MIN_THRESHOLD: f32 = 0.012;
-    const CLOSE_THRESHOLD_MULTIPLIER: f32 = 2.0;
-    const OPEN_THRESHOLD_MULTIPLIER: f32 = 2.5;
-    const ATTENUATED_GAIN: f32 = 0.25;
-    const NOISE_FLOOR_DECAY_SECS: f32 = 0.25;
-    const NOISE_FLOOR_RISE_SECS: f32 = 8.0;
-    const HOLD_SECS: f32 = 0.050;
-    const GAIN_ATTACK_SECS: f32 = 0.010;
-    const GAIN_RELEASE_SECS: f32 = 0.080;
-
-    fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            noise_floor: Self::INITIAL_NOISE_FLOOR,
-            gain: 1.0,
-            gate_open: false,
-            hold_remaining_secs: 0.0,
-        }
-    }
-
-    fn reset(&mut self) {
-        self.noise_floor = Self::INITIAL_NOISE_FLOOR;
-        self.gain = 1.0;
-        self.gate_open = false;
-        self.hold_remaining_secs = 0.0;
-    }
-
-    fn process_in_place(&mut self, samples: &mut [f32], channels: usize, sample_rate: u32) {
-        if !self.enabled || samples.is_empty() || channels == 0 || sample_rate == 0 {
-            return;
-        }
-        let frame_count = samples.len() / channels;
-        if frame_count == 0 {
-            return;
-        }
-        let processed_samples = frame_count * channels;
-        let rms = downmixed_rms(&samples[..processed_samples], channels);
-        let duration_secs = frame_count as f32 / sample_rate as f32;
-        let close_threshold =
-            (self.noise_floor * Self::CLOSE_THRESHOLD_MULTIPLIER).max(Self::MIN_THRESHOLD);
-        let open_threshold = (self.noise_floor * Self::OPEN_THRESHOLD_MULTIPLIER)
-            .max(close_threshold * 1.5)
-            .max(Self::MIN_THRESHOLD);
-
-        if rms <= close_threshold {
-            let adaptation_secs = if rms < self.noise_floor {
-                Self::NOISE_FLOOR_DECAY_SECS
-            } else {
-                Self::NOISE_FLOOR_RISE_SECS
-            };
-            let coefficient = 1.0 - (-duration_secs / adaptation_secs).exp();
-            self.noise_floor += (rms - self.noise_floor) * coefficient.clamp(0.0, 1.0);
-            self.noise_floor = self.noise_floor.max(0.0);
-        }
-
-        if self.gate_open {
-            if rms <= close_threshold {
-                self.hold_remaining_secs -= duration_secs;
-                if self.hold_remaining_secs <= 0.0 {
-                    self.gate_open = false;
-                    self.hold_remaining_secs = 0.0;
-                }
-            } else {
-                self.hold_remaining_secs = Self::HOLD_SECS;
-            }
-        } else if rms >= open_threshold {
-            self.gate_open = true;
-            self.hold_remaining_secs = Self::HOLD_SECS;
-        }
-
-        let target_gain = if self.gate_open {
-            1.0
-        } else if rms <= close_threshold {
-            Self::ATTENUATED_GAIN
-        } else {
-            let knee =
-                (rms - close_threshold) / (open_threshold - close_threshold).max(f32::EPSILON);
-            Self::ATTENUATED_GAIN + (1.0 - Self::ATTENUATED_GAIN) * knee.clamp(0.0, 1.0)
-        };
-        let smoothing_secs = if target_gain < self.gain {
-            Self::GAIN_RELEASE_SECS
-        } else {
-            Self::GAIN_ATTACK_SECS
-        };
-        let coefficient = 1.0 - (-duration_secs / smoothing_secs).exp();
-        self.gain += (target_gain - self.gain) * coefficient.clamp(0.0, 1.0);
-
-        for sample in &mut samples[..processed_samples] {
-            if sample.is_finite() {
-                *sample *= self.gain;
-            } else {
-                *sample = 0.0;
-            }
-        }
-    }
-}
-
-impl Default for NoiseSuppressor {
-    fn default() -> Self {
-        Self::new(false)
-    }
-}
-
-fn downmixed_rms(samples: &[f32], channels: usize) -> f32 {
-    let frame_count = samples.len() / channels;
-    if frame_count == 0 {
-        return 0.0;
-    }
-    let square_sum = samples
-        .chunks_exact(channels)
-        .map(|frame| {
-            let mono = frame
-                .iter()
-                .map(|sample| if sample.is_finite() { *sample } else { 0.0 })
-                .sum::<f32>()
-                / channels as f32;
-            f64::from(mono) * f64::from(mono)
-        })
-        .sum::<f64>();
-    (square_sum / frame_count as f64).sqrt() as f32
-}
-
-impl Default for AudioEnhancer {
-    fn default() -> Self {
-        Self::new(AudioProcessingConfig::default())
-    }
-}
-
-impl AudioEnhancer {
-    const INPUT_GAIN: f32 = 1.5;
-    const SOFT_CLIP_KNEE: f32 = 0.75;
-
-    pub fn new(config: AudioProcessingConfig) -> Self {
-        Self {
-            enabled: config.enhancement_enabled,
-            noise_suppressor: NoiseSuppressor::new(config.enhancement_enabled),
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.noise_suppressor.reset();
-    }
-
-    pub fn process_in_place(&mut self, samples: &mut [f32]) {
-        self.process_in_place_with_format(samples, 1, DICTATION_SAMPLE_RATE);
-    }
-
-    fn process_in_place_with_format(
-        &mut self,
-        samples: &mut [f32],
-        channels: usize,
-        sample_rate: u32,
-    ) {
-        if !self.enabled {
-            return;
-        }
-        self.noise_suppressor
-            .process_in_place(samples, channels, sample_rate);
-        for sample in samples {
-            let boosted = *sample * Self::INPUT_GAIN;
-            *sample = Self::soft_clip(boosted);
-        }
-    }
-
-    fn soft_clip(sample: f32) -> f32 {
-        let sample = sample.clamp(-1.0, 1.0);
-        let magnitude = sample.abs();
-        if magnitude <= Self::SOFT_CLIP_KNEE {
-            return sample;
-        }
-        let normalized = (magnitude - Self::SOFT_CLIP_KNEE) / (1.0 - Self::SOFT_CLIP_KNEE);
-        let eased = normalized * normalized * (3.0 - 2.0 * normalized);
-        sample.signum() * (Self::SOFT_CLIP_KNEE + (1.0 - Self::SOFT_CLIP_KNEE) * eased)
-    }
-}
-
-const ECHO_FILTER_TAPS: usize = 1_024;
-const ECHO_ADAPTATION_RATE: f32 = 0.12;
-const ECHO_DOUBLE_TALK_RATIO: f32 = 2.5;
-const ECHO_MIN_REFERENCE_POWER: f32 = 0.000_001;
-
-/// Conservative normalized-LMS echo canceller for a mono render reference.
-///
-/// The filter is intentionally bounded and stateful. It learns the acoustic path while
-/// the render signal is present, but pauses adaptation when near-end energy is clearly
-/// stronger than the estimated echo (double talk). It is not a replacement for a
-/// platform voice-processing stack; hosts therefore treat it as an optional best-effort
-/// processor and bypass it when the render reference is unavailable.
-#[derive(Debug, Clone)]
-struct EchoCanceller {
-    coefficients: Vec<f32>,
-    history: Vec<f32>,
-    history_cursor: usize,
-}
-
-impl Default for EchoCanceller {
-    fn default() -> Self {
-        Self {
-            coefficients: vec![0.0; ECHO_FILTER_TAPS],
-            history: vec![0.0; ECHO_FILTER_TAPS],
-            history_cursor: 0,
-        }
-    }
-}
-
-impl EchoCanceller {
-    fn reset(&mut self) {
-        self.coefficients.fill(0.0);
-        self.history.fill(0.0);
-        self.history_cursor = 0;
-    }
-
-    fn process(&mut self, microphone: &[f32], reference: &[f32]) -> Vec<f32> {
-        if microphone.is_empty() || reference.is_empty() {
-            return microphone.to_vec();
-        }
-        let mut output = Vec::with_capacity(microphone.len());
-        for (index, &sample) in microphone.iter().enumerate() {
-            let Some(&reference_sample) = reference.get(index) else {
-                // A resampler may produce one fewer sample at a chunk boundary. Do not
-                // repeat the last render value across the missing tail; preserve the
-                // microphone sample and let the next reference chunk re-establish alignment.
-                output.push(sample);
-                continue;
-            };
-            self.history[self.history_cursor] = reference_sample;
-            let mut estimate = 0.0;
-            let mut reference_power = 0.0;
-            for tap in 0..ECHO_FILTER_TAPS {
-                let history_index =
-                    (self.history_cursor + ECHO_FILTER_TAPS - tap) % ECHO_FILTER_TAPS;
-                let value = self.history[history_index];
-                estimate += self.coefficients[tap] * value;
-                reference_power += value * value;
-            }
-            let error = sample - estimate;
-            let near_power = sample * sample;
-            let should_adapt = reference_power > ECHO_MIN_REFERENCE_POWER
-                && (estimate.abs() < 0.01
-                    || estimate * estimate * ECHO_DOUBLE_TALK_RATIO >= near_power
-                    || near_power < ECHO_MIN_REFERENCE_POWER);
-            if should_adapt {
-                let normalization = reference_power + 0.000_01;
-                for tap in 0..ECHO_FILTER_TAPS {
-                    let history_index =
-                        (self.history_cursor + ECHO_FILTER_TAPS - tap) % ECHO_FILTER_TAPS;
-                    self.coefficients[tap] +=
-                        ECHO_ADAPTATION_RATE * error * self.history[history_index] / normalization;
-                    self.coefficients[tap] = self.coefficients[tap].clamp(-2.0, 2.0);
-                }
-            }
-            output.push(if error.is_finite() { error } else { 0.0 });
-            self.history_cursor = (self.history_cursor + 1) % ECHO_FILTER_TAPS;
-        }
-        output
-    }
-}
-
-/// Shared stateful processor used by native microphone hosts.
-#[derive(Debug)]
+/// Shared processor for native and external microphone hosts.
+/// Enhancement starts with the session's settings and may be disabled under
+/// load. Hosts must deliver every returned tail before feeding more input or
+/// closing their ASR consumer or recording archive.
 pub struct AudioProcessor {
+    config: AudioProcessingConfig,
     normalizer: PcmNormalizer,
-    microphone_resampler: PcmNormalizer,
-    reference_resampler: PcmNormalizer,
-    enhancer: AudioEnhancer,
-    echo_canceller: Option<EchoCanceller>,
+    enhanced: Option<EnhancedStream>,
+    echo: Option<echo::EchoProcessor>,
+    finished: bool,
+}
+
+impl std::fmt::Debug for AudioProcessor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AudioProcessor")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AudioProcessor {
     pub fn new(config: AudioProcessingConfig) -> Self {
         Self {
-            normalizer: PcmNormalizer::default(),
-            microphone_resampler: PcmNormalizer::default(),
-            reference_resampler: PcmNormalizer::default(),
-            enhancer: AudioEnhancer::new(config),
-            echo_canceller: config
+            config,
+            normalizer: Default::default(),
+            enhanced: None,
+            echo: config
                 .echo_cancellation_enabled
-                .then(EchoCanceller::default),
+                .then(echo::EchoProcessor::default),
+            finished: false,
         }
     }
 
     pub fn reset(&mut self) {
-        self.normalizer = PcmNormalizer::default();
-        self.microphone_resampler = PcmNormalizer::default();
-        self.reference_resampler = PcmNormalizer::default();
-        self.enhancer.reset();
-        if let Some(canceller) = &mut self.echo_canceller {
-            canceller.reset();
+        *self = Self::new(self.config);
+    }
+
+    /// Flush delayed enhanced samples before switching to basic normalization.
+    /// The change lasts until the processor is replaced for a new capture.
+    pub fn disable_enhancement(&mut self) -> Option<NormalizedPcmChunk> {
+        if !self.config.enhancement_enabled || self.finished {
+            return None;
         }
+        let tail = self.finish();
+        self.config.enhancement_enabled = false;
+        self.enhanced = None;
+        self.finished = false;
+        tail
     }
 
     pub fn process(
         &mut self,
-        interleaved: &[f32],
+        input: &[f32],
         channels: usize,
-        input_sample_rate: u32,
+        rate: u32,
     ) -> Option<NormalizedPcmChunk> {
-        if !self.enhancer.enabled {
-            return self
-                .normalizer
-                .process(interleaved, channels, input_sample_rate);
+        if self.finished || input.is_empty() || channels == 0 || rate == 0 {
+            return None;
         }
-        let mut enhanced = interleaved.to_vec();
-        self.enhancer
-            .process_in_place_with_format(&mut enhanced, channels, input_sample_rate);
-        self.normalizer
-            .process(&enhanced, channels, input_sample_rate)
+        if !self.config.enhancement_enabled {
+            return self.normalizer.process(input, channels, rate);
+        }
+        let stream = self
+            .enhanced
+            .get_or_insert_with(|| EnhancedStream::new(self.config.dsp, channels, rate));
+        if stream.channels != channels || stream.rate != rate {
+            log::error!("audio format changed during an enhancement session; reset required");
+            return None;
+        }
+        stream.interleaved.extend(input.iter().map(|s| {
+            if s.is_finite() {
+                s.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        }));
+        let complete = stream.interleaved.len() / channels * channels;
+        let mono = downmix_to_mono(&stream.interleaved[..complete], channels);
+        stream.interleaved.drain(..complete);
+        stream.input_frames += mono.len() as u64;
+        let working = stream.input_resampler.push(&mono, false);
+        let processed = stream.frames(&working, false);
+        pcm_chunk(&processed)
     }
 
-    /// Process microphone audio with an optional native render reference.
-    ///
-    /// A missing reference is a normal condition during startup or on platforms without
-    /// monitor capture; in that case the microphone follows the existing processing path.
+    /// A playback gap bypasses only cancellation; enhancement keeps its format and tail.
     pub fn process_with_reference(
         &mut self,
-        interleaved: &[f32],
+        input: &[f32],
         channels: usize,
-        input_sample_rate: u32,
+        rate: u32,
         reference: Option<&[f32]>,
-        reference_sample_rate: u32,
     ) -> Option<NormalizedPcmChunk> {
-        let Some(canceller) = self.echo_canceller.as_mut() else {
-            return self.process(interleaved, channels, input_sample_rate);
+        let Some(echo) = self.echo.as_mut() else {
+            return self.process(input, channels, rate);
         };
-        let Some(reference) = reference.filter(|samples| !samples.is_empty()) else {
-            // A reference gap invalidates the learned delay/history relationship. Bypass this
-            // microphone chunk and relearn from fresh render samples instead of carrying stale
-            // pre-gap state into the next cancellation attempt.
-            canceller.reset();
-            self.microphone_resampler = PcmNormalizer::default();
-            self.reference_resampler = PcmNormalizer::default();
-            return self.process(interleaved, channels, input_sample_rate);
-        };
-        let microphone =
-            self.microphone_resampler
-                .process_f32(interleaved, channels, input_sample_rate);
-        let render = self
-            .reference_resampler
-            .process_f32(reference, 1, reference_sample_rate);
-        if microphone.is_empty() || render.is_empty() {
-            // The resampler can also reject a malformed/zero-rate reference. Reset the
-            // canceller before the microphone-only fallback for the same gap semantics.
-            canceller.reset();
-            self.microphone_resampler = PcmNormalizer::default();
-            self.reference_resampler = PcmNormalizer::default();
-            return self.process(interleaved, channels, input_sample_rate);
-        }
-        if render.len() < microphone.len() {
-            // A short resampled reference is an alignment gap, not permission to repeat
-            // the final render sample. Bypass this chunk and relearn from a clean history.
-            canceller.reset();
-            self.microphone_resampler = PcmNormalizer::default();
-            self.reference_resampler = PcmNormalizer::default();
-            return self.process(interleaved, channels, input_sample_rate);
-        }
-        let mut cancelled = canceller.process(&microphone, &render);
-        self.enhancer
-            .process_in_place_with_format(&mut cancelled, 1, DICTATION_SAMPLE_RATE);
-        self.normalizer
-            .process(&cancelled, 1, DICTATION_SAMPLE_RATE)
+        let samples = echo.process(input, channels, rate, reference);
+        self.process(&samples, 1, DICTATION_SAMPLE_RATE)
     }
+
+    /// Idempotent end-of-stream barrier. Flushes fractional resampling state,
+    /// a partial 10 ms frame and model lookahead without adding padding to PCM.
+    pub fn finish(&mut self) -> Option<NormalizedPcmChunk> {
+        if self.finished {
+            return None;
+        }
+        self.finished = true;
+        let stream = self.enhanced.as_mut()?;
+        let working = stream.input_resampler.push(&[], true);
+        let processed = stream.frames(&working, true);
+        pcm_chunk(&processed)
+    }
+}
+
+struct EnhancedStream {
+    channels: usize,
+    rate: u32,
+    input_resampler: crate::audio_dsp::SpeechResampler,
+    output_resampler: crate::audio_dsp::SpeechResampler,
+    dsp: micyou_dsp::DspProcessor,
+    interleaved: Vec<f32>,
+    pending: std::collections::VecDeque<f32>,
+    skip: usize,
+    model_delay: usize,
+    input_frames: u64,
+    emitted_frames: u64,
+}
+
+impl EnhancedStream {
+    fn new(config: crate::audio_dsp::AudioDspConfig, channels: usize, rate: u32) -> Self {
+        let config = config.normalized();
+        Self {
+            channels,
+            rate,
+            input_resampler: crate::audio_dsp::SpeechResampler::new(rate, 48_000),
+            output_resampler: crate::audio_dsp::SpeechResampler::new(48_000, DICTATION_SAMPLE_RATE),
+            dsp: micyou_dsp::DspProcessor::new(
+                std::sync::Arc::new(std::sync::RwLock::new(config.settings())),
+                None,
+            ),
+            interleaved: Vec::new(),
+            pending: Default::default(),
+            skip: config.model_delay(),
+            model_delay: config.model_delay(),
+            input_frames: 0,
+            emitted_frames: 0,
+        }
+    }
+
+    fn frames(&mut self, input: &[f32], finish: bool) -> Vec<f32> {
+        self.pending.extend(input);
+        if finish {
+            let tail = self.pending.len().div_ceil(480) * 480 + self.model_delay;
+            self.pending.resize(tail, 0.0);
+        }
+        let mut output = Vec::new();
+        while self.pending.len() >= 480 {
+            let mut frame: Vec<f32> = self.pending.drain(..480).collect();
+            self.dsp.process(&mut frame, 1, 0.0);
+            let skip = self.skip.min(frame.len());
+            self.skip -= skip;
+            output.extend(self.output_resampler.push(&frame[skip..], false));
+        }
+        if finish {
+            output.extend(self.output_resampler.push(&[], true));
+        }
+        // The last padded model frame may produce additional samples. Bound
+        // output by real capture duration, independently of callback sizes.
+        let valid = (self.input_frames * DICTATION_SAMPLE_RATE as u64).div_ceil(self.rate as u64);
+        output.truncate(valid.saturating_sub(self.emitted_frames) as usize);
+        self.emitted_frames += output.len() as u64;
+        output
+    }
+}
+
+fn pcm_chunk(samples: &[f32]) -> Option<NormalizedPcmChunk> {
+    if samples.is_empty() {
+        return None;
+    }
+    let (pcm_i16_le, rms) = quantize_to_i16_le(samples);
+    Some(NormalizedPcmChunk {
+        pcm_i16_le,
+        level: (rms * LEVEL_RMS_GAIN).clamp(0.0, 1.0),
+    })
 }
 
 /// Stateful interleaved-audio normalizer.
@@ -587,7 +315,11 @@ impl PcmNormalizer {
         channels: usize,
         input_sample_rate: u32,
     ) -> Option<NormalizedPcmChunk> {
-        let resampled = self.process_f32(interleaved, channels, input_sample_rate);
+        if interleaved.is_empty() || channels == 0 || input_sample_rate == 0 {
+            return None;
+        }
+        let mono = downmix_to_mono(interleaved, channels);
+        let resampled = self.resample(&mono, input_sample_rate, DICTATION_SAMPLE_RATE);
         if resampled.is_empty() {
             return None;
         }
@@ -596,19 +328,6 @@ impl PcmNormalizer {
             pcm_i16_le,
             level: (rms * LEVEL_RMS_GAIN).clamp(0.0, 1.0),
         })
-    }
-
-    fn process_f32(
-        &mut self,
-        interleaved: &[f32],
-        channels: usize,
-        input_sample_rate: u32,
-    ) -> Vec<f32> {
-        if interleaved.is_empty() || channels == 0 || input_sample_rate == 0 {
-            return Vec::new();
-        }
-        let mono = downmix_to_mono(interleaved, channels);
-        self.resample(&mono, input_sample_rate, DICTATION_SAMPLE_RATE)
     }
 
     fn resample(&mut self, samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
@@ -673,10 +392,14 @@ fn quantize_to_i16_le(samples: &[f32]) -> (Vec<u8>, f32) {
 }
 
 #[cfg(test)]
+#[path = "audio/dsp_tests.rs"]
+mod dsp_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn decode(bytes: &[u8]) -> Vec<i16> {
+    pub(super) fn decode(bytes: &[u8]) -> Vec<i16> {
         bytes
             .as_chunks::<2>()
             .0
@@ -713,111 +436,6 @@ mod tests {
     }
 
     #[test]
-    fn enhancement_boosts_quiet_samples_and_soft_clips_loud_samples() {
-        let mut enhancer = AudioEnhancer::new(AudioProcessingConfig {
-            enhancement_enabled: true,
-            ..Default::default()
-        });
-        let mut samples = [0.5, -0.5, 1.0, -1.0];
-        enhancer.process_in_place(&mut samples);
-        assert_eq!(samples[0], 0.75);
-        assert_eq!(samples[1], -0.75);
-        assert_eq!(samples[2], 1.0);
-        assert_eq!(samples[3], -1.0);
-    }
-
-    #[test]
-    fn enhancement_replaces_non_finite_samples_and_stays_in_range() {
-        let mut enhancer = AudioEnhancer::new(AudioProcessingConfig {
-            enhancement_enabled: true,
-            ..Default::default()
-        });
-        let mut samples = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 2.0, -2.0];
-        enhancer.process_in_place(&mut samples);
-        assert!(samples.iter().all(|sample| sample.is_finite()));
-        assert!(samples.iter().all(|sample| (-1.0..=1.0).contains(sample)));
-        assert_eq!(samples[0], 0.0);
-    }
-
-    #[test]
-    fn noise_suppression_attenuates_quiet_frames_and_recovers_for_speech() {
-        let mut enhancer = AudioEnhancer::new(AudioProcessingConfig {
-            enhancement_enabled: true,
-            ..Default::default()
-        });
-        let quiet = [0.004_f32; 160];
-        let mut processed_quiet = quiet;
-        for _ in 0..24 {
-            processed_quiet = quiet;
-            enhancer.process_in_place(&mut processed_quiet);
-        }
-        assert!(processed_quiet[0].abs() < quiet[0].abs() * 0.5);
-
-        let mut speech = [0.2_f32; 160];
-        enhancer.process_in_place(&mut speech);
-        assert!(speech[0] > 0.1);
-    }
-
-    #[test]
-    fn noise_suppression_reset_restores_initial_gain_state() {
-        let mut enhancer = AudioEnhancer::new(AudioProcessingConfig {
-            enhancement_enabled: true,
-            ..Default::default()
-        });
-        let quiet = [0.004_f32; 160];
-        let mut settled = quiet;
-        for _ in 0..24 {
-            enhancer.process_in_place(&mut settled);
-        }
-        enhancer.reset();
-        let mut after_reset = quiet;
-        enhancer.process_in_place(&mut after_reset);
-        assert!(after_reset[0] > settled[0]);
-    }
-
-    #[test]
-    fn noise_suppression_keeps_stereo_frame_processing_consistent() {
-        let mut enhancer = AudioEnhancer::new(AudioProcessingConfig {
-            enhancement_enabled: true,
-            ..Default::default()
-        });
-        let mut samples = [0.004_f32; 320];
-        enhancer.process_in_place_with_format(&mut samples, 2, DICTATION_SAMPLE_RATE);
-        assert_eq!(samples[0], samples[1]);
-        assert!(samples.iter().all(|sample| sample.is_finite()));
-    }
-
-    #[test]
-    fn noise_suppression_does_not_learn_sustained_speech_as_noise() {
-        let mut enhancer = AudioEnhancer::new(AudioProcessingConfig {
-            enhancement_enabled: true,
-            ..Default::default()
-        });
-        for _ in 0..1_000 {
-            let mut speech = [0.2_f32; 160];
-            enhancer.process_in_place(&mut speech);
-            assert!(speech[0] > 0.25);
-        }
-    }
-
-    #[test]
-    fn noise_suppression_uses_downmixed_rms_for_stereo_input() {
-        let mut enhancer = AudioEnhancer::new(AudioProcessingConfig {
-            enhancement_enabled: true,
-            ..Default::default()
-        });
-        let mut out_of_phase = [0.2_f32; 320];
-        for frame in out_of_phase.as_chunks_mut::<2>().0 {
-            frame[1] = -0.2;
-        }
-        for _ in 0..24 {
-            enhancer.process_in_place_with_format(&mut out_of_phase, 2, DICTATION_SAMPLE_RATE);
-        }
-        assert!(out_of_phase[0].abs() < 0.15);
-        assert_eq!(out_of_phase[0], -out_of_phase[1]);
-    }
-
-    #[test]
     fn processor_disabled_output_matches_normalizer() {
         let input = [0.0, 1.0, 0.5, -0.5];
         let mut processor = AudioProcessor::new(AudioProcessingConfig::default());
@@ -829,50 +447,33 @@ mod tests {
     }
 
     #[test]
-    fn processor_applies_noise_suppression_to_worker_facing_output() {
-        let quiet = [0.004_f32; 160];
-        let mut processor = AudioProcessor::new(AudioProcessingConfig {
-            enhancement_enabled: true,
-            ..Default::default()
-        });
-        let mut output = None;
-        for _ in 0..24 {
-            output = processor.process(&quiet, 1, DICTATION_SAMPLE_RATE);
+    fn disabling_enhancement_flushes_lookahead_once_and_preserves_duration() {
+        for rate in [16_000, 44_100, 48_000] {
+            let mut processor = AudioProcessor::new(AudioProcessingConfig {
+                enhancement_enabled: true,
+                ..Default::default()
+            });
+            let mut samples = 0;
+            for chunk in [
+                processor.process(&vec![0.25; 317], 1, rate),
+                processor.disable_enhancement(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                samples += chunk.pcm_i16_le.len() / 2;
+            }
+            assert_eq!(
+                samples,
+                (317_u64 * 16_000).div_ceil(u64::from(rate)) as usize
+            );
+            assert!(processor.disable_enhancement().is_none());
+            let next = processor.process(&[0.5; 160], 1, 16_000).unwrap();
+            assert_eq!(decode(&next.pcm_i16_le), vec![16383; 160]);
+            assert!(processor.finish().is_none());
+            assert!(processor.disable_enhancement().is_none());
+            assert!(processor.process(&[0.5; 160], 1, 16_000).is_none());
         }
-        let output = output.unwrap();
-        let mut normalizer = PcmNormalizer::default();
-        let baseline = normalizer
-            .process(&quiet, 1, DICTATION_SAMPLE_RATE)
-            .unwrap();
-        let output_peak = decode(&output.pcm_i16_le)
-            .into_iter()
-            .map(|sample| i32::from(sample).abs())
-            .max()
-            .unwrap_or(0);
-        let baseline_peak = decode(&baseline.pcm_i16_le)
-            .into_iter()
-            .map(|sample| i32::from(sample).abs())
-            .max()
-            .unwrap_or(0);
-        assert!(output_peak < baseline_peak);
-    }
-
-    #[test]
-    fn processor_enhancement_preserves_canonical_output_contract() {
-        let mut processor = AudioProcessor::new(AudioProcessingConfig {
-            enhancement_enabled: true,
-            ..Default::default()
-        });
-        let output = processor
-            .process(&[0.25, -0.25, 0.5, -0.5], 1, DICTATION_SAMPLE_RATE)
-            .unwrap();
-        assert!(output.pcm_i16_le.len().is_multiple_of(2));
-        assert!(output.level.is_finite());
-        assert!((0.0..=1.0).contains(&output.level));
-        assert_eq!(
-            decode(&output.pcm_i16_le),
-            vec![12287, -12287, 24575, -24575]
-        );
     }
 
     #[test]
@@ -882,134 +483,6 @@ mod tests {
         processor.reset();
         let output = processor.process(&[0.0, 1.0], 1, 8_000).unwrap();
         assert_eq!(decode(&output.pcm_i16_le), vec![0, 16383, 32767]);
-    }
-
-    #[test]
-    fn reference_buffer_bounds_and_matches_input_duration() {
-        let buffer = ReferenceAudioBuffer::new(8_000);
-        buffer.push_interleaved(&[0.1; 8_000 * 3], 1);
-        assert_eq!(buffer.len(), 8_000 * REFERENCE_BUFFER_MAX_SECONDS);
-        let chunk = buffer.take_for_input(160, 16_000).unwrap();
-        assert_eq!(chunk.len(), 80);
-        assert_eq!(buffer.take_for_input(32_000, 16_000), None);
-    }
-
-    #[test]
-    fn reference_buffer_discards_partial_underrun() {
-        let buffer = ReferenceAudioBuffer::new(DICTATION_SAMPLE_RATE);
-        buffer.push_interleaved(&[0.25; 80], 1);
-        assert_eq!(buffer.take_for_input(160, DICTATION_SAMPLE_RATE), None);
-
-        buffer.push_interleaved(&[0.75; 160], 1);
-        let chunk = buffer
-            .take_for_input(160, DICTATION_SAMPLE_RATE)
-            .expect("fresh render samples should satisfy the next input frame");
-        assert!(chunk
-            .iter()
-            .all(|sample| (*sample - 0.75).abs() < f32::EPSILON));
-    }
-
-    #[test]
-    fn echo_canceller_reduces_delayed_render_signal() {
-        let mut canceller = EchoCanceller::default();
-        let mut reference = vec![0.0_f32; 16_000];
-        for (index, sample) in reference.iter_mut().enumerate() {
-            *sample = (index as f32 * 0.071).sin() * 0.25;
-        }
-        let delay = 96;
-        let microphone = reference
-            .iter()
-            .enumerate()
-            .map(|(index, _)| {
-                reference
-                    .get(index.saturating_sub(delay))
-                    .copied()
-                    .unwrap_or_default()
-                    * 0.7
-            })
-            .collect::<Vec<_>>();
-        let mut cancelled = Vec::new();
-        for (mic, far) in microphone.chunks(160).zip(reference.chunks(160)) {
-            cancelled.extend(canceller.process(mic, far));
-        }
-        let input_rms = microphone[2_000..]
-            .iter()
-            .map(|sample| sample * sample)
-            .sum::<f32>();
-        let output_rms = cancelled[2_000..]
-            .iter()
-            .map(|sample| sample * sample)
-            .sum::<f32>();
-        assert!(output_rms < input_rms * 0.35, "{output_rms} >= {input_rms}");
-    }
-
-    #[test]
-    fn echo_canceller_preserves_near_end_during_double_talk() {
-        let mut canceller = EchoCanceller::default();
-        let mut reference = vec![0.0_f32; 12_000];
-        for (index, sample) in reference.iter_mut().enumerate() {
-            // Deterministic broadband-ish reference gives the adaptive filter enough
-            // information to learn the delayed acoustic path.
-            *sample = (((index as u32)
-                .wrapping_mul(1_103_515_245)
-                .wrapping_add(12_345)
-                >> 16) as f32
-                / 32_768.0
-                - 1.0)
-                * 0.2;
-        }
-        let delay = 96;
-        let echo = |index: usize| {
-            reference
-                .get(index.saturating_sub(delay))
-                .copied()
-                .unwrap_or_default()
-                * 0.7
-        };
-        for (index, far) in reference.chunks(160).enumerate() {
-            let start = index * 160;
-            let microphone = (start..start + far.len()).map(echo).collect::<Vec<_>>();
-            let _ = canceller.process(&microphone, far);
-        }
-
-        let mut output = Vec::new();
-        let mut near_end = Vec::new();
-        for (index, far) in reference[6_000..].chunks(160).enumerate() {
-            let start = 6_000 + index * 160;
-            let near = (start..start + far.len())
-                .map(|sample| (sample as f32 * 0.017).sin() * 0.22)
-                .collect::<Vec<_>>();
-            let microphone = far
-                .iter()
-                .enumerate()
-                .map(|(offset, _sample)| echo(start + offset) + near[offset])
-                .collect::<Vec<_>>();
-            output.extend(canceller.process(&microphone, far));
-            near_end.extend(near);
-        }
-        let dot = output
-            .iter()
-            .zip(&near_end)
-            .map(|(processed, near)| processed * near)
-            .sum::<f32>();
-        let near_power = near_end.iter().map(|sample| sample * sample).sum::<f32>();
-        assert!(
-            dot > near_power * 0.35,
-            "near-end correlation was suppressed"
-        );
-    }
-    #[test]
-    fn processor_without_render_reference_falls_back_to_microphone_path() {
-        let input = [0.1_f32; 160];
-        let mut with_aec = AudioProcessor::new(AudioProcessingConfig {
-            echo_cancellation_enabled: true,
-            ..Default::default()
-        });
-        let mut ordinary = AudioProcessor::new(AudioProcessingConfig::default());
-        assert_eq!(
-            with_aec.process_with_reference(&input, 1, DICTATION_SAMPLE_RATE, None, 16_000),
-            ordinary.process(&input, 1, DICTATION_SAMPLE_RATE)
-        );
     }
 
     #[test]

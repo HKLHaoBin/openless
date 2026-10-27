@@ -33,15 +33,40 @@ HICOLOR_ICONS=(
   "512x512:icon.png"
 )
 
-test -x "$BINARY"
-test -d "$ICON_DIR"
-for spec in "${HICOLOR_ICONS[@]}"; do test -s "$ICON_DIR/${spec#*:}"; done
-test -s "$PLUGIN_ROOT/libopenless.so"
-test -s "$PLUGIN_ROOT/openless.conf"
-test -s "$PACKAGING/openless.desktop"
-test -s "$PACKAGING/top.openless.OpenLess.metainfo.xml"
-command -v dpkg-deb >/dev/null
-command -v rpmbuild >/dev/null
+# Never fail silently: a bare `test -s` exits 1 with no output, which in CI looks
+# like "the packaging step failed for no reason".
+require_file() {
+  [ -s "$1" ] || {
+    echo "missing or empty $1" >&2
+    case "$1" in
+      */linux-fcitx5-plugin/build/*) echo "  build it with: (cd scripts/linux-fcitx5-plugin && cmake -S . -B build && cmake --build build)" >&2 ;;
+      */release/openless-linux-egui) echo "  build it with: cargo build --release -p openless-linux-egui" >&2 ;;
+    esac
+    exit 1
+  }
+}
+require_command() {
+  command -v "$1" > /dev/null || {
+    echo "missing build tool: $1" >&2
+    exit 1
+  }
+}
+
+[ -x "$BINARY" ] || {
+  echo "missing release binary $BINARY (cargo build --release -p openless-linux-egui)" >&2
+  exit 1
+}
+[ -d "$ICON_DIR" ] || {
+  echo "missing icon directory $ICON_DIR" >&2
+  exit 1
+}
+for spec in "${HICOLOR_ICONS[@]}"; do require_file "$ICON_DIR/${spec#*:}"; done
+require_file "$PLUGIN_ROOT/libopenless.so"
+require_file "$PLUGIN_ROOT/openless.conf"
+require_file "$PACKAGING/openless.desktop"
+require_file "$PACKAGING/top.openless.OpenLess.metainfo.xml"
+require_command dpkg-deb
+require_command rpmbuild
 
 mkdir -p "$OUTPUT"
 
@@ -90,6 +115,10 @@ stage_common() {
     "$root/usr/share/applications/openless.desktop"
   install -Dm644 "$PACKAGING/top.openless.OpenLess.metainfo.xml" \
     "$root/usr/share/metainfo/top.openless.OpenLess.metainfo.xml"
+  for notice in LICENSE LICENSE-RNNoise.txt LICENSE-PureVox.txt LICENSE-AEC7.txt UPSTREAM.md; do
+    install -Dm644 "$APP_ROOT/crates/micyou-dsp/$notice" \
+      "$root/usr/share/doc/openless/micyou/$notice"
+  done
   # 多档 hicolor 尺寸：桌面环境按需选档（任务栏 32/48、菜单 64/128、大图标 256/512）。
   # 旧的单档安装把 512×512 的图放进了 256x256 目录（那档根本不是 256px）。
   for spec in "${HICOLOR_ICONS[@]}"; do

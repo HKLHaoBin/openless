@@ -7,13 +7,17 @@ mod style_icon;
 #[cfg(target_os = "linux")]
 mod ui;
 
-#[cfg(target_os = "linux")]
 mod linux_app {
     mod history;
     use history::HistoryCache;
     mod settings_save;
     mod window;
     use settings_save::SettingsSave;
+    /// 泵心跳的采样间隔：热键消费停没停，十秒内一定看得出来。
+    const PUMP_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+    /// 状态没有变化时，`info` 级心跳的最低频率（存活证明，不为排查细节服务）。
+    const PUMP_HEARTBEAT_INFO_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
     use std::future::Future;
     use std::sync::mpsc;
     use std::sync::Arc;
@@ -47,6 +51,11 @@ mod linux_app {
     use window::*;
 
     enum UiResult {
+        Siwc {
+            channel_id: String,
+            request: u64,
+            state: Result<frontend::view_model::SettingsSiwcState, String>,
+        },
         Message(String),
         /// 选区助手动作的异步结果：`generation` 是发起时面板进程的代次，
         /// 换过窗口后的迟到结果不得回写到新面板。
@@ -442,6 +451,8 @@ mod linux_app {
     /// mirror writes it out each frame, so re-reading the channel list never
     /// clobbers what the user is typing.
     struct ProviderEditorForm {
+        siwc: Option<frontend::view_model::SettingsSiwcState>,
+        siwc_request: u64,
         channel_id: String,
         /// 渠道种类（LLM / ASR）：弹窗副标题「文字处理渠道 / 语音识别渠道」用它。
         kind: openless_core::ChannelKind,
@@ -471,6 +482,8 @@ mod linux_app {
     impl ProviderEditorForm {
         fn from_editor(editor: &ProviderEditor, lang: Lang) -> Self {
             Self {
+                siwc: None,
+                siwc_request: 0,
                 channel_id: editor.channel.id.clone(),
                 kind: editor.kind,
                 provider_type: editor.descriptor.provider_type.as_str().to_string(),
@@ -658,8 +671,13 @@ mod linux_app {
         vocab_suggestions_checked: std::time::Instant,
         tray: Option<openless_linux_egui::LinuxTray>,
         exit_requested: bool,
-        /// 上次打「泵心跳」日志的时间。
+        /// 上次采样「泵心跳」的时间（每 10 秒一次，与日志级别无关）。
         last_pump_heartbeat: std::time::Instant,
+        /// 上次把心跳写进 `info` 的时间。心跳是每 10 秒一次的存在性证明，
+        /// 全写 `info` 会在一天内吃满日志配额，把真正的错误挤出去。
+        last_pump_heartbeat_info: std::time::Instant,
+        /// 上次写 `info` 时的状态快照；状态一变就立刻记一条。
+        last_pump_heartbeat_snapshot: [bool; 4],
         window: WindowState,
         /// 本帧从 UI 收到、待宿主执行的动作（按到达顺序）。
         pending_ui_actions: Vec<frontend::view_model::FrontendAction>,
@@ -894,6 +912,8 @@ mod linux_app {
                         tray,
                         exit_requested: false,
                         last_pump_heartbeat: std::time::Instant::now(),
+                        last_pump_heartbeat_info: std::time::Instant::now(),
+                        last_pump_heartbeat_snapshot: [false; 4],
                         window: WindowState::new(window_should_be_open),
                         pending_ui_actions: Vec::new(),
                         pending_local_hotkeys: Vec::new(),
@@ -1013,6 +1033,8 @@ mod linux_app {
                     tray,
                     exit_requested: false,
                     last_pump_heartbeat: std::time::Instant::now(),
+                    last_pump_heartbeat_info: std::time::Instant::now(),
+                    last_pump_heartbeat_snapshot: [false; 4],
                     window: WindowState::new(window_should_be_open),
                     pending_ui_actions: Vec::new(),
                     pending_local_hotkeys: Vec::new(),
@@ -2111,7 +2133,7 @@ mod linux_app {
                     }
                 },
                 PopupSupervisorEvent::Message(PopupToHost::Hotkey { edge, .. }) => {
-                    log::info!("[hotkey] local edge from the {kind:?} panel: {edge:?}");
+                    log::debug!("[hotkey] local edge from the {kind:?} panel: {edge:?}");
                     self.pending_local_hotkeys
                         .push((std::time::Instant::now(), edge));
                 }
@@ -3475,6 +3497,161 @@ mod linux_app {
             self.editor_requested = false;
         }
 
+        fn request_siwc(&mut self, action: String, registration_id: Option<String>) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let Some(form) = self
+                .provider_editor_form
+                .as_mut()
+                .filter(|f| f.provider_type == openless_core::siwc::PROVIDER_ID)
+            else {
+                return;
+            };
+            static SIWC_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            form.siwc_request = SIWC_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let request = form.siwc_request;
+            let channel = form.channel_id.clone();
+            let tx = self.tx.clone();
+            let wake = std::thread::current();
+            self.tokio.spawn(async move {
+                let result = async {
+                    let service = backend
+                        .siwc_for_channel(&channel)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let mut message = None;
+                    if matches!(action.as_str(), "sign_in" | "add_account" | "enable_usage" | "select" | "disconnect") {
+                        backend.invalidate_channel_test(openless_core::ChannelKind::Llm, channel.clone()).await.map_err(|e| e.to_string())?;
+                    }
+                    match action.as_str() {
+                        "sign_in" | "add_account" | "enable_usage" => {
+                            let launch = backend
+                                .begin_siwc_sign_in(
+                                    channel.clone(),
+                                    action == "add_account",
+                                    action == "enable_usage",
+                                )
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            if open_external(launch.authorization_url()).is_err() {
+                                let _ = service.cancel_sign_in(&channel).await;
+                                return Err(
+                                    openless_core::siwc::error("browser_failed").to_string()
+                                );
+                            }
+                        }
+                        "cancel" => service
+                            .cancel_sign_in(&channel)
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        "select" => service
+                            .select_account(
+                                channel.clone(),
+                                registration_id.ok_or("account required")?,
+                            )
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        "disconnect" => {
+                            if !service
+                                .disconnect(&channel)
+                                .await
+                                .map_err(|e| e.to_string())?
+                                .remote_revoked
+                            {
+                                message = Some("siwc.remoteUnconfirmed".into());
+                            }
+                        }
+                        "acknowledge" => service
+                            .acknowledge_welcome(channel.clone())
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        "retry" => service
+                            .retry_usage(channel.clone())
+                            .await
+                            .map_err(|e| e.to_string())?,
+                        "test" => {
+                            let started = std::time::Instant::now();
+                            let result = backend
+                                .services()
+                                .provider
+                                .validate(openless_core::ProviderRequest {
+                                    kind: openless_core::ProviderKind::Llm,
+                                    channel_id: Some(channel.clone()),
+                                    thinking_enabled: false,
+                                })
+                                .await;
+                            backend
+                                .record_channel_test(
+                                    openless_core::ChannelKind::Llm,
+                                    channel.clone(),
+                                    result.is_ok(),
+                                    result
+                                        .as_ref()
+                                        .ok()
+                                        .map(|_| started.elapsed().as_millis() as u32),
+                                    result.as_ref().err().map(|e| e.to_string()),
+                                )
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            message = Some(match result {
+                                Ok(_) => "siwc.testSuccess".into(),
+                                Err(e) => e.to_string(),
+                            });
+                        }
+                        "refresh" => {}
+                        _ => return Err("unknown SIWC action".into()),
+                    }
+                    loop {
+                        let status = service.status(&channel).await.map_err(|e| e.to_string())?;
+                        let authorizing = status.state == "authorizing";
+                        let models = if status.state == "connected" {
+                            match service.list_models(&channel).await {
+                                Ok(models) => models,
+                                Err(e) => {
+                                    message = Some(e.to_string());
+                                    Vec::new()
+                                }
+                            }
+                        } else {
+                            Vec::new()
+                        };
+                        let state = frontend::view_model::SettingsSiwcState {
+                            status,
+                            models,
+                            message: message.clone(),
+                        };
+                        let _ = backend.refresh_and_publish_credentials().await;
+                        if tx
+                            .send(UiResult::Siwc {
+                                channel_id: channel.clone(),
+                                request,
+                                state: Ok(state),
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                        wake.unpark();
+                        if !authorizing {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                    Ok::<(), String>(())
+                }
+                .await;
+                if let Err(error) = result {
+                    let _ = tx.send(UiResult::Siwc {
+                        channel_id: channel,
+                        request,
+                        state: Err(error),
+                    });
+                    wake.unpark();
+                }
+            });
+        }
+
         /// Core owns the model catalog; the host only forwards the request.
         fn request_provider_models(&self, kind: openless_core::ChannelKind, channel_id: String) {
             if self.provider_switch_pending {
@@ -4026,25 +4203,42 @@ mod linux_app {
         /// current-thread 运行时，`spawn` 的任务只在别处 `block_on` 时才被推进，
         /// 当作后台泵用就是「写完看着对、最小化后照样死」（实测心跳会在窗口
         /// 收走的那一刻停）。线程只做一件事：`request_repaint()` 把事件循环戳醒。
-        /// 泵心跳：宿主循环每 10s 一条。窗口关掉之后这条心跳**不能**停 ——
+        /// 泵心跳：宿主循环每 10s 采样一次。窗口关掉之后这条心跳**不能**停 ——
         /// 停了就说明热键消费与弹窗拉起也没在跑（这正是当初「关窗后热键失效」
-        /// 的判据），用户/支持可以直接看日志确认。
+        /// 的判据）。
+        ///
+        /// 采样归采样，写日志要节流：每 10 秒一条 `info` 是 8640 行/天，轮转后
+        /// 整份日志九成以上都是它，真正的错误反而被挤出去。所以**状态变化立刻
+        /// 记一条 `info`**（这才是判据），状态没变时只每
+        /// [`PUMP_HEARTBEAT_INFO_INTERVAL`] 留一条存活证明，其余走 `debug`。
         fn log_pump_heartbeat(&mut self, ctx: &egui::Context) {
             self.tick_vocab_suggestions();
-            if self.last_pump_heartbeat.elapsed() < std::time::Duration::from_secs(10) {
+            if self.last_pump_heartbeat.elapsed() < PUMP_HEARTBEAT_INTERVAL {
                 return;
             }
             self.last_pump_heartbeat = std::time::Instant::now();
             // 宿主没有窗口，所以心跳只看「窗口进程还在不在」——
             // 这正是关窗后必须继续为 true 的那一项能力。
             let _ = ctx;
-            log::info!(
-                "[pump] heartbeat window_process={} window_wanted={} tray={} recording={}",
+            let snapshot = [
                 self.window.child.is_some(),
                 self.window.should_be_open,
                 self.tray.is_some(),
                 self.recording_phase_active,
+            ];
+            let changed = snapshot != self.last_pump_heartbeat_snapshot;
+            let due = self.last_pump_heartbeat_info.elapsed() >= PUMP_HEARTBEAT_INFO_INTERVAL;
+            let message = format!(
+                "[pump] heartbeat window_process={} window_wanted={} tray={} recording={}",
+                snapshot[0], snapshot[1], snapshot[2], snapshot[3],
             );
+            if changed || due {
+                self.last_pump_heartbeat_info = std::time::Instant::now();
+                self.last_pump_heartbeat_snapshot = snapshot;
+                log::info!("{message}");
+            } else {
+                log::debug!("{message}");
+            }
         }
 
         /// 当前生效的热键配置（本地匹配与去重都用它）。
@@ -4432,6 +4626,7 @@ mod linux_app {
                 let mut actions = Vec::new();
                 native.host_actions().drain(|action| actions.push(action));
                 for intent in launch_intents {
+                    log::info!("[ui-host] launch intent from the user: {intent:?}");
                     // CLI 的 ToggleQa 与「按一次 QA 热键」等价（Tauri
                     // `dispatch_cli_intent` 把 ToggleQa 直接转给 `handle_qa_hotkey_pressed`），
                     // 所以它既不拉起主窗口，也不走 Core 的 ToggleQa（那条是“切换录音”）。
@@ -4443,7 +4638,6 @@ mod linux_app {
                         self.toggle_qa_panel();
                         continue;
                     }
-                    log::info!("[ui-host] launch intent from the user: {intent:?}");
                     launch_intent_window_requested = true;
                     let host = Arc::clone(&host);
                     self.spawn(async move {
@@ -4869,6 +5063,22 @@ mod linux_app {
                         };
                         self.load_service_configured();
                     }
+                    UiResult::Siwc {
+                        channel_id,
+                        request,
+                        state,
+                    } => {
+                        if let Some(form) = self.provider_editor_form.as_mut().filter(|f| {
+                            f.channel_id == channel_id
+                                && f.provider_type == openless_core::siwc::PROVIDER_ID
+                                && f.siwc_request == request
+                        }) {
+                            match state {
+                                Ok(state) => form.siwc = Some(state),
+                                Err(error) => self.frontend_vm.settings_notice = Some(error),
+                            }
+                        }
+                    }
                     UiResult::ProviderEditor {
                         kind,
                         channel_id,
@@ -4889,6 +5099,7 @@ mod linux_app {
                                     Some(ProviderEditorForm::from_editor(&editor, self.lang));
                                 self.provider_editor =
                                     ProviderEditorState::Loaded(Box::new(editor));
+                                self.request_siwc("refresh".into(), None);
                                 // Tauri `CatalogModelField` 在挂载时就拉一次目录（只有
                                 // OrcaRouter 这种没有固定清单的服务商才需要），否则用户
                                 // 得自己找到「拉取模型」才知道可选什么。
@@ -5221,6 +5432,7 @@ mod linux_app {
                                         Some(ProviderEditorForm::from_editor(&editor, self.lang));
                                     self.provider_editor =
                                         ProviderEditorState::Loaded(Box::new(editor));
+                                    self.request_siwc("refresh".into(), None);
                                     if self
                                         .provider_editor_form
                                         .as_ref()
@@ -5478,6 +5690,15 @@ mod linux_app {
             // 文本型设置行只在偏好载入 / 外部变更时回灌一次，避免把输入中的
             // 内容每帧弹回旧值。
             let hydrate_text = std::mem::replace(&mut self.hydrate_text_fields, false);
+            // 日志级别是宿主本地文件（不在 Core 偏好里），要在借用 vm 之前读。
+            let log_level_index = self
+                .backend()
+                .and_then(|backend| openless_linux_egui::read_log_level(&backend.config().data_dir))
+                .map_or(0, |level| match level {
+                    log::LevelFilter::Debug => 1,
+                    log::LevelFilter::Trace => 2,
+                    _ => 0,
+                });
 
             let vm = &mut self.frontend_vm;
 
@@ -5654,10 +5875,13 @@ mod linux_app {
                 s.mute_while_recording = prefs.mute_during_recording;
                 s.audio_enhancement = prefs.audio_enhancement_enabled;
                 s.echo_cancellation = prefs.echo_cancellation_enabled;
+                s.audio_dsp = prefs.audio_dsp;
                 s.audio_cue = prefs.audio_cue_on_record;
                 s.launch_at_login = prefs.launch_at_login;
                 s.streaming_save_clipboard = prefs.streaming_insert_save_clipboard;
                 s.record_audio_for_debug = prefs.record_audio_for_debug;
+                // 日志级别是宿主本地文件，不在 Core 偏好里；读不到就按 info 显示。
+                s.log_level = log_level_index;
                 if hydrate_text {
                     s.history_max_entries = prefs
                         .history_max_entries
@@ -5825,6 +6049,7 @@ mod linux_app {
             // stays a pure renderer; Core still owns the credential schema.
             vm.provider_editor = self.provider_editor_form.as_ref().map(|form| {
                 frontend::view_model::SettingsProviderEditor {
+                    siwc: form.siwc.clone(),
                     channel_id: form.channel_id.clone(),
                     is_asr: matches!(form.kind, openless_core::ChannelKind::Asr),
                     is_draft: self.editor_draft,
@@ -7299,6 +7524,12 @@ mod linux_app {
                     frontend::view_model::FrontendAction::SettingsToggle(field) => {
                         self.apply_settings_toggle(field);
                     }
+                    frontend::view_model::FrontendAction::SettingsAudioDsp(config) => {
+                        if let Some(preferences) = self.preferences.as_mut() {
+                            preferences.audio_dsp = config.normalized();
+                        }
+                        self.save_settings_if_dirty();
+                    }
                     frontend::view_model::FrontendAction::SettingsCombo(field, index) => {
                         if matches!(
                             field,
@@ -7601,6 +7832,16 @@ mod linux_app {
                                 }
                             }
                         }
+                    }
+                    frontend::view_model::FrontendAction::SettingsSiwc {
+                        action,
+                        registration_id,
+                    } => {
+                        if self.provider_switch_pending {
+                            continue;
+                        }
+                        self.draft_touched = true;
+                        self.request_siwc(action, registration_id);
                     }
                     frontend::view_model::FrontendAction::SettingsProviderSave => {
                         self.queue_provider_save();
@@ -8071,6 +8312,7 @@ mod linux_app {
             Core::Volcengine => Ui::Volcengine,
             Core::Xfyun => Ui::Xfyun,
             Core::OAuth => Ui::OAuth,
+            Core::Siwc => Ui::Siwc,
             Core::TencentCloud => Ui::TencentCloud,
             Core::ApiKey | Core::EndpointModelOptionalApiKey | Core::ApiKeyUnlessCustomEndpoint => {
                 Ui::ApiKey
@@ -8186,7 +8428,9 @@ mod linux_app {
             .rename_channel(editor.kind, channel_id.to_string(), editor.name)
             .await?;
         match editor.descriptor.auth_requirement {
-            openless_core::AuthRequirement::None | openless_core::AuthRequirement::OAuth => {}
+            openless_core::AuthRequirement::None
+            | openless_core::AuthRequirement::OAuth
+            | openless_core::AuthRequirement::Siwc => {}
             openless_core::AuthRequirement::Volcengine => {
                 write_or_remove_provider_value(
                     &backend,
@@ -8363,7 +8607,9 @@ mod linux_app {
         editor: &ProviderEditor,
     ) -> Result<(), BackendError> {
         let accounts: &[&str] = match editor.descriptor.auth_requirement {
-            openless_core::AuthRequirement::None | openless_core::AuthRequirement::OAuth => &[],
+            openless_core::AuthRequirement::None
+            | openless_core::AuthRequirement::OAuth
+            | openless_core::AuthRequirement::Siwc => &[],
             openless_core::AuthRequirement::Volcengine => &[
                 openless_core::credentials::VOLCENGINE_APP_KEY_ACCOUNT,
                 openless_core::credentials::VOLCENGINE_ACCESS_KEY_ACCOUNT,
@@ -8573,9 +8819,9 @@ mod linux_app {
         // 用户能看到「这里有东西」。之前这里写死成空串，编辑已有渠道时密钥框永远空白，
         // 看起来像没保存。
         let (primary_account, secondary_account) = match descriptor.auth_requirement {
-            openless_core::AuthRequirement::None | openless_core::AuthRequirement::OAuth => {
-                (None, None)
-            }
+            openless_core::AuthRequirement::None
+            | openless_core::AuthRequirement::OAuth
+            | openless_core::AuthRequirement::Siwc => (None, None),
             openless_core::AuthRequirement::Volcengine => {
                 if auth_mode == "api_key" {
                     (
@@ -10112,8 +10358,9 @@ Internal flags (set by OpenLess itself, not for regular use):
         let tray_available = tray.is_some();
         let native = (|| {
             let mut config = backend_config()?;
-            if let Err(error) = openless_linux_egui::init_file_logger(&config.data_dir) {
-                eprintln!("OpenLess file logger unavailable: {error}");
+            match openless_linux_egui::init_file_logger(&config.data_dir) {
+                Ok(_) => log::info!("[startup] single-instance lock acquired; running as primary"),
+                Err(error) => eprintln!("OpenLess file logger unavailable: {error}"),
             }
             if let Some(error) = tray_error {
                 // 没有托盘 ⇒ 关窗就退出：这是用户行为差异，必须写进启动日志。
@@ -10260,6 +10507,134 @@ Internal flags (set by OpenLess itself, not for regular use):
             ) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
                 Box::pin(async { Ok(()) })
             }
+        }
+
+        #[test]
+        fn startup_logging_records_forwarded_intents_without_rotating_again() {
+            use std::io::Write;
+
+            const CHILD_ENV: &str = "OPENLESS_STARTUP_LOG_TEST_CHILD";
+            const TEST: &str = "linux_app::tests::startup_logging_records_forwarded_intents_without_rotating_again";
+            if std::env::var_os(CHILD_ENV).as_deref() != Some(std::ffi::OsStr::new("1")) {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+                    .env(CHILD_ENV, "1")
+                    .env_remove("OPENLESS_LOG")
+                    .env_remove("RUST_LOG")
+                    .output()
+                    .expect("launch isolated startup logging regression");
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(output.status.success(), "{stdout}\n{stderr}");
+                assert!(
+                    stdout.contains("test result: ok. 1 passed; 0 failed"),
+                    "{stdout}"
+                );
+                return;
+            }
+            let root = tempfile::tempdir().unwrap();
+            for key in [
+                "XDG_DATA_HOME",
+                "XDG_CONFIG_HOME",
+                "XDG_CACHE_HOME",
+                "XDG_RUNTIME_DIR",
+            ] {
+                std::env::set_var(key, root.path());
+            }
+            let runtime_dir = root.path().join("runtime");
+            let data_dir = root.path().join("data");
+            std::fs::create_dir_all(&runtime_dir).unwrap();
+            std::fs::create_dir_all(data_dir.join("logs")).unwrap();
+            let path = openless_linux_egui::log_path(&data_dir);
+            let old_log = vec![b'o'; 2 * 1024 * 1024 + 1];
+            std::fs::write(&path, &old_log).unwrap();
+            let args = vec!["openless".to_string()];
+            let primary = match acquire_broker(&runtime_dir, &args).unwrap() {
+                BrokerAcquisition::Primary(broker) => Arc::new(broker),
+                BrokerAcquisition::Forwarded => panic!("the first launch must be primary"),
+            };
+            openless_linux_egui::init_file_logger(&data_dir).unwrap();
+            assert!(std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("Linux egui logger ready:"));
+
+            let mut app = fixture_app(false);
+            let host_actions = Arc::new(openless_linux_egui::LinuxHostActions::default());
+            let mut dependencies = openless_core::BackendDependencies::unsupported();
+            dependencies.host_actions = host_actions.clone();
+            dependencies.credential_store =
+                Arc::new(openless_core::InMemoryCredentialStore::default());
+            dependencies.services.remote_input = Arc::new(
+                openless_core::RemoteInputService::new(
+                    Arc::new(openless_core::testing::RecordingRemoteInputRuntime::default()),
+                    8443,
+                    "en",
+                )
+                .unwrap(),
+            );
+            let backend = Arc::new(
+                openless_core::OpenLessBackend::new(
+                    BackendConfig {
+                        data_dir: data_dir.clone(),
+                        ..Default::default()
+                    },
+                    dependencies,
+                )
+                .unwrap(),
+            );
+            let runtime = openless_linux_egui::LinuxBackendRuntime {
+                backend: backend.clone(),
+                host_actions,
+                settings_runtime: Arc::new(openless_core::settings::NoopSettingsRuntime),
+            };
+            app.native = Some(
+                app.tokio
+                    .block_on(LinuxNativeRuntime::start(
+                        runtime,
+                        Some(primary.clone()),
+                        None,
+                    ))
+                    .unwrap(),
+            );
+            app.snapshot = Some(backend.snapshot());
+            app.preferences = Some(backend.get_preferences());
+            // 只测试 QA 的收起分支，不创建真实弹窗或启动录音。
+            app.qa_visible = true;
+
+            let mut active = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            active.write_all(&vec![b'x'; 2 * 1024 * 1024 + 1]).unwrap();
+            active.write_all(b"\nactive-file-marker\n").unwrap();
+            drop(active);
+            for args in [
+                args,
+                vec!["openless".to_string(), "--toggle-qa".to_string()],
+            ] {
+                assert!(matches!(
+                    acquire_broker(&runtime_dir, &args).unwrap(),
+                    BrokerAcquisition::Forwarded
+                ));
+            }
+            app.poll(&egui::Context::default());
+            log::logger().flush();
+            let text = std::fs::read_to_string(&path).unwrap();
+            for intent in ["ShowMain", "Cli(ToggleQa)"] {
+                let message = format!("[ui-host] launch intent from the user: {intent}");
+                assert_eq!(text.matches(&message).count(), 1, "{message}");
+            }
+            assert!(text.contains("active-file-marker"));
+            assert!(app.window.should_be_open);
+            assert!(!app.qa_visible);
+            assert_eq!(
+                std::fs::read(data_dir.join("logs/openless.log.1")).unwrap(),
+                old_log
+            );
+            assert!(!data_dir.join("logs/openless.log.2").exists());
+            assert!(!data_dir.join("logs/openless.log.3").exists());
+            drop(app);
+            drop(primary);
         }
 
         #[test]

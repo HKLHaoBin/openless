@@ -151,6 +151,7 @@ pub(crate) fn backend_dependencies(
             openless_core::AudioProcessingConfig {
                 enhancement_enabled: prefs.audio_enhancement_enabled,
                 echo_cancellation_enabled: prefs.echo_cancellation_enabled,
+                dsp: prefs.audio_dsp,
             },
         );
     }
@@ -1605,13 +1606,6 @@ fn map_permission_state(
     }
 }
 
-fn current_permission_snapshot() -> openless_core::PermissionSnapshot {
-    openless_core::PermissionSnapshot {
-        microphone: map_permission_state(crate::permissions::check_microphone()),
-        accessibility: map_permission_state(crate::permissions::check_accessibility()),
-    }
-}
-
 impl openless_core::PlatformApi for TauriPlatformApi {
     fn capabilities(
         &self,
@@ -1649,13 +1643,26 @@ impl openless_core::PlatformApi for TauriPlatformApi {
     fn microphone_permission(
         &self,
     ) -> BoxFuture<'static, Result<openless_core::PermissionSnapshot, BackendError>> {
-        Box::pin(async { Ok(current_permission_snapshot()) })
+        Box::pin(async {
+            Ok(openless_core::PermissionSnapshot {
+                microphone: map_permission_state(crate::permissions::check_microphone()),
+                accessibility: map_permission_state(crate::permissions::check_accessibility()),
+            })
+        })
     }
 
     fn accessibility_permission(
         &self,
     ) -> BoxFuture<'static, Result<openless_core::PermissionSnapshot, BackendError>> {
-        Box::pin(async { Ok(current_permission_snapshot()) })
+        // Windows microphone checks open a temporary native input stream. The UI queries
+        // both permissions concurrently, so querying the microphone here would open a
+        // second stream solely to discard its result in check_accessibility_permission.
+        Box::pin(async {
+            Ok(openless_core::PermissionSnapshot {
+                microphone: openless_core::PermissionState::Unknown,
+                accessibility: map_permission_state(crate::permissions::check_accessibility()),
+            })
+        })
     }
 
     fn request_microphone_permission(&self) -> BoxFuture<'static, Result<(), BackendError>> {
@@ -2002,6 +2009,7 @@ impl openless_core::VoiceActivationRuntime for TauriVoiceActivationRuntime {
             let audio_processing = openless_core::AudioProcessingConfig {
                 enhancement_enabled: preferences_snapshot.audio_enhancement_enabled,
                 echo_cancellation_enabled: preferences_snapshot.echo_cancellation_enabled,
+                dsp: preferences_snapshot.audio_dsp,
             };
             if let Some(wake_asr) = wake_asr.as_ref() {
                 warm_hub.set_activation_generation(config.activation_generation);
@@ -2267,6 +2275,7 @@ impl openless_core::VoiceActivationHandle for TauriVoiceActivationHandle {
                     openless_core::AudioProcessingConfig {
                         enhancement_enabled: prefs.audio_enhancement_enabled,
                         echo_cancellation_enabled: prefs.echo_cancellation_enabled,
+                        dsp: prefs.audio_dsp,
                     },
                 );
             }
@@ -3576,6 +3585,11 @@ impl TauriAudioRecorder {
                 request.microphone_device_name.clone(),
                 request.audio_processing,
             ) {
+                log::info!(
+                    "[audio-startup] press={} mode=warm_hub arm_done_us={}",
+                    request.press_id,
+                    request.pressed_at.elapsed().as_micros()
+                );
                 return Ok(Box::new(TauriPendingAudioCapture {
                     app: Arc::clone(&self.app),
                     backend: Arc::clone(&self.backend),
@@ -3609,6 +3623,12 @@ impl TauriAudioRecorder {
                 return Err(map_recorder_error(error));
             }
         };
+        log::info!(
+            "[audio-startup] press={} capture={} mode=cold arm_done_us={}",
+            request.press_id,
+            staged.capture_id(),
+            request.pressed_at.elapsed().as_micros()
+        );
         Ok(Box::new(TauriPendingAudioCapture {
             app: Arc::clone(&self.app),
             backend: Arc::clone(&self.backend),
@@ -3812,6 +3832,7 @@ impl AudioRecorder for TauriAudioRecorder {
 }
 
 fn map_recorder_error(error: RecorderError) -> BackendError {
+    log::error!("[recorder] capture failed: {error}");
     let code = match error {
         RecorderError::PermissionDenied => BackendErrorCode::PermissionDenied,
         RecorderError::NoInputDevice | RecorderError::EngineFailed(_) => BackendErrorCode::Platform,
@@ -4102,6 +4123,9 @@ impl CoreTextInserter for TauriTextInserter {
                 )
                 .await?;
                 previous_input_source = previous;
+                // Keep ABC asserted for every batch: reactivating the target
+                // can make macOS re-apply the document's CJK input source.
+                crate::unicode_keystroke::set_streaming_ascii_guard(Some(app_handle.clone()));
                 Some(worker)
             } else {
                 None
@@ -4830,6 +4854,8 @@ impl TauriTextInsertionSession {
     async fn restore_platform_state(&self) -> Result<(), BackendError> {
         #[cfg(target_os = "macos")]
         {
+            // Drop the guard first or it would fight the restore below.
+            crate::unicode_keystroke::set_streaming_ascii_guard::<tauri::Wry>(None);
             let previous_input_source = self.previous_input_source.lock().take();
             crate::unicode_keystroke::restore_input_source(&self.app, previous_input_source)
                 .await
@@ -5358,10 +5384,12 @@ impl HostActions for TauriHostActions {
             HostAction::ShowSelectionPreview => crate::show_selection_polish_preview(&app),
             HostAction::HideSelectionPreview => crate::hide_selection_polish_preview(&app),
             HostAction::ShowQa => {
+                self.qa_context.set_voice_surface_active(true);
                 self.qa_context.prepare_show();
                 crate::show_qa_window(&app, "idle");
             }
             HostAction::HideQa => {
+                self.qa_context.set_voice_surface_active(false);
                 self.qa_context.clear();
                 crate::hide_qa_window(&app);
             }

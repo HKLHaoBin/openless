@@ -1,3 +1,4 @@
+import { siwcZhTW as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 
 // Traditional Chinese resources, sharing the same copy keys as the other seven locales.
@@ -5,6 +6,7 @@ import { uiRefinementZhTW as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhTW as experimentalAsr } from './experimentalAsr';
 
 export const zhTW: typeof zhCN = {
+  siwc,
   experimentalAsr,
   uiRefinement,
   voiceEdit: {
@@ -290,6 +292,8 @@ export const zhTW: typeof zhCN = {
     cancelled: '已取消',
     error: '出錯了',
     inserted: '已插入 {{count}}',
+    translateTo: '翻譯為',
+    translationChangeFailed: '語言切換失敗，請重新選擇。',
     translating: '正在翻譯',
     selectionPolish: {
       polishing: '正在潤色...',
@@ -319,6 +323,12 @@ export const zhTW: typeof zhCN = {
     cancel: '取消',
   },
   qa: {
+    activity: {
+      searchingWeb: '正在搜尋網頁',
+      readingWeb: '正在閱讀網頁',
+      usingTool: '正在使用 {{tool}}',
+      tool: '工具',
+    },
     compact: {
       closeError: '關閉失敗，請重試。',
       sendError: '傳送失敗，輸入已保留，請重試。',
@@ -331,7 +341,7 @@ export const zhTW: typeof zhCN = {
       answer: 'OpenLess 回答',
       layoutError: '視窗展開失敗，請關閉後重新開啟。',
     },
-    title: '劃詞追問',
+    title: '問任何問題',
     headerHint: '隨時提問',
     thinking: '思考中…',
     error: '出錯了，請稍後再試。',
@@ -468,7 +478,7 @@ export const zhTW: typeof zhCN = {
     style: '風格',
     marketplace: '風格市場',
     translation: '翻譯',
-    selectionAsk: '劃詞追問',
+    selectionAsk: '問任何問題',
     quickNote: '速記',
     corrections: '糾正規則',
     polishMode: '潤色模式',
@@ -1152,8 +1162,20 @@ export const zhTW: typeof zhCN = {
       fallbackDesc: '翻譯失敗時回退為插入原始轉寫，不會丟字。',
     },
   },
+  askAnything: {
+    dictation: '口述',
+    translation: '翻譯',
+    question: '問任何問題',
+    dictationHint: '說出想法，直接輸入文字',
+    translationHint: '錄音時切換目標語言',
+    questionHint: '選取文字，或直接說出問題',
+    description: '按組合鍵開始提問，再按一次送出。回答會顯示在螢幕下方。',
+    auxiliaryKey: '提問附加鍵',
+    auxiliaryHint: '與錄音鍵 {{key}} 一起按下；修改錄音鍵後會自動跟隨。',
+    selectionHint: '選取文字會作為本次問題的上下文；沒有選取文字也可以提問。每次組合鍵開始新問題。',
+  },
   selectionAsk: {
-    title: '劃詞追問',
+    title: '問任何問題',
     desc: '選中文字後語音提問，支援多輪追問。',
     shortcutSettings: '快捷鍵設定',
     guide: {
@@ -1427,7 +1449,6 @@ export const zhTW: typeof zhCN = {
       microphoneMonitorError: '輸入電平監聽失敗：{{message}}',
       capsuleLabel: '錄音膠囊',
       capsuleDesc: '錄音 / 轉寫時在螢幕底部顯示半透明膠囊。',
-      capsuleStyleTypeless: 'Typeless 傳統風格',
       capsuleTranscriptLabel: '顯示串流原文',
       capsuleTranscriptDesc:
         '在膠囊中顯示語音辨識原文，取代音訊條；關閉後恢復原有顯示。非串流辨識將於結果傳回後顯示。',
@@ -1443,18 +1464,44 @@ export const zhTW: typeof zhCN = {
         '從所有螢幕顯示切換需要重新啟動軟體，才能清理先前的膠囊視窗。現在重新啟動嗎？',
       capsuleStyleLabel: '膠囊樣式',
       capsuleStyleSiri: '流光 Siri 風格',
-      capsuleStyleClassic: 'Openless 預設風格',
+      capsuleStyleClassic: 'OpenLess 預設風格',
       stableTranscriptionLabel: '穩定模式（先錄音後辨識）',
       stableTranscriptionDesc:
         '開啟後，錄音期間不連接 ASR，停止後才提交整段音訊。結果會較晚出現，但錄音不受連線延遲和錄音期間的網路波動影響。',
       lowLatencyDictationLabel: '低延遲錄音',
       lowLatencyDictationDesc:
         '保持麥克風串流就緒，並在記憶體中保留最多 500 毫秒音訊，減少按下熱鍵後第一句話被漏辨識的情況。確認錄音前不會儲存或上傳音訊；此模式會增加耗電並保持系統麥克風指示燈亮起。',
-      audioEnhancementLabel: '輕量麥克風增強',
-      audioEnhancementDesc: '對本機麥克風套用輕量降噪、增益與軟限幅，不包含回聲消除。預設關閉。',
+      dsp: {
+        title: '語音增強設定',
+        description: 'RNNoise 更輕量；PureVox 模型降噪耗時較高。設定於下一次錄音生效。',
+        noise: '降噪演算法',
+        dereverb: '梳狀濾波',
+        equalizer: '等化器',
+        gain: '輸入增益',
+        agc: '自動增益',
+        vad: '語音閾值',
+        off: '關閉降噪',
+        spectral: '頻譜減法',
+        strength: '降噪強度',
+        target: '目標電平',
+        attack: '啟動速度',
+        decay: '釋放速度',
+        vadHint: '衰減低音量片段，不會停止錄音。閾值過高可能丟失輕聲。',
+        threshold: '語音閾值',
+        tone: '音色與房間調整',
+        combHint: '梳狀濾波沿用 MicYou 的簡單延遲相減，可能改變音色，建議從 0% 開始。',
+        preamp: '等化器前置增益',
+        order: '處理順序',
+        up: '上移',
+        down: '下移',
+        reset: '恢復增強預設設定',
+      },
       echoCancellationLabel: '播放回聲抑制',
       echoCancellationDesc:
-        '在保持系統播放聲音的同時，使用桌面音訊輸出作為參考抑制回聲。此功能為盡力而為，部分裝置、藍牙路徑或 Linux ALSA 環境可能不可用。',
+        '保持系統聲音播放，使用本機播放參考抑制回聲。macOS 需 14.6 或更新版本及系統音訊錄製權限；不支援的裝置、藍牙路徑或 Linux ALSA 環境改用一般麥克風錄音。下次開始擷取時生效。',
+      audioEnhancementLabel: '語音增強',
+      audioEnhancementDesc:
+        '套用 RNNoise 或 PureVox 降噪、自動增益和限幅。預設關閉，設定於下一次錄音生效。',
       muteDuringRecordingLabel: '錄音時靜音',
       muteDuringRecordingDesc: '錄音期間臨時靜音系統輸出，避免揚聲器迴音。',
       audioCueLabel: '錄音提示音',
@@ -1656,6 +1703,7 @@ export const zhTW: typeof zhCN = {
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',
+        chatgptSiwc: 'ChatGPT Plan',
         mimo: '小米 MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（免費模型）',
@@ -1738,8 +1786,9 @@ export const zhTW: typeof zhCN = {
       volcengineAuthModeApiKey: '新版控制檯 API Key',
       volcengineMappingNote:
         'Secret Key 當前無需填寫。Resource ID 預設使用 volc.seedasr.sauc.duration。',
-      volcengineApiKeyNote:
-        '使用新版語音控制檯建立的 API Key 鑑權，無需 APP ID。API Key 可在語音控制檯「API Key 管理」建立：console.volcengine.com/speech/new/setting/apikeys。Resource ID 預設使用 volc.seedasr.sauc.duration。',
+      volcengineApiKeyConsole: '豆包語音 · API Key 管理',
+      volcengineApiKeyNote: '使用此處建立的 API Key 鑑權，請勿使用方舟金鑰。',
+      volcengineResourceIdNote: 'Resource ID 預設使用 {{resourceId}}。',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:

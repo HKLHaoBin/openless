@@ -79,11 +79,18 @@ redistribution, which is also why it is fetched at job time rather than vendored
 | AppGallery 正式版 | `OpenLess_harmony_arm64-signed.hap` | `release.*` material | AppGallery only, never a Release asset |
 | 测试渠道 | `OpenLess_harmony_arm64-signed.hap` | `test.*` material | AppGallery test channel |
 
-Dispatch the workflow with `channel: release` (default) or `channel: test`; the
-input selects both the signing prefix (`release.cer/p7b/p12` vs
-`test.cer/p7b/p12`) and the AppGallery upload label. The workflow artifact
-bundle carries both packages, the Release step uploads only the unsigned pair,
-and the AppGallery step uploads only the signed one.
+Dispatch the workflow with `channel: none` (default), `channel: release` or
+`channel: test`:
+
+- `none` is the repository path. It builds the HAP, attaches the **unsigned**
+  package to the GitHub Release and touches neither the signing step nor the
+  store, so it needs no secret at all.
+- `release` / `test` select the signing prefix (`release.cer/p7b/p12` vs
+  `test.cer/p7b/p12`), sign, and upload to AppGallery.
+
+The workflow artifact bundle carries both packages; the Release step uploads only
+the unsigned pair, and the AppGallery step uploads only the signed one. CI never
+signs: `ci.yml` always builds with `OPENLESS_HARMONY_CHANNEL=none`.
 
 A local machine without store certificates can still produce a package:
 `OPENLESS_HARMONY_CHANNEL=none` builds and ships the unsigned HAP only, and
@@ -167,6 +174,69 @@ Before dispatching the Linux release build, additionally require all of the foll
 The HAP build reads everything from the environment; no key material is ever
 committed, cached or printed.
 
+### Where each piece comes from
+
+Everything below is done once, on a machine you trust, with your own HUAWEI
+developer account. Nothing here can be automated: AppGallery issues the material
+only to a verified developer, and it will not accept a self-signed substitute.
+
+| Step | Where | What you get |
+|---|---|---|
+| 1 | <https://developer.huawei.com> → 注册 + 实名认证（个人或企业） | an account that may create certificates |
+| 2 | AppGallery Connect → 我的项目 → 创建项目 → 添加应用（HarmonyOS，包名必须是 `openless.hm.com`，与 `harmony/AppScope/app.json5` 一致） | `APPGALLERY_APP_ID`（应用信息里的 APP ID） |
+| 3 | 本地：生成密钥库与证书请求 | `release.p12` + `release.csr` + 两个密码 |
+| 4 | AGC → 用户与访问 → 证书管理 → 申请证书（**发布证书**）→ 上传 `release.csr` | `release.cer` |
+| 5 | AGC → Profile 管理 → 申请 Profile（**发布 Profile**，绑定上面的证书与包名） | `release.p7b` |
+| 6 | AGC → 用户与访问 → API 密钥 → 创建客户端（勾选发布相关权限） | `APPGALLERY_CLIENT_ID` / `APPGALLERY_CLIENT_SECRET` |
+
+Step 3, without DevEco Studio:
+
+```bash
+keytool -genkeypair -keystore release.p12 -storetype PKCS12 \
+  -alias harmony-release -keyalg EC -groupname secp256r1 \
+  -sigalg SHA256withECDSA -validity 9125 \
+  -dname "CN=OpenLess, O=<你的组织>, C=CN"
+keytool -certreq -keystore release.p12 -alias harmony-release -file release.csr
+```
+
+Keep `release.p12` and both passwords offline; they are the only copy of the
+private key that AppGallery will trust.
+
+Before uploading anything, dry-run the material:
+
+```bash
+bash openless-all/app/scripts/check-harmony-signing.sh \
+  ~/.local/share/harmony/signing/release release
+```
+
+It proves the four things that fail late otherwise: the certificate belongs to
+the keystore key, the profile was issued for that certificate, `bundle-info.bundle-name`
+equals `harmony/AppScope/app.json5`, and nothing has expired. The workflow runs the
+same check before it starts building.
+
+### Storing them in the repository
+
+```bash
+base64 -w0 release.cer       # → HARMONY_RELEASE_CERT_BASE64
+base64 -w0 release.p7b       # → HARMONY_RELEASE_PROFILE_BASE64
+base64 -w0 release.p12       # → HARMONY_RELEASE_KEYSTORE_BASE64
+```
+
+`HARMONY_<CHANNEL>_*` names let production and test material coexist. The
+channel-agnostic `HARMONY_CERT_BASE64` / `HARMONY_PROFILE_BASE64` /
+`HARMONY_KEYSTORE_BASE64` are still accepted and are used when no
+channel-specific secret is set.
+
+### What the workflow does, and what it cannot do
+
+Automated: build → sign → verify the signature → upload as the AppGallery
+*candidate* package → attach the **unsigned** HAP to the GitHub Release.
+
+Manual, always: AGC requires a human to fill in the store listing (icon,
+screenshots, privacy-policy URL, 软件著作权, 分类与年龄分级) and to press
+提交审核. `scripts/upload-appgallery.mjs` deliberately stops at replacing the
+candidate package.
+
 | Kind | Name | Purpose |
 |---|---|---|
 | Secret | `HARMONY_KEYSTORE_BASE64` | base64 of the release `.p12` keystore |
@@ -174,8 +244,8 @@ committed, cached or printed.
 | Secret | `HARMONY_PROFILE_BASE64` | base64 of the release `.p7b` provisioning profile |
 | Secret | `HARMONY_KEYSTORE_PASSWORD` | keystore password |
 | Secret | `HARMONY_KEY_PASSWORD` | key password (falls back to the keystore password) |
-| Variable | `HARMONY_KEY_ALIAS` | key alias inside the keystore |
-| Variable | `HARMONY_TOOLCHAIN` | absolute path of the DevEco / HarmonyOS SDK on a self-hosted runner |
+| Variable (optional) | `HARMONY_KEY_ALIAS` | key alias inside the keystore; defaults to `harmony-<channel>` |
+| Variable (optional) | `HARMONY_TOOLCHAIN` | absolute path of the DevEco / HarmonyOS SDK on a self-hosted runner |
 | Variable (optional) | `HARMONY_SDK_URL` | override the tools archive URL |
 | Variable (optional) | `HARMONY_SDK_SHA256` | SHA-256 of that archive |
 
@@ -186,6 +256,13 @@ time matches the channel being built.
 | Secret | `APPGALLERY_CLIENT_ID` | AppGallery Connect API client id |
 | Secret | `APPGALLERY_CLIENT_SECRET` | AppGallery Connect API client secret |
 | Secret | `APPGALLERY_APP_ID` | AppGallery Connect app id of the HarmonyOS app |
+
+Nothing else has to be configured: the build downloads the official command-line
+tools from the checksum-pinned mirror, so a hosted runner needs no variable, no
+self-hosted machine and no Huawei account. The signing directory is exported by
+the workflow itself (`$RUNNER_TEMP/harmony-signing`) and must not be redeclared as
+an `env:` key - YAML `env` outranks `$GITHUB_ENV`, so an empty placeholder would
+shadow it and the build would fall back to a directory that does not exist.
 
 The upload replaces the candidate package in AppGallery Connect; it never submits
 the app for review, because AGC requires a human submission. Without the

@@ -195,6 +195,7 @@ pub enum FrontendAction {
     TranslationSetTarget(String),
     /// Settings toggle changed.
     SettingsToggle(SettingsField),
+    SettingsAudioDsp(openless_core::AudioDspConfig),
     /// Settings combo index changed.
     SettingsCombo(SettingsComboField, usize),
     /// Settings text field changed.
@@ -236,6 +237,10 @@ pub enum FrontendAction {
     SettingsProviderField(SettingsProviderField, String),
     /// Save the editor: rename + endpoint/model + credentials through Core.
     SettingsProviderSave,
+    SettingsSiwc {
+        action: String,
+        registration_id: Option<String>,
+    },
     SettingsOmni(openless_linux_egui::omni_settings::OmniAction),
     /// Encrypted cloud sync card (enable/unlock/restore/delete/custom server).
     SettingsCloudSync(openless_linux_egui::cloud_sync_ui::CloudSyncAction),
@@ -436,6 +441,7 @@ pub enum SettingsProviderAuth {
     None,
     /// OAuth is driven by Core; the editor only explains it.
     OAuth,
+    Siwc,
     /// Volcengine: APP ID + Access Token, or API Key + Resource ID.
     Volcengine,
     /// Xfyun: AppID + API Key.
@@ -448,10 +454,19 @@ pub enum SettingsProviderAuth {
     ApiKey,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct SettingsSiwcState {
+    pub status: openless_core::siwc::SiwcStatus,
+    pub models: Vec<openless_core::siwc::SiwcModel>,
+    pub message: Option<String>,
+}
+
 /// The open channel editor. Hydrated once per load from Core, then driven by
 /// the host-side draft so typing is never clobbered by a re-read.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct SettingsProviderEditor {
+    #[serde(default)]
+    pub siwc: Option<SettingsSiwcState>,
     pub channel_id: String,
     /// 渠道种类：弹窗副标题在「文字处理渠道 / 语音识别渠道」之间切换。
     pub is_asr: bool,
@@ -535,7 +550,7 @@ pub enum SettingsField {
     MuteWhileRecording,
     /// 轻量本机麦克风增益与软限幅。
     AudioEnhancement,
-    /// 使用桌面播放参考进行尽力而为的回声抑制。
+    /// 使用桌面播放参考进行回声抑制。
     EchoCancellation,
     RecordAudioForDebug,
     ActivityHeatmap,
@@ -571,6 +586,9 @@ pub enum SettingsComboField {
     SelectionVoicePlanFormat,
     /// Less Computer 权限模式（0 = 放行, 1 = 只读/计划, 2 = 默认, 3 = 完全放行）。
     CodingAgentPermission,
+    /// 日志级别：0 = info，1 = debug，2 = trace。写 `<data_dir>/logs/level`，
+    /// 重启后生效；不是 Core 偏好，所以不上云、不影响 Tauri。
+    LogLevel,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
@@ -1179,6 +1197,7 @@ pub struct SettingsFields {
     pub mute_while_recording: bool,
     pub audio_enhancement: bool,
     pub echo_cancellation: bool,
+    pub audio_dsp: openless_core::AudioDspConfig,
     pub audio_cue: bool,
     /// 录音胶囊开关与样式（Tauri `capsuleLabel` / `capsuleStyleLabel`）。
     pub show_capsule: bool,
@@ -1188,6 +1207,8 @@ pub struct SettingsFields {
     #[serde(default)]
     pub llm_thinking_enabled: bool,
     pub record_audio_for_debug: bool,
+    /// 日志级别：0 = info，1 = debug，2 = trace。宿主本地设置，不进 Core 偏好。
+    pub log_level: usize,
     pub history_max_entries: String,
     /// 风格直达快捷键（可录制/停用/移除）。
     pub style_pack_hotkeys: Vec<StylePackHotkeyRow>,
@@ -1248,6 +1269,7 @@ impl Default for SettingsFields {
             mute_while_recording: false,
             audio_enhancement: false,
             echo_cancellation: false,
+            audio_dsp: Default::default(),
             audio_cue: false,
             show_capsule: true,
             capsule_style: 0,
@@ -1255,6 +1277,7 @@ impl Default for SettingsFields {
             capsule_transcript_font_size: 14,
             llm_thinking_enabled: false,
             record_audio_for_debug: false,
+            log_level: 0,
             history_max_entries: String::new(),
             style_pack_hotkeys: Vec::new(),
             polish_context_window: String::new(),

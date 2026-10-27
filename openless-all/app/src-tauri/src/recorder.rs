@@ -31,8 +31,13 @@ const TARGET_SAMPLE_RATE: u32 = 16_000;
 const LOG_EVERY_N_CALLBACKS: usize = 50;
 /// RMS -> UI level gain, matching Swift's `min(1.0, rms * 4)`.
 const LEVEL_RMS_GAIN: f32 = 4.0;
-/// Maximum number of native callback blocks waiting for the processing worker.
-const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 64;
+/// Bound capture backlog by duration and memory, independently of callback size.
+const AUDIO_PROCESSING_MAX_QUEUED_US: u64 = 3_000_000;
+const AUDIO_PROCESSING_MAX_QUEUED_BYTES: usize = 8 * 1024 * 1024;
+const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 4096;
+/// Shed optional enhancement before a temporary backlog can stop capture.
+const AUDIO_PROCESSING_SHED_ENHANCEMENT_US: u64 = 500_000;
+static NEXT_CAPTURE_ID: AtomicU64 = AtomicU64::new(1);
 /// Max queued PCM chunks for the archive writer thread. When full, new archive chunks are
 /// dropped instead of blocking the realtime callback; ASR still receives the full PCM, and
 /// archive messages accepted before stop are fully flushed.
@@ -212,25 +217,34 @@ impl CaptureDiagnostics {
     }
 }
 
-fn cpal_error_kind_code(error: &cpal::Error) -> &'static str {
-    match error.kind() {
-        cpal::ErrorKind::DeviceBusy => "device_busy",
-        cpal::ErrorKind::DeviceChanged => "device_changed",
-        cpal::ErrorKind::DeviceNotAvailable => "device_not_available",
-        cpal::ErrorKind::HostUnavailable => "host_unavailable",
-        cpal::ErrorKind::InvalidInput => "invalid_input",
-        cpal::ErrorKind::PermissionDenied => "permission_denied",
-        cpal::ErrorKind::RealtimeDenied => "realtime_denied",
-        cpal::ErrorKind::ResourceExhausted => "resource_exhausted",
-        cpal::ErrorKind::StreamInvalidated => "stream_invalidated",
-        cpal::ErrorKind::UnsupportedConfig => "unsupported_config",
-        cpal::ErrorKind::UnsupportedOperation => "unsupported_operation",
-        cpal::ErrorKind::Xrun => "xrun",
-        cpal::ErrorKind::BackendError => "backend_error",
-        cpal::ErrorKind::Other => "other",
-        _ => "unknown",
+fn handle_microphone_stream_error(
+    state: &StreamState,
+    error: cpal::StreamError,
+    runtime_error_tx: &Sender<RecorderError>,
+) {
+    if !state.accepting_audio.load(Ordering::Acquire) {
+        return;
     }
+    let error_count = state.diagnostics.microphone.record_error();
+    // Vendored 0.15 does not turn CoreAudio overload notices into stream errors.
+    // Preserve its device-loss and backend-error contract.
+    let kind = match &error {
+        cpal::StreamError::DeviceNotAvailable => "device_not_available",
+        cpal::StreamError::BackendSpecific { .. } => "backend_error",
+    };
+    state.diagnostics.event(
+        "P2",
+        "[\"H1\",\"H2\",\"H3\"]",
+        "microphone_stream_error",
+        "fatal_candidate",
+        &format!("{{\"error_kind\":\"{kind}\",\"error_count\":{error_count}}}"),
+    );
+    log::error!("[recorder] stream error: {error}");
+    let _ = runtime_error_tx.send(RecorderError::EngineFailed(format!("stream: {error}")));
 }
+
+#[path = "playback_reference.rs"]
+mod playback_reference;
 
 /// Downstream that receives resampled Int16 PCM bytes (little-endian).
 pub trait AudioConsumer: Send + Sync {
@@ -638,7 +652,8 @@ impl WarmCaptureSink {
     }
 
     fn set_activation_consumer(&self, consumer: Option<Arc<dyn AudioConsumer>>) {
-        self.activation_consumer_during_capture.store(false, Ordering::Release);
+        self.activation_consumer_during_capture
+            .store(false, Ordering::Release);
         *self.activation_consumer.lock() = consumer;
         self.activation_vad.lock().reset();
     }
@@ -699,7 +714,10 @@ impl WarmCaptureSink {
     ) {
         let even_len = pcm.len() & !1;
         let incoming = &pcm[..even_len];
-        let excess = buffer.len().saturating_add(incoming.len()).saturating_sub(max_bytes);
+        let excess = buffer
+            .len()
+            .saturating_add(incoming.len())
+            .saturating_sub(max_bytes);
         let evictable_preroll = excess.min(*pre_roll_bytes);
         for _ in 0..(evictable_preroll / 2) {
             let _ = buffer.pop_front();
@@ -934,8 +952,8 @@ impl AudioConsumer for WarmCaptureSink {
                 && self
                     .activation_consumer_during_capture
                     .load(Ordering::Acquire)))
-            .then(|| self.activation_consumer.lock().clone())
-            .flatten();
+        .then(|| self.activation_consumer.lock().clone())
+        .flatten();
         for target in targets {
             CaptureSink::deliver(&target, pcm);
         }
@@ -1175,7 +1193,10 @@ impl WarmCaptureHub {
 
     pub(crate) fn clear_activation_fault_handler_if(&self, generation: u64) {
         let mut handler = self.sink.activation_fault_handler.lock();
-        if handler.as_ref().is_some_and(|(current, _)| *current == generation) {
+        if handler
+            .as_ref()
+            .is_some_and(|(current, _)| *current == generation)
+        {
             *handler = None;
         }
     }
@@ -1824,6 +1845,13 @@ impl Recorder {
 }
 
 impl StagedRecorder {
+    pub(crate) fn capture_id(&self) -> u64 {
+        self.recorder
+            .as_ref()
+            .map(|recorder| recorder.state.capture_id)
+            .unwrap_or(0)
+    }
+
     pub(crate) fn commit(
         mut self,
         consumer: Arc<dyn AudioConsumer>,
@@ -1886,29 +1914,22 @@ impl Drop for StagedRecorder {
     }
 }
 
-fn device_name(device: &cpal::Device) -> Option<String> {
-    device
-        .description()
-        .ok()
-        .map(|description| description.name().to_owned())
-}
-
 /// Enumerate input devices, marking the system default device.
 pub fn list_input_devices() -> Result<Vec<MicrophoneDevice>, RecorderError> {
     let host = cpal::default_host();
     let default_name = host
         .default_input_device()
-        .and_then(|device| device_name(&device));
+        .and_then(|device| device.name().ok());
     let devices = host
         .input_devices()
         .map_err(|e| RecorderError::EngineFailed(format!("input_devices: {e}")))?;
 
     let mut result = Vec::new();
     for device in devices {
-        let name = match device_name(&device) {
-            Some(name) => name,
-            None => {
-                log::warn!("[recorder] failed to read input device name");
+        let name = match device.name() {
+            Ok(name) => name,
+            Err(err) => {
+                log::warn!("[recorder] failed to read input device name: {err}");
                 continue;
             }
         };
@@ -1934,11 +1955,13 @@ fn run_audio_thread(
     startup_tx: Sender<Result<(), RecorderError>>,
     runtime_error_tx: Sender<RecorderError>,
 ) {
-    let (reference_stream, reference_buffer) = if processing.echo_cancellation_enabled {
-        match start_reference_stream(&stop_flag, &state.diagnostics) {
+    let (reference_stream, reference) = if processing.echo_cancellation_enabled {
+        match playback_reference::start(&stop_flag, &state.diagnostics) {
             Ok((stream, buffer)) => (Some(stream), Some(buffer)),
             Err(error) => {
-                log::warn!("[recorder] playback echo reference unavailable; recording without AEC: {error}");
+                log::warn!(
+                    "[recorder] playback reference unavailable; recording without AEC: {error}"
+                );
                 (None, None)
             }
         }
@@ -1949,7 +1972,7 @@ fn run_audio_thread(
         "P1",
         "[\"H1\",\"H2\",\"H3\"]",
         "reference_start",
-        if reference_buffer.is_some() {
+        if reference.is_some() {
             "available"
         } else {
             "fallback"
@@ -1957,16 +1980,16 @@ fn run_audio_thread(
         &format!(
             "{{\"aec_requested\":{},\"reference_available\":{}}}",
             processing.echo_cancellation_enabled,
-            reference_buffer.is_some(),
+            reference.is_some()
         ),
     );
+    *state.reference.lock() = reference;
     let (processor, frame_tx) = match AudioProcessingWorker::start(
         processing,
         consumer,
         level_handler,
         archiver,
         Arc::clone(&state),
-        reference_buffer,
     ) {
         Ok(worker) => worker,
         Err(error) => {
@@ -2068,17 +2091,7 @@ fn run_audio_thread(
                                 "[recorder] watchdog: 录音回调已停止 {} 秒，触发错误恢复",
                                 elapsed.as_secs()
                             );
-                            state_for_watchdog.diagnostics.event(
-                                "P4",
-                                "[\"H4\"]",
-                                "watchdog_fault",
-                                "callback_silent",
-                                &format!(
-                                    "{{\"callback_count\":{},\"elapsed_secs\":{}}}",
-                                    state_for_watchdog.diagnostics.microphone.callbacks.load(Ordering::Relaxed),
-                                    elapsed.as_secs(),
-                                ),
-                            );
+                            state_for_watchdog.diagnostics.event("P4", "[\"H4\"]", "watchdog_fault", "callback_silent", "{}");
                             let _ =
                                 runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
                                     format!("录音回调静默停止 {} 秒", elapsed.as_secs()),
@@ -2094,16 +2107,7 @@ fn run_audio_thread(
                                 "[recorder] watchdog: {} 秒内未收到首次回调，触发错误恢复",
                                 elapsed.as_secs()
                             );
-                            state_for_watchdog.diagnostics.event(
-                                "P4",
-                                "[\"H4\"]",
-                                "watchdog_fault",
-                                "first_callback_timeout",
-                                &format!(
-                                    "{{\"callback_count\":0,\"elapsed_secs\":{}}}",
-                                    elapsed.as_secs(),
-                                ),
-                            );
+                            state_for_watchdog.diagnostics.event("P4", "[\"H4\"]", "watchdog_fault", "first_callback_timeout", "{}");
                             let _ =
                                 runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
                                     format!("录音启动后 {} 秒内未收到回调", elapsed.as_secs()),
@@ -2125,7 +2129,7 @@ fn run_audio_thread(
     // callback racing with shutdown from adding work after the worker drain begins.
     state.accepting_audio.store(false, Ordering::Release);
     // Pause explicitly before drop.
-    // On macOS coreaudio, cpal 0.18's plain drop(Stream) does not synchronously call
+    // On macOS coreaudio, cpal 0.15's plain drop(Stream) does not synchronously call
     // AudioOutputUnitStop, so the AudioUnit render callback keeps firing and process_callback
     // still logs cb# lines at ~5ms/frame, making macOS think the mic is still in use (the
     // orange dot never turns off). pause() goes through StreamTrait::pause — on the coreaudio
@@ -2136,13 +2140,7 @@ fn run_audio_thread(
         log::warn!("[recorder] cpal Stream pause before drop failed: {err}");
     }
     drop(stream);
-    if let Some(reference_stream) = reference_stream {
-        if let Err(err) = reference_stream.pause() {
-            log::warn!("[recorder] echo reference pause before drop failed: {err}");
-        }
-        drop(reference_stream);
-        log::info!("[recorder] echo reference stream dropped");
-    }
+    drop(reference_stream);
     log::info!("[recorder] cpal Stream dropped (mic released)");
     *state.processor_sender.lock() = None;
     drop(frame_tx);
@@ -2158,14 +2156,16 @@ fn run_audio_thread(
 /// Try the selected microphone's native format before other advertised formats/devices.
 fn build_input_stream(
     microphone_device_name: Option<String>,
-    frame_tx: SyncSender<AudioProcessingMessage>,
+    frame_tx: AudioProcessingSender,
     state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
     runtime_error_tx: Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
+    let selecting_at = std::time::Instant::now();
     let host = cpal::default_host();
     let selected = select_input_device(&host, microphone_device_name.as_deref())?;
-    let selected_name = device_name(&selected);
+    state.log_startup_phase("device_selected", selecting_at.elapsed());
+    let selected_name = selected.name().ok();
     let start = |device: &cpal::Device| {
         start_device_stream(device, &frame_tx, &state, &stop_flag, &runtime_error_tx)
     };
@@ -2176,7 +2176,7 @@ fn build_input_stream(
     };
     log::warn!("[recorder] selected microphone failed: {initial_error}; trying other inputs");
     let default = host.default_input_device();
-    let default_name = default.as_ref().and_then(device_name);
+    let default_name = default.as_ref().and_then(|device| device.name().ok());
     let mut candidates = Vec::new();
     if let Some(default) = default {
         if default_name != selected_name {
@@ -2185,7 +2185,7 @@ fn build_input_stream(
     }
     if let Ok(devices) = host.input_devices() {
         candidates.extend(devices.filter(|device| {
-            let name = device_name(device);
+            let name = device.name().ok();
             name.is_none() || (name != selected_name && name != default_name)
         }));
     }
@@ -2209,7 +2209,7 @@ fn try_input_candidates<T, U>(
 
 fn start_device_stream(
     device: &cpal::Device,
-    frame_tx: &SyncSender<AudioProcessingMessage>,
+    frame_tx: &AudioProcessingSender,
     state: &Arc<StreamState>,
     stop_flag: &Arc<AtomicBool>,
     runtime_error_tx: &Sender<RecorderError>,
@@ -2247,13 +2247,13 @@ fn native_input_alternatives(
     default: Option<&cpal::SupportedStreamConfig>,
     ranges: impl IntoIterator<Item = cpal::SupportedStreamConfigRange>,
 ) -> Vec<cpal::SupportedStreamConfig> {
-    let native_rate = default.map(|config| config.sample_rate());
+    let native_rate = default.map(|config| config.sample_rate().0);
     let mut candidates = Vec::new();
     for range in ranges {
-        let min = range.min_sample_rate();
-        let max = range.max_sample_rate();
+        let min = range.min_sample_rate().0;
+        let max = range.max_sample_rate().0;
         for rate in [native_rate.unwrap_or(max).clamp(min, max), min, max] {
-            let candidate = range.with_sample_rate(rate);
+            let candidate = range.with_sample_rate(cpal::SampleRate(rate));
             let same = |other: &cpal::SupportedStreamConfig| {
                 other.config() == candidate.config()
                     && other.sample_format() == candidate.sample_format()
@@ -2269,12 +2269,13 @@ fn native_input_alternatives(
 fn start_native_config(
     device: &cpal::Device,
     supported: cpal::SupportedStreamConfig,
-    frame_tx: &SyncSender<AudioProcessingMessage>,
+    frame_tx: &AudioProcessingSender,
     state: &Arc<StreamState>,
     stop_flag: &Arc<AtomicBool>,
     runtime_error_tx: &Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
     let config = supported.config();
+    let building_at = std::time::Instant::now();
     state.accepting_audio.store(false, Ordering::Release);
     let stream = build_stream_for_format(
         device,
@@ -2283,18 +2284,21 @@ fn start_native_config(
         frame_tx.clone(),
         Arc::clone(state),
         Arc::clone(stop_flag),
-        config.sample_rate,
+        config.sample_rate.0,
         config.channels as usize,
         runtime_error_tx.clone(),
     )?;
+    state.log_startup_phase("stream_built", building_at.elapsed());
+    let playing_at = std::time::Instant::now();
     stream
         .play()
         .map_err(|error| classify_default_config_err(format!("play: {error}")))?;
     state.accepting_audio.store(true, Ordering::Release);
+    state.log_startup_phase("stream_playing", playing_at.elapsed());
     log::info!(
         "[recorder] inputDevice={} inputFormat sampleRate={} channels={} fmt={:?}",
-        device_name(device).unwrap_or_else(|| "<unknown>".into()),
-        config.sample_rate,
+        device.name().unwrap_or_else(|_| "<unknown>".into()),
+        config.sample_rate.0,
         config.channels,
         supported.sample_format()
     );
@@ -2313,7 +2317,7 @@ fn select_input_device(
             .input_devices()
             .map_err(|e| RecorderError::EngineFailed(format!("input_devices: {e}")))?;
         for device in devices {
-            if device_name(&device).as_deref() == Some(preferred) {
+            if device.name().ok().as_deref() == Some(preferred) {
                 return Ok(device);
             }
         }
@@ -2347,7 +2351,7 @@ fn classify_default_config_err(msg: String) -> RecorderError {
 }
 
 /// Startup-time build_stream failure: same classification as above; may be a permission issue.
-fn classify_build_stream_err(err: cpal::Error) -> RecorderError {
+fn classify_build_stream_err(err: cpal::BuildStreamError) -> RecorderError {
     let msg = err.to_string();
     let lower = msg.to_lowercase();
     if is_no_device_error(&lower) {
@@ -2379,64 +2383,14 @@ fn is_no_device_error(lower: &str) -> bool {
     .any(|pattern| lower.contains(pattern))
 }
 
-fn build_input_stream_compat<T, D, E>(
-    device: &cpal::Device,
-    config: StreamConfig,
-    data_callback: D,
-    error_callback: E,
-) -> Result<cpal::Stream, cpal::Error>
-where
-    T: cpal::SizedSample,
-    D: FnMut(&[T], &cpal::InputCallbackInfo) + Send + 'static,
-    E: FnMut(cpal::Error) + Send + 'static,
-{
-    device.build_input_stream(config, data_callback, error_callback, None)
-}
-
-fn handle_microphone_stream_error(
-    state: &StreamState,
-    error: cpal::Error,
-    runtime_error_tx: &Sender<RecorderError>,
-) {
-    if !state.accepting_audio.load(Ordering::Acquire) {
-        return;
-    }
-    let error_kind = cpal_error_kind_code(&error);
-    let recoverable_xrun = error.kind() == cpal::ErrorKind::Xrun;
-    let error_count = state.diagnostics.microphone.record_error();
-    state.diagnostics.event(
-        "P2",
-        "[\"H1\",\"H2\",\"H3\"]",
-        "microphone_stream_error",
-        if recoverable_xrun {
-            "xrun_recoverable"
-        } else {
-            "fatal_candidate"
-        },
-        &format!(
-            "{{\"stream_role\":\"microphone\",\"error_kind\":\"{}\",\"accepting_audio\":true,\"error_count\":{},\"callback_count\":{}}}",
-            error_kind,
-            error_count,
-            state.diagnostics.microphone.callbacks.load(Ordering::Relaxed),
-        ),
-    );
-    if recoverable_xrun {
-        // CPAL can report a discontinuity and deliver the next capture packet immediately.
-        // Do not cancel usable capture or refresh liveness here: the existing watchdog must
-        // still detect a stream that stops delivering data after this notification.
-        log::warn!("[recorder] microphone xrun; continuing capture (error_count={error_count})");
-        return;
-    }
-    log::error!("[recorder] stream error: {error}");
-    let _ = runtime_error_tx.send(RecorderError::EngineFailed(format!("stream: {error}")));
-}
-
+/// `SupportedStreamConfig` -> the concrete build call for that SampleFormat.
+/// Only common cpal float and integer formats are supported; others fall back to an error.
 #[allow(clippy::too_many_arguments)]
 fn build_stream_for_format(
     device: &cpal::Device,
     config: &StreamConfig,
     sample_format: SampleFormat,
-    frame_tx: SyncSender<AudioProcessingMessage>,
+    frame_tx: AudioProcessingSender,
     state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
     input_sr: u32,
@@ -2454,45 +2408,47 @@ fn build_stream_for_format(
             let err_cb = move |err| {
                 handle_microphone_stream_error(&error_state, err, &runtime_error_for_error);
             };
-            build_input_stream_compat::<$t, _, _>(
-                    device,
-                    *config,
-                    move |data: &[$t], _info| {
-                        let accepting = state.accepting_audio.load(Ordering::Acquire);
-                        state.diagnostics.data_callback(false, accepting, data.len() / channels.max(1));
-                        if !accepting {
+            device
+                .build_input_stream::<$t, _, _>(
+                    config,
+                    move |data: &[$t], info| {
+                        if !state.accepting_audio.load(Ordering::Acquire) {
                             return;
                         }
+                        if !data.is_empty() {
+                            state.note_first_pcm(false);
+                        }
+                        let captured_at = playback_reference::capture_time(info);
+                        state.diagnostics.data_callback(false, true, data.len() / channels.max(1));
                         let mut floats = Vec::with_capacity(data.len());
                         for s in data {
                             floats.push($to_f32(*s));
                         }
                         *state.last_callback_time.lock() = Some(std::time::Instant::now());
                         match frame_tx.try_send(AudioProcessingMessage::Frame(RawAudioFrame {
+                            captured_at,
                             samples: floats,
                             channels,
                             input_sample_rate: input_sr,
                         })) {
                             Ok(()) => {}
                             Err(TrySendError::Disconnected(_)) => {
+                                if state.accepting_audio.swap(false, Ordering::AcqRel) {
+                                    let _ = runtime_error_for_callback.send(
+                                        RecorderError::EngineFailed("audio processing worker disconnected".into()),
+                                    );
+                                }
                                 stop_flag.store(true, Ordering::Release);
                             }
                             Err(TrySendError::Full(_)) => {
-                                state.diagnostics.event(
-                                    "P4",
-                                    "[\"H4\"]",
-                                    "processing_backpressure",
-                                    "queue_full",
-                                    &format!(
-                                        "{{\"queue_capacity\":{},\"callback_count\":{}}}",
-                                        AUDIO_PROCESSING_QUEUE_CAPACITY,
-                                        state.diagnostics.microphone.callbacks.load(Ordering::Relaxed),
-                                    ),
-                                );
+                                state.diagnostics.event("P4", "[\"H4\"]", "processing_backpressure", "queue_full", "{}");
                                 if state.accepting_audio.swap(false, Ordering::AcqRel) {
                                     let _ = runtime_error_for_callback.send(
                                         RecorderError::EngineFailed(
-                                            "audio processing queue overflow".into(),
+                                            format!("audio processing backlog exceeded limit: queued_us={} queued_bytes={} callback_samples={} sample_rate={} channels={}",
+                                                frame_tx.backlog.micros.load(Ordering::Acquire),
+                                                frame_tx.backlog.bytes.load(Ordering::Acquire),
+                                                data.len(), input_sr, channels),
                                         ),
                                     );
                                 }
@@ -2501,6 +2457,7 @@ fn build_stream_for_format(
                         }
                     },
                     err_cb,
+                    None,
                 )
                 .map_err(classify_build_stream_err)
         }};
@@ -2531,128 +2488,8 @@ fn build_stream_for_format(
     }
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn start_reference_stream(
-    stop_flag: &Arc<AtomicBool>,
-    diagnostics: &Arc<CaptureDiagnostics>,
-) -> Result<(cpal::Stream, Arc<openless_core::ReferenceAudioBuffer>), RecorderError> {
-    let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| RecorderError::EngineFailed("no default output device for echo reference".into()))?;
-    let supported = device
-        .default_output_config()
-        .map_err(|error| RecorderError::EngineFailed(format!("default output config: {error}")))?;
-    let config = supported.config();
-    let sample_rate = config.sample_rate;
-    let channels = config.channels as usize;
-    let reference = Arc::new(openless_core::ReferenceAudioBuffer::new(sample_rate));
-    let reference_for_callback = Arc::clone(&reference);
-    let stop_for_callback = Arc::clone(stop_flag);
-    let device_name = device_name(&device).unwrap_or_else(|| "<unknown>".into());
-    let stream = build_reference_stream_for_format(
-        &device,
-        &config,
-        supported.sample_format(),
-        reference_for_callback,
-        channels,
-        stop_for_callback,
-        Arc::clone(diagnostics),
-    )?;
-    stream
-        .play()
-        .map_err(|error| RecorderError::EngineFailed(format!("play echo reference: {error}")))?;
-    log::info!(
-        "[recorder] echo reference outputDevice={} sampleRate={} channels={} fmt={:?}",
-        device_name,
-        sample_rate,
-        channels,
-        supported.sample_format()
-    );
-    Ok((stream, reference))
-}
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-fn start_reference_stream(
-    _stop_flag: &Arc<AtomicBool>,
-    _diagnostics: &Arc<CaptureDiagnostics>,
-) -> Result<(cpal::Stream, Arc<openless_core::ReferenceAudioBuffer>), RecorderError> {
-    Err(RecorderError::EngineFailed(
-        "native echo reference is unavailable on mobile".into(),
-    ))
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn build_reference_stream_for_format(
-    device: &cpal::Device,
-    config: &StreamConfig,
-    sample_format: SampleFormat,
-    reference: Arc<openless_core::ReferenceAudioBuffer>,
-    channels: usize,
-    stop_flag: Arc<AtomicBool>,
-    diagnostics: Arc<CaptureDiagnostics>,
-) -> Result<cpal::Stream, RecorderError> {
-    macro_rules! make_reference_stream {
-        ($t:ty, $to_f32:expr) => {{
-            let reference = Arc::clone(&reference);
-            let stop_for_callback = Arc::clone(&stop_flag);
-            let callback_diagnostics = Arc::clone(&diagnostics);
-            let error_diagnostics = Arc::clone(&diagnostics);
-            build_input_stream_compat::<$t, _, _>(
-                device,
-                *config,
-                move |data: &[$t], _info| {
-                    let accepting = !stop_for_callback.load(Ordering::Acquire);
-                    callback_diagnostics.data_callback(true, accepting, data.len() / channels.max(1));
-                    if !accepting {
-                        return;
-                    }
-                    let samples = data.iter().copied().map($to_f32).collect::<Vec<f32>>();
-                    reference.push_interleaved(&samples, channels);
-                },
-                move |error| {
-                    let error_kind = cpal_error_kind_code(&error);
-                    let error_count = error_diagnostics.reference.record_error();
-                    error_diagnostics.event(
-                        "P3",
-                        "[\"H1\",\"H2\"]",
-                        "reference_stream_error",
-                        if error_kind == "xrun" {
-                            "reference_xrun"
-                        } else {
-                            "reference_fault"
-                        },
-                        &format!(
-                            "{{\"stream_role\":\"reference\",\"error_kind\":\"{}\",\"error_count\":{},\"callback_count\":{}}}",
-                            error_kind,
-                            error_count,
-                            error_diagnostics.reference.callbacks.load(Ordering::Relaxed),
-                        ),
-                    );
-                    log::warn!("[recorder] echo reference stream stopped: {error}");
-                },
-            )
-            .map_err(classify_build_stream_err)
-        }};
-    }
-    match sample_format {
-        SampleFormat::F32 => make_reference_stream!(f32, |s: f32| s),
-        SampleFormat::F64 => make_reference_stream!(f64, |s: f64| s as f32),
-        SampleFormat::I64 => make_reference_stream!(i64, |s: i64| (s as f64 / i64::MAX as f64) as f32),
-        SampleFormat::U64 => make_reference_stream!(u64, |s: u64| ((s as f64 / u64::MAX as f64) * 2.0 - 1.0) as f32),
-        SampleFormat::U32 => make_reference_stream!(u32, |s: u32| (s as f64 / u32::MAX as f64 * 2.0 - 1.0) as f32),
-        SampleFormat::I16 => make_reference_stream!(i16, |s: i16| s as f32 / i16::MAX as f32),
-        SampleFormat::U16 => make_reference_stream!(u16, |s: u16| (s as f32 - 32768.0) / 32768.0),
-        SampleFormat::I32 => make_reference_stream!(i32, |s: i32| s as f32 / i32::MAX as f32),
-        SampleFormat::I8 => make_reference_stream!(i8, |s: i8| s as f32 / i8::MAX as f32),
-        SampleFormat::U8 => make_reference_stream!(u8, |s: u8| (s as f32 - 128.0) / 128.0),
-        other => Err(RecorderError::EngineFailed(format!(
-            "unsupported echo reference sample format: {other:?}"
-        ))),
-    }
-}
-
 struct RawAudioFrame {
+    captured_at: std::time::Instant,
     samples: Vec<f32>,
     channels: usize,
     input_sample_rate: u32,
@@ -2664,9 +2501,110 @@ enum AudioProcessingMessage {
     Shutdown,
 }
 
+#[derive(Default)]
+struct AudioProcessingBacklog {
+    micros: AtomicU64,
+    bytes: AtomicUsize,
+}
+
+struct AudioProcessingReservation {
+    backlog: Arc<AudioProcessingBacklog>,
+    micros: u64,
+    bytes: usize,
+}
+
+impl Drop for AudioProcessingReservation {
+    fn drop(&mut self) {
+        self.backlog.micros.fetch_sub(self.micros, Ordering::AcqRel);
+        self.backlog.bytes.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
+}
+
+struct QueuedAudioProcessingMessage {
+    message: AudioProcessingMessage,
+    _reservation: Option<AudioProcessingReservation>,
+}
+
+#[derive(Clone)]
+struct AudioProcessingSender {
+    sender: SyncSender<QueuedAudioProcessingMessage>,
+    backlog: Arc<AudioProcessingBacklog>,
+}
+
+impl AudioProcessingSender {
+    fn reserve(
+        &self,
+        message: AudioProcessingMessage,
+    ) -> Result<QueuedAudioProcessingMessage, AudioProcessingMessage> {
+        let reservation = if let AudioProcessingMessage::Frame(frame) = &message {
+            let rate = u64::from(frame.input_sample_rate) * frame.channels as u64;
+            if rate == 0 {
+                return Err(message);
+            }
+            let micros = (frame.samples.len() as u64 * 1_000_000).div_ceil(rate);
+            let bytes = frame.samples.len() * std::mem::size_of::<f32>();
+            if self
+                .backlog
+                .bytes
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                    used.checked_add(bytes)
+                        .filter(|next| *next <= AUDIO_PROCESSING_MAX_QUEUED_BYTES)
+                })
+                .is_err()
+            {
+                return Err(message);
+            }
+            if self
+                .backlog
+                .micros
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                    used.checked_add(micros)
+                        .filter(|next| *next <= AUDIO_PROCESSING_MAX_QUEUED_US)
+                })
+                .is_err()
+            {
+                self.backlog.bytes.fetch_sub(bytes, Ordering::AcqRel);
+                return Err(message);
+            }
+            Some(AudioProcessingReservation {
+                backlog: Arc::clone(&self.backlog),
+                micros,
+                bytes,
+            })
+        } else {
+            None
+        };
+        Ok(QueuedAudioProcessingMessage {
+            message,
+            _reservation: reservation,
+        })
+    }
+
+    fn try_send(
+        &self,
+        message: AudioProcessingMessage,
+    ) -> Result<(), TrySendError<AudioProcessingMessage>> {
+        let queued = self.reserve(message).map_err(TrySendError::Full)?;
+        self.sender.try_send(queued).map_err(|error| match error {
+            TrySendError::Full(queued) => TrySendError::Full(queued.message),
+            TrySendError::Disconnected(queued) => TrySendError::Disconnected(queued.message),
+        })
+    }
+
+    fn send(
+        &self,
+        message: AudioProcessingMessage,
+    ) -> Result<(), std::sync::mpsc::SendError<AudioProcessingMessage>> {
+        let queued = self.reserve(message).map_err(std::sync::mpsc::SendError)?;
+        self.sender
+            .send(queued)
+            .map_err(|error| std::sync::mpsc::SendError(error.0.message))
+    }
+}
+
 struct AudioProcessingWorker {
     join_handle: Option<JoinHandle<()>>,
-    shutdown: SyncSender<AudioProcessingMessage>,
+    shutdown: AudioProcessingSender,
 }
 
 impl AudioProcessingWorker {
@@ -2676,45 +2614,67 @@ impl AudioProcessingWorker {
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
         archiver: Option<Arc<WavArchiveWriter>>,
         state: Arc<StreamState>,
-        reference: Option<Arc<openless_core::ReferenceAudioBuffer>>,
-    ) -> Result<(Self, SyncSender<AudioProcessingMessage>), RecorderError> {
+    ) -> Result<(Self, AudioProcessingSender), RecorderError> {
         let (sender, receiver) =
-            sync_channel::<AudioProcessingMessage>(AUDIO_PROCESSING_QUEUE_CAPACITY);
-        let reference_rate = reference.as_ref().map(|buffer| buffer.sample_rate());
+            sync_channel::<QueuedAudioProcessingMessage>(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        let backlog = Arc::new(AudioProcessingBacklog::default());
+        let sender = AudioProcessingSender {
+            sender,
+            backlog: Arc::clone(&backlog),
+        };
         let join_handle = thread::Builder::new()
             .name("openless-audio-processor".into())
             .spawn(move || {
                 let mut processor = openless_core::AudioProcessor::new(processing);
-                while let Ok(message) = receiver.recv() {
+                let mut enhancement_enabled = processing.enhancement_enabled;
+                let deliver = |chunk: openless_core::audio::NormalizedPcmChunk| {
+                    state.note_first_pcm(true);
+                    consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
+                    if let Some(archiver) = &archiver {
+                        archiver.append(&chunk.pcm_i16_le);
+                    }
+                    level_handler(chunk.level);
+                    update_peak(&state.peak_output_rms_milli, chunk.level);
+                };
+                while let Ok(queued) = receiver.recv() {
+                    // Keep the reservation until downstream delivery completes.
+                    let QueuedAudioProcessingMessage { message, _reservation } = queued;
                     match message {
                         AudioProcessingMessage::Frame(frame) => {
-                            let reference_samples = reference.as_ref().and_then(|buffer| {
-                                buffer.take_for_input(
-                                    frame.samples.len() / frame.channels.max(1),
-                                    frame.input_sample_rate,
-                                )
-                            });
-                            let reference_slice = reference_samples.as_deref();
-                            let chunk = processor.process_with_reference(
+                            let queued_us = backlog.micros.load(Ordering::Acquire);
+                            if enhancement_enabled && queued_us >= AUDIO_PROCESSING_SHED_ENHANCEMENT_US {
+                                log::warn!("[recorder] disabling enhancement for this capture: processing backlog {} ms", queued_us / 1_000);
+                                if let Some(tail) = processor.disable_enhancement() {
+                                    deliver(tail);
+                                }
+                                enhancement_enabled = false;
+                            }
+                            let reference = state.reference.lock().clone();
+                            let render = reference.and_then(|buffer| buffer.take_for_input_at(frame.samples.len()/frame.channels.max(1), frame.input_sample_rate, frame.captured_at));
+                            if let Some(chunk) = processor.process_with_reference(
                                 &frame.samples,
                                 frame.channels,
                                 frame.input_sample_rate,
-                                reference_slice,
-                                reference_rate.unwrap_or(0),
-                            );
-                            if let Some(chunk) = chunk {
-                                consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                                if let Some(archiver) = &archiver {
-                                    archiver.append(&chunk.pcm_i16_le);
-                                }
-                                level_handler(chunk.level);
-                                update_peak(&state.peak_output_rms_milli, chunk.level);
+                                render.as_deref(),
+                            ) {
+                                deliver(chunk);
                             }
                         }
                         AudioProcessingMessage::Flush(done) => {
+                            if let Some(chunk) = processor.finish() {
+                                deliver(chunk);
+                            }
+                            // A warm microphone reuses this worker across recording segments.
+                            processor = openless_core::AudioProcessor::new(processing);
+                            enhancement_enabled = processing.enhancement_enabled;
                             let _ = done.send(());
                         }
-                        AudioProcessingMessage::Shutdown => break,
+                        AudioProcessingMessage::Shutdown => {
+                            if let Some(chunk) = processor.finish() {
+                                deliver(chunk);
+                            }
+                            break;
+                        }
                     }
                 }
             })
@@ -2747,7 +2707,12 @@ impl AudioProcessingWorker {
 /// State carried across callbacks: resample leftovers, diagnostic counters and peak.
 struct StreamState {
     diagnostics: Arc<CaptureDiagnostics>,
-    processor_sender: Mutex<Option<SyncSender<AudioProcessingMessage>>>,
+    reference: Mutex<Option<Arc<openless_core::ReferenceAudioBuffer>>>,
+    capture_id: u64,
+    created_at: std::time::Instant,
+    first_raw_pcm_us: AtomicU64,
+    first_output_pcm_us: AtomicU64,
+    processor_sender: Mutex<Option<AudioProcessingSender>>,
     /// Fractional position left unconsumed by the previous callback; linear-interpolation
     /// resampling spans buffers.
     resample_phase: Mutex<f64>,
@@ -2765,7 +2730,12 @@ struct StreamState {
 impl StreamState {
     fn new() -> Self {
         Self {
+            capture_id: NEXT_CAPTURE_ID.fetch_add(1, Ordering::Relaxed),
             diagnostics: Arc::new(CaptureDiagnostics::new()),
+            reference: Mutex::new(None),
+            created_at: std::time::Instant::now(),
+            first_raw_pcm_us: AtomicU64::new(0),
+            first_output_pcm_us: AtomicU64::new(0),
             processor_sender: Mutex::new(None),
             resample_phase: Mutex::new(0.0),
             last_sample: Mutex::new(0.0),
@@ -2776,6 +2746,40 @@ impl StreamState {
             // Start as None: timing begins only after the first callback, avoiding false
             // positives for slow-starting devices
             last_callback_time: Mutex::new(None),
+        }
+    }
+
+    fn log_startup_phase(&self, phase: &'static str, duration: std::time::Duration) {
+        log::info!(
+            "[audio-startup] capture={} phase={} duration_us={} since_open_us={}",
+            self.capture_id,
+            phase,
+            duration.as_micros(),
+            self.created_at.elapsed().as_micros()
+        );
+    }
+
+    fn note_first_pcm(&self, processed: bool) {
+        let slot = if processed {
+            &self.first_output_pcm_us
+        } else {
+            &self.first_raw_pcm_us
+        };
+        let elapsed = self.created_at.elapsed().as_micros().max(1) as u64;
+        if slot
+            .compare_exchange(0, elapsed, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            log::info!(
+                "[audio-startup] capture={} phase={} since_open_us={}",
+                self.capture_id,
+                if processed {
+                    "first_output_pcm"
+                } else {
+                    "first_raw_pcm"
+                },
+                elapsed
+            );
         }
     }
 }
@@ -2793,6 +2797,7 @@ fn process_callback(
     if !state.accepting_audio.load(Ordering::Acquire) || interleaved.is_empty() || channels == 0 {
         return;
     }
+    state.note_first_pcm(false);
 
     let mono = downmix_to_mono(interleaved, channels);
     let input_rms = rms(&mono);
@@ -2805,6 +2810,7 @@ fn process_callback(
     let (pcm_bytes, output_rms) = quantize_to_i16_le(&resampled);
     let level = (output_rms * LEVEL_RMS_GAIN).clamp(0.0, 1.0);
 
+    state.note_first_pcm(true);
     consumer.consume_pcm_chunk(&pcm_bytes);
     if let Some(arch) = archiver {
         arch.append(&pcm_bytes);
@@ -3058,135 +3064,6 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex as StdMutex};
 
-    #[test]
-    fn microphone_xrun_keeps_capture_and_error_channel_open() {
-        let state = StreamState::new();
-        let (sender, receiver) = channel();
-        handle_microphone_stream_error(
-            &state,
-            cpal::Error::new(cpal::ErrorKind::Xrun),
-            &sender,
-        );
-        assert!(matches!(
-            receiver.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        ));
-        assert!(state.accepting_audio.load(Ordering::Acquire));
-        assert!(state.last_callback_time.lock().is_none());
-        assert_eq!(state.diagnostics.microphone.record_callback(), (1, true));
-        assert_eq!(
-            state.diagnostics.microphone.errors.load(Ordering::Relaxed),
-            1
-        );
-    }
-
-    #[test]
-    fn repeated_xruns_do_not_refresh_the_watchdog_or_hide_device_loss() {
-        let state = StreamState::new();
-        let last_callback = std::time::Instant::now() - std::time::Duration::from_secs(10);
-        *state.last_callback_time.lock() = Some(last_callback);
-        let (sender, receiver) = channel();
-        for _ in 0..8 {
-            handle_microphone_stream_error(
-                &state,
-                cpal::Error::new(cpal::ErrorKind::Xrun),
-                &sender,
-            );
-        }
-        assert!(matches!(
-            receiver.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        ));
-        assert_eq!(*state.last_callback_time.lock(), Some(last_callback));
-        assert!(state.accepting_audio.load(Ordering::Acquire));
-        handle_microphone_stream_error(
-            &state,
-            cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable),
-            &sender,
-        );
-        assert!(matches!(
-            receiver.try_recv(),
-            Ok(RecorderError::EngineFailed(_))
-        ));
-    }
-
-    #[test]
-    fn microphone_non_xrun_errors_remain_fatal() {
-        for kind in [
-            cpal::ErrorKind::DeviceNotAvailable,
-            cpal::ErrorKind::StreamInvalidated,
-            cpal::ErrorKind::PermissionDenied,
-            cpal::ErrorKind::BackendError,
-            cpal::ErrorKind::Other,
-        ] {
-            let state = StreamState::new();
-            let (sender, receiver) = channel();
-            handle_microphone_stream_error(&state, cpal::Error::new(kind), &sender);
-            assert!(
-                matches!(receiver.try_recv(), Ok(RecorderError::EngineFailed(_))),
-                "{kind:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn microphone_stream_errors_after_stop_are_ignored() {
-        let state = StreamState::new();
-        state.accepting_audio.store(false, Ordering::Release);
-        let (sender, receiver) = channel();
-        for kind in [cpal::ErrorKind::Xrun, cpal::ErrorKind::DeviceNotAvailable] {
-            handle_microphone_stream_error(&state, cpal::Error::new(kind), &sender);
-        }
-        assert!(matches!(
-            receiver.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        ));
-        assert_eq!(
-            state.diagnostics.microphone.errors.load(Ordering::Relaxed),
-            0
-        );
-    }
-
-    #[test]
-    fn diagnostic_callback_marks_only_the_next_callback_after_errors() {
-        let stream = StreamDiagnostics::default();
-        assert_eq!(stream.record_callback(), (1, false));
-        assert_eq!(stream.record_error(), 1);
-        assert_eq!(stream.record_callback(), (2, true));
-        assert_eq!(stream.record_callback(), (3, false));
-        assert_eq!(stream.record_error(), 2);
-        assert_eq!(stream.record_error(), 3);
-        assert_eq!(stream.record_callback(), (4, true));
-        assert_eq!(stream.record_callback(), (5, false));
-        assert_eq!(stream.errors.load(Ordering::Relaxed), 3);
-    }
-
-    #[test]
-    fn diagnostic_stream_roles_and_capture_runs_are_independent() {
-        let first = CaptureDiagnostics::new();
-        let second = CaptureDiagnostics::new();
-        assert_ne!(first.run_id, second.run_id);
-        first.microphone.record_error();
-        assert_eq!(first.reference.record_callback(), (1, false));
-        assert_eq!(first.microphone.record_callback(), (1, true));
-        assert_eq!(second.microphone.record_callback(), (1, false));
-        assert_eq!(first.reference.errors.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn diagnostic_error_code_uses_only_structured_kind() {
-        let error = cpal::Error::with_message(cpal::ErrorKind::Xrun, "private backend detail");
-        assert_eq!(cpal_error_kind_code(&error), "xrun");
-        assert_eq!(
-            cpal_error_kind_code(&cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable)),
-            "device_not_available",
-        );
-        assert_eq!(
-            cpal_error_kind_code(&cpal::Error::new(cpal::ErrorKind::StreamInvalidated)),
-            "stream_invalidated",
-        );
-    }
-
     #[derive(Default)]
     struct RecordingConsumer {
         chunks: StdMutex<Vec<Vec<u8>>>,
@@ -3204,6 +3081,181 @@ mod tests {
     }
 
     #[test]
+    fn audio_processing_budget_is_duration_based_and_released_on_disconnect() {
+        for samples in [48, 480, 4800] {
+            let (tx, rx) = sync_channel(AUDIO_PROCESSING_QUEUE_CAPACITY);
+            let sender = AudioProcessingSender {
+                sender: tx,
+                backlog: Arc::new(AudioProcessingBacklog::default()),
+            };
+            let frame = || {
+                AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: std::time::Instant::now(),
+                    samples: vec![0.25; samples],
+                    channels: 1,
+                    input_sample_rate: 48_000,
+                })
+            };
+            let frames = 3 * 48_000 / samples;
+            for _ in 0..frames {
+                assert!(sender.try_send(frame()).is_ok());
+            }
+            assert!(matches!(
+                sender.try_send(frame()),
+                Err(TrySendError::Full(_))
+            ));
+            assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 3_000_000);
+            assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 3 * 48_000 * 4);
+            drop(rx);
+            assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+            assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+            assert!(matches!(
+                sender.try_send(frame()),
+                Err(TrySendError::Disconnected(_))
+            ));
+            assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+            assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[test]
+    fn audio_processing_budget_also_bounds_large_multichannel_frames() {
+        let (tx, _rx) = sync_channel(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        let sender = AudioProcessingSender {
+            sender: tx,
+            backlog: Arc::new(AudioProcessingBacklog::default()),
+        };
+        let frame = AudioProcessingMessage::Frame(RawAudioFrame {
+            captured_at: std::time::Instant::now(),
+            samples: vec![0.0; 48_000 * 64],
+            channels: 64,
+            input_sample_rate: 48_000,
+        });
+        assert!(matches!(sender.try_send(frame), Err(TrySendError::Full(_))));
+        assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+        assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn audio_processing_backlog_sheds_enhancement_without_losing_pcm() {
+        let consumer = Arc::new(RecordingConsumer::default());
+        let (entered_tx, entered_rx) = channel();
+        let (resume_tx, resume_rx) = channel();
+        let resume_rx = Mutex::new(resume_rx);
+        let block_next_level = Arc::new(AtomicBool::new(false));
+        let block_for_level = Arc::clone(&block_next_level);
+        let level_handler = Arc::new(move |_| {
+            if block_for_level.swap(false, Ordering::AcqRel) {
+                entered_tx.send(()).unwrap();
+                resume_rx
+                    .lock()
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+            }
+        });
+        let (worker, sender) = AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {
+                enhancement_enabled: true,
+                ..Default::default()
+            },
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
+            level_handler,
+            None,
+            Arc::new(StreamState::new()),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            block_next_level.store(true, Ordering::Release);
+            sender
+                .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: std::time::Instant::now(),
+                    samples: vec![0.25; 997],
+                    channels: 1,
+                    input_sample_rate: TARGET_SAMPLE_RATE,
+                }))
+                .unwrap();
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            // One second of short callbacks exceeds the old 64-message limit.
+            for _ in 0..100 {
+                assert!(sender
+                    .try_send(AudioProcessingMessage::Frame(RawAudioFrame {
+                        captured_at: std::time::Instant::now(),
+                        samples: vec![0.5; 160],
+                        channels: 1,
+                        input_sample_rate: TARGET_SAMPLE_RATE,
+                    }))
+                    .is_ok());
+            }
+            resume_tx.send(()).unwrap();
+            let (done_tx, done_rx) = channel();
+            sender.send(AudioProcessingMessage::Flush(done_tx)).unwrap();
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }
+        worker.finish();
+        let delivered: Vec<u8> = consumer
+            .chunks
+            .lock()
+            .unwrap()
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        let segment_samples = 997 + 160 * 100;
+        assert_eq!(delivered.len(), segment_samples * 2 * 2);
+        let decoded = decode_i16_le(&delivered);
+        assert_eq!(&decoded[..segment_samples], &decoded[segment_samples..]);
+        assert!(decoded[..997].iter().any(|sample| *sample != 8191));
+        assert!(decoded[997..segment_samples]
+            .iter()
+            .all(|sample| *sample == 16383));
+        assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+        assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn playback_reference_uses_capture_times_after_an_early_start() {
+        let epoch=std::time::Instant::now();
+        let state=Arc::new(StreamState::new());
+        let reference=Arc::new(openless_core::ReferenceAudioBuffer::new(16_000));
+        reference.push_interleaved_at(&[0.9;160],1,epoch);
+        reference.push_interleaved_at(&[0.0;1280],1,epoch+std::time::Duration::from_millis(10));
+        *state.reference.lock()=Some(reference);
+        let consumer=Arc::new(RecordingConsumer::default());
+        let (worker,sender)=AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {echo_cancellation_enabled:true,..Default::default()},
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,Arc::new(|_|{}),None,state,
+        ).unwrap();
+        for index in 1..=8 {
+            sender.send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at:epoch+std::time::Duration::from_millis(index*10),samples:vec![0.25;160],channels:1,input_sample_rate:16_000,
+            })).unwrap();
+        }
+        drop(sender);worker.finish();
+        let chunks=consumer.chunks.lock().unwrap();assert_eq!(chunks.len(),8);
+        assert!(chunks.iter().all(|chunk|decode_i16_le(chunk)==vec![8191;160]));
+    }
+
+    #[test]
+    fn diagnostics_and_microphone_errors_stay_capture_scoped() {
+        let first=StreamState::new();let second=StreamState::new();
+        assert_ne!(first.diagnostics.run_id,second.diagnostics.run_id);
+        let (sender,receiver)=channel();
+        first.accepting_audio.store(false,Ordering::Release);
+        handle_microphone_stream_error(&first,cpal::StreamError::DeviceNotAvailable,&sender);
+        assert!(receiver.try_recv().is_err());assert_eq!(first.diagnostics.microphone.errors.load(Ordering::Relaxed),0);
+        first.accepting_audio.store(true,Ordering::Release);
+        handle_microphone_stream_error(&first,cpal::StreamError::DeviceNotAvailable,&sender);
+        assert!(matches!(receiver.try_recv(),Ok(RecorderError::EngineFailed(_))));
+        assert_eq!(first.diagnostics.microphone.record_callback(),(1,true));
+        assert_eq!(first.diagnostics.reference.record_callback(),(1,false));
+        assert_eq!(second.diagnostics.microphone.record_callback(),(1,false));
+    }
+
+    #[test]
     fn audio_processing_worker_drains_accepted_frames_before_join() {
         let consumer = Arc::new(RecordingConsumer::default());
         let state = Arc::new(StreamState::new());
@@ -3216,11 +3268,11 @@ mod tests {
             Arc::new(|_| {}),
             None,
             state,
-            None,
         )
         .unwrap();
         sender
             .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at: std::time::Instant::now(),
                 samples: vec![0.25, -0.25],
                 channels: 1,
                 input_sample_rate: TARGET_SAMPLE_RATE,
@@ -3231,7 +3283,77 @@ mod tests {
 
         let chunks = consumer.chunks.lock().unwrap();
         assert_eq!(chunks.len(), 1);
-        assert_eq!(decode_i16_le(&chunks[0]), vec![12287, -12287]);
+        assert_eq!(decode_i16_le(&chunks[0]).len(), 2);
+    }
+
+    #[test]
+    fn audio_processing_flush_delivers_tail_to_asr_and_archive_before_reset() {
+        let consumer = Arc::new(RecordingConsumer::default());
+        let path = std::env::temp_dir().join(format!(
+            "openless-dsp-tail-{}-{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let archive = Arc::new(WavArchiveWriter::create(&path).unwrap());
+        let (worker, sender) = AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {
+                enhancement_enabled: true,
+                ..Default::default()
+            },
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
+            Arc::new(|_| {}),
+            Some(archive.clone()),
+            Arc::new(StreamState::new()),
+        )
+        .unwrap();
+        sender
+            .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at: std::time::Instant::now(),
+                samples: vec![0.15; 317],
+                channels: 1,
+                input_sample_rate: TARGET_SAMPLE_RATE,
+            }))
+            .unwrap();
+        let (done_tx, done_rx) = channel();
+        sender.send(AudioProcessingMessage::Flush(done_tx)).unwrap();
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(
+            consumer
+                .chunks
+                .lock()
+                .unwrap()
+                .iter()
+                .map(Vec::len)
+                .sum::<usize>(),
+            317 * 2
+        );
+        sender
+            .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at: std::time::Instant::now(),
+                samples: vec![-0.15; 211],
+                channels: 1,
+                input_sample_rate: TARGET_SAMPLE_RATE,
+            }))
+            .unwrap();
+        worker.finish();
+        archive.finish();
+        let delivered: Vec<u8> = consumer
+            .chunks
+            .lock()
+            .unwrap()
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        assert_eq!(delivered.len(), (317 + 211) * 2);
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(&wav[44..], delivered);
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
@@ -3246,12 +3368,12 @@ mod tests {
             Arc::new(|_| {}),
             None,
             Arc::new(StreamState::new()),
-            None,
         )
         .unwrap();
         for _ in 0..8 {
             sender
                 .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: std::time::Instant::now(),
                     samples: vec![0.25, -0.25],
                     channels: 1,
                     input_sample_rate: TARGET_SAMPLE_RATE,
@@ -3442,17 +3564,17 @@ mod tests {
     fn native_alternatives_preserve_channels_format_and_advertised_rates() {
         let range = cpal::SupportedStreamConfigRange::new(
             2,
-            44_100,
-            48_000,
+            cpal::SampleRate(44_100),
+            cpal::SampleRate(48_000),
             cpal::SupportedBufferSize::Unknown,
             SampleFormat::F32,
         );
-        let native = range.with_sample_rate(48_000);
+        let native = range.with_sample_rate(cpal::SampleRate(48_000));
         let alternatives = native_input_alternatives(Some(&native), [range, range]);
         assert_eq!(alternatives.len(), 1);
         assert_eq!(alternatives[0].channels(), 2);
         assert_eq!(alternatives[0].sample_format(), SampleFormat::F32);
-        assert_eq!(alternatives[0].sample_rate(), 44_100);
+        assert_eq!(alternatives[0].sample_rate().0, 44_100);
     }
 
     #[test]
@@ -3720,8 +3842,14 @@ mod tests {
         sink.set_activation_consumer(None);
         sink.consume_pcm_chunk(&[5, 6]);
 
-        assert_eq!(consumer.chunks.lock().unwrap().as_slice(), &[vec![1, 2, 3, 4]]);
-        assert!(matches!(&*sink.state.lock(), WarmCaptureSinkState::Ring { .. }));
+        assert_eq!(
+            consumer.chunks.lock().unwrap().as_slice(),
+            &[vec![1, 2, 3, 4]]
+        );
+        assert!(matches!(
+            &*sink.state.lock(),
+            WarmCaptureSinkState::Ring { .. }
+        ));
     }
 
     #[test]

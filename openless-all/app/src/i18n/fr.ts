@@ -1,9 +1,11 @@
+import { siwcFr as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 
 import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const fr: typeof zhCN = {
+  siwc,
   experimentalAsr,
   uiRefinement,
   voiceEdit: {
@@ -322,6 +324,8 @@ export const fr: typeof zhCN = {
     cancelled: 'Annulé',
     error: 'Une erreur s’est produite',
     inserted: '{{count}} insérés',
+    translateTo: 'Traduire en',
+    translationChangeFailed: 'Impossible de changer de langue. Veuillez réessayer.',
     translating: 'Traduction',
     selectionPolish: {
       polishing: 'Amélioration du texte…',
@@ -352,6 +356,12 @@ export const fr: typeof zhCN = {
     cancel: 'Annuler',
   },
   qa: {
+    activity: {
+      searchingWeb: 'Recherche sur le Web',
+      readingWeb: 'Lecture des pages Web',
+      usingTool: 'Utilisation de {{tool}}',
+      tool: 'outil',
+    },
     compact: {
       closeError: 'Impossible de fermer. Réessayez.',
       sendError: 'Échec de l’envoi. Votre saisie est conservée. Réessayez.',
@@ -1234,8 +1244,22 @@ export const fr: typeof zhCN = {
       fallbackDesc: 'Si la traduction échoue, la transcription brute est insérée à la place.',
     },
   },
+  askAnything: {
+    dictation: 'Dicter',
+    translation: 'Traduire',
+    question: 'Poser une question',
+    dictationHint: 'Parlez pour saisir du texte',
+    translationHint: 'Choisissez la langue pendant la capture',
+    questionHint: 'Sélectionnez du texte ou posez une question',
+    description:
+      'Appuyez sur la combinaison pour parler, puis à nouveau pour envoyer. La réponse apparaît en bas de l’écran.',
+    auxiliaryKey: 'Touche complémentaire',
+    auxiliaryHint: 'Appuyez avec {{key}}. Tout changement de touche d’enregistrement est suivi.',
+    selectionHint:
+      'Le texte sélectionné sert de contexte. La sélection est facultative. Chaque combinaison commence une nouvelle question.',
+  },
   selectionAsk: {
-    title: 'Questions sur la sélection',
+    title: 'Poser une question',
     desc: 'Sélectionnez du texte et posez des questions à voix haute, puis poursuivez la conversation.',
     shortcutSettings: 'Réglages des raccourcis',
     guide: {
@@ -1538,7 +1562,6 @@ export const fr: typeof zhCN = {
       microphoneMonitorError: 'Impossible de surveiller le niveau d’entrée : {{message}}',
       capsuleLabel: 'Capsule d’enregistrement',
       capsuleDesc: 'Affiche une capsule en bas de l’écran pendant l’enregistrement.',
-      capsuleStyleTypeless: 'Style compact Typeless',
       capsuleTranscriptLabel: 'Afficher la transcription en direct',
       capsuleTranscriptDesc:
         'Affiche le texte reconnu à la place des barres audio. Sans streaming, le texte apparaît à réception du résultat. Désactivez pour retrouver l’affichage initial.',
@@ -1562,12 +1585,40 @@ export const fr: typeof zhCN = {
       lowLatencyDictationLabel: 'Capture à faible latence',
       lowLatencyDictationDesc:
         'Garde un flux microphone prêt et conserve jusqu’à 500 ms en mémoire afin de réduire les mots perdus juste après le raccourci. Aucun audio n’est enregistré ni envoyé avant confirmation ; ce mode consomme davantage et maintient l’indicateur du microphone actif.',
-      audioEnhancementLabel: 'Amélioration légère du microphone',
-      audioEnhancementDesc:
-        'Applique un gain léger, une limitation douce et une réduction prudente du bruit au microphone local. N’inclut pas l’annulation d’écho. Désactivée par défaut.',
+      dsp: {
+        noise: 'Noise reduction',
+        dereverb: 'Comb filter',
+        equalizer: 'Equalizer',
+        gain: 'Input gain',
+        agc: 'Automatic gain',
+        vad: 'Speech gate',
+        title: 'Speech enhancement settings',
+        description:
+          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+        off: 'Off',
+        spectral: 'Spectral subtraction',
+        strength: 'Noise reduction strength',
+        target: 'Target level',
+        attack: 'Attack speed',
+        decay: 'Release speed',
+        vadHint:
+          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+        threshold: 'Speech gate threshold',
+        tone: 'Tone and room adjustments',
+        combHint:
+          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+        preamp: 'Equalizer preamp',
+        order: 'Processing order',
+        up: 'Move up',
+        down: 'Move down',
+        reset: 'Reset enhancement settings',
+      },
       echoCancellationLabel: 'Annulation de l’écho de lecture',
       echoCancellationDesc:
-        'Utilise la sortie audio du bureau comme référence tout en laissant la lecture audible. Cette fonction est expérimentale et peut être indisponible avec certains appareils, Bluetooth ou ALSA sous Linux.',
+        'Utilise une référence de lecture locale sans couper le son. Sur macOS, nécessite 14.6+ et une autorisation de capture audio système. Les appareils, routes Bluetooth ou configurations Linux ALSA non pris en charge utilisent uniquement le microphone. Prend effet à la prochaine capture.',
+      audioEnhancementLabel: 'Amélioration de la voix',
+      audioEnhancementDesc:
+        'Réduction du bruit RNNoise ou PureVox, gain automatique et limitation. Désactivée par défaut ; les changements prennent effet au prochain enregistrement.',
       muteDuringRecordingLabel: 'Couper le son pendant l’enregistrement',
       muteDuringRecordingDesc:
         'Coupe temporairement le son système pendant la saisie vocale pour éviter l’écho des haut-parleurs.',
@@ -1804,6 +1855,7 @@ export const fr: typeof zhCN = {
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',
+        chatgptSiwc: 'ChatGPT Plan',
         mimo: 'Xiaomi MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter (modèles gratuits)',
@@ -1883,8 +1935,9 @@ export const fr: typeof zhCN = {
       volcengineAuthModeApiKey: 'Clé API (nouvelle console)',
       volcengineMappingNote:
         'Secret Key n’est pas nécessaire actuellement. Le Resource ID par défaut est volc.seedasr.sauc.duration.',
-      volcengineApiKeyNote:
-        'Utilisez une clé API créée dans la nouvelle console vocale, sans APP ID. Créez-la dans la gestion des clés API : console.volcengine.com/speech/new/setting/apikeys. Le Resource ID par défaut est volc.seedasr.sauc.duration.',
+      volcengineApiKeyConsole: 'Doubao Speech · Clés API',
+      volcengineApiKeyNote: 'Créez ici une clé API vocale ; les clés Ark ne sont pas compatibles.',
+      volcengineResourceIdNote: 'Le Resource ID par défaut est {{resourceId}}.',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'Clé API',
       xfyunNote:

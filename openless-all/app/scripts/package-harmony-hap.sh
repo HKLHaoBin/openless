@@ -21,15 +21,21 @@ TOOLCHAIN="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
 # Channels, matching how the artifacts are distributed:
 #   release  production build for HUAWEI AppGallery (signed with release.*)
 #   test     beta build for the AppGallery test channel (signed with test.*)
-#   none     no store signing; the debug material is used when it is present
-# The GitHub Release only ever carries the *unsigned* HAP.
+#   debug    local development build (signed with debug.*, installable only on the
+#            devices listed in that debug profile); never published
+#   none     no store signing (the GitHub Release only ships the unsigned HAP)
 CHANNEL="${OPENLESS_HARMONY_CHANNEL:-release}"
 case "$CHANNEL" in
   release | test) SIGN_PREFIX="$CHANNEL" ;;
+  debug)
+    SIGN_PREFIX="debug"
+    # Local material lives beside the store channels but in its own directory.
+    SIGNING_DIR="${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/local-test}"
+    ;;
   none) SIGN_PREFIX="" ;;
-  *) echo 'OPENLESS_HARMONY_CHANNEL must be release, test or none' >&2; exit 1 ;;
+  *) echo 'OPENLESS_HARMONY_CHANNEL must be release, test, debug or none' >&2; exit 1 ;;
 esac
-SIGNING_DIR="${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/release}"
+SIGNING_DIR="${SIGNING_DIR:-${OPENLESS_HARMONY_SIGNING_DIR:-$HOME/.local/share/harmony/signing/release}}"
 CACHE_ROOT="${OPENLESS_CACHE_ROOT:-$APP_ROOT/target/harmony-cache}"
 OUTPUT="${OPENLESS_HARMONY_OUTPUT:-$APP_ROOT/target/harmony-packages}"
 
@@ -95,6 +101,8 @@ HVIGOR_JS="$HVIGOR_BIN" \
 OPENLESS_CACHE_ROOT="$CACHE_ROOT" \
 OPENLESS_HARMONY_TOOLCHAIN="$TOOLCHAIN" \
 OPENLESS_HARMONY_SIGNING_DIR="$SIGNING_DIR" \
+OPENLESS_HARMONY_STORE_SIGNING="${SIGN_PREFIX:+1}" \
+OPENLESS_HARMONY_SIGN_PREFIX="$SIGN_PREFIX" \
   bash "$APP_ROOT/scripts/build-harmony-frontend.sh"
 
 BUILD_PROJECT="$CACHE_ROOT/harmony/openless-project"
@@ -103,11 +111,27 @@ UNSIGNED=$(ls "$OUT_DIR"/*-unsigned.hap 2>/dev/null | head -1)
 [ -n "$UNSIGNED" ] || { echo "hvigor produced no unsigned HAP in $OUT_DIR" >&2; exit 1; }
 
 SIGNED=""
+APP_PACK=""
 if [ -n "$SIGN_PREFIX" ]; then
   python3 "$APP_ROOT/scripts/sign-harmony-hap.py" \
     "$TOOLCHAIN" "$SIGNING_DIR" "$OUT_DIR" --prefix "$SIGN_PREFIX"
+  # The App Pack is signed the same way; `hap-sign-tool sign-app` accepts `.app`.
+  if [ -d "$CACHE_ROOT/harmony/openless-project/build/outputs/default" ]; then
+    python3 "$APP_ROOT/scripts/sign-harmony-hap.py" \
+      "$TOOLCHAIN" "$SIGNING_DIR" "$CACHE_ROOT/harmony/openless-project/build/outputs/default" \
+      --prefix "$SIGN_PREFIX" --skip-hap
+  fi
   SIGNED="$OUT_DIR/entry-default-signed.hap"
   [ -f "$SIGNED" ] || { echo "expected a signed HAP at $SIGNED" >&2; exit 1; }
+
+  # AppGallery rejects a bare HAP ("The suffix name of the software package is
+  # incorrect", code 204144641), so the store channels ship the signed App Pack.
+  APP_OUT="$BUILD_PROJECT/build/outputs/default"
+  APP_PACK=$(ls "$APP_OUT"/*-signed.app 2>/dev/null | head -1 || true)
+  [ -n "$APP_PACK" ] || {
+    echo "store channel produced no signed .app App Pack in $APP_OUT (AppGallery requirement)" >&2
+    exit 1
+  }
 else
   echo "no store signing: packaging the unsigned HAP only"
 fi
@@ -118,6 +142,11 @@ mkdir -p "$OUTPUT"
 # download never carries someone else's signing identity.
 cp "$UNSIGNED" "$OUTPUT/OpenLess_harmony_arm64.hap"
 cp "$UNSIGNED" "$OUTPUT/OpenLess_harmony.hap"
+if [ -n "$APP_PACK" ]; then
+  # Store-only artifact: AppGallery takes the App Pack, and it never enters the
+  # GitHub Release.
+  cp "$APP_PACK" "$OUTPUT/OpenLess_harmony_arm64-signed.app"
+fi
 if [ -n "$SIGNED" ]; then
   # Store-only artifact: the workflow uploads it to AppGallery and keeps it out
   # of the Release.
