@@ -452,11 +452,19 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
+      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      const target = { kind: 'WebviewWindow' as const, label: getCurrentWebviewWindow().label };
       if (cancelled) return;
       const subscribe = async <T,>(name: string, apply: (payload: T) => void) => {
-        const unlisten = await listen<T>(name, (event) => {
-          if (!cancelled) apply(event.payload);
-        });
+        // Tauri's default Any listener also receives emit_to(otherWindow). In particular,
+        // hiding a mirror sends it idle; that must never exit the primary capsule.
+        const unlisten = await listen<T>(
+          name,
+          (event) => {
+            if (!cancelled) apply(event.payload);
+          },
+          name === 'backend:event' ? undefined : { target },
+        );
         if (cancelled) {
           unlisten();
           return false;
