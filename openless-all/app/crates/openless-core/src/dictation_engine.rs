@@ -1023,6 +1023,13 @@ impl DictationEngine for PipelineDictationEngine {
             // Issue #1225: evaluate the optional policy only after correction and
             // final transcript publication, so the script sees what the user will
             // actually receive and cannot affect raw ASR diagnostics.
+            // Missing provider metadata must fall back to the winning invocation,
+            // never the cloud route that lost to the local standby.
+            let strategy_asr = if local_fallback_used || local_won_race {
+                context.asr_fallback.as_ref().unwrap_or(&context.asr)
+            } else {
+                &context.asr
+            };
             let strategy_input = crate::polish_strategy::PolishStrategyInput {
                 char_count: transcript
                     .text
@@ -1034,16 +1041,16 @@ impl DictationEngine for PipelineDictationEngine {
                 language: asr_metadata
                     .language
                     .clone()
-                    .or_else(|| context.asr.language.clone()),
+                    .or_else(|| strategy_asr.language.clone()),
                 confidence: asr_metadata.confidence,
                 asr_provider: asr_call_label
                     .as_ref()
                     .map(|label| label.provider.clone())
-                    .unwrap_or_else(|| context.asr.provider_type.clone()),
+                    .unwrap_or_else(|| strategy_asr.provider_type.clone()),
                 asr_model: asr_call_label
                     .as_ref()
                     .and_then(|label| label.model.clone())
-                    .or_else(|| context.asr.model.clone()),
+                    .or_else(|| strategy_asr.model.clone()),
             };
             let strategy_decision = (context.output_target
                 != crate::dictation_context::DictationOutputTarget::Qa)
@@ -4904,6 +4911,74 @@ mod tests {
         assert_eq!(result.polished_text, "润色后");
         assert_eq!(polish_calls.load(Ordering::SeqCst), 1);
         assert_eq!(started.lock().unwrap().as_slice(), &[CLOUD, LOCAL]);
+    }
+
+    #[tokio::test]
+    async fn custom_strategy_uses_the_winning_asr_invocation_metadata() {
+        for (local_wins, language, model, expected_language, expected_model) in [
+            (
+                true,
+                Some("zh"),
+                Some("local-model"),
+                "\"zh\"",
+                "\"local-model\"",
+            ),
+            (true, None, None, "()", "()"),
+            (
+                false,
+                Some("zh"),
+                Some("local-model"),
+                "\"en\"",
+                "\"cloud-model\"",
+            ),
+        ] {
+            let (engine, progress, _, polish_calls) = racing_test_engine(
+                &[
+                    (CLOUD, if local_wins { 2_000 } else { 20 }),
+                    (LOCAL, if local_wins { 20 } else { 2_000 }),
+                ],
+                vec![transcript("cloud transcript")],
+                vec![transcript("local transcript")],
+                Ok(crate::ports::PolishOutput::text("polished")),
+            );
+            let mut context = (*polishing_fallback_context()).clone();
+            context.asr.language = Some("en".into());
+            context.asr.model = Some("cloud-model".into());
+            let fallback = context.asr_fallback.as_mut().unwrap();
+            fallback.language = language.map(str::to_owned);
+            fallback.model = model.map(str::to_owned);
+            let expected_provider = if local_wins { LOCAL } else { CLOUD };
+            context.polish.polish_strategy = crate::polish_strategy::PolishStrategyConfig {
+                enabled: true,
+                script: format!(
+                    r#"fn strategy(input) {{
+                        if input.language == {expected_language}
+                            && input.asrProvider == "{expected_provider}"
+                            && input.asrModel == {expected_model} {{
+                            #{{ action: "polish" }}
+                        }} else {{
+                            #{{ action: "skip" }}
+                        }}
+                    }}"#,
+                ),
+            };
+            let session_id = SessionId::new();
+            engine
+                .start(session_id, Arc::new(context), progress.clone())
+                .await
+                .unwrap();
+            let result = engine.finish(session_id, progress).await.unwrap();
+            assert_eq!(
+                result.raw_text,
+                if local_wins {
+                    "local transcript"
+                } else {
+                    "cloud transcript"
+                },
+            );
+            assert_eq!(result.polished_text, "polished");
+            assert_eq!(polish_calls.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[tokio::test]
