@@ -472,6 +472,19 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         unlisteners.push(unlisten);
         return true;
       };
+      const replayActiveSessionTranscript = async (sessionId: string) => {
+        const snapshot = await getCapsuleSnapshot().catch((error) => {
+          if (!cancelled) console.warn('[capsule] active session snapshot replay failed', error);
+          return undefined;
+        });
+        if (cancelled || !snapshot || snapshot.sessionId !== sessionId) return;
+        const current = transcriptViewRef.current;
+        if (shouldRetryTranscriptSnapshot(current, snapshot)) return;
+        const next = applyTranscriptSnapshot(current, snapshot);
+        if (next === current) return;
+        transcriptViewRef.current = next;
+        setLocalAsrText(next.text);
+      };
       const applyPayload = (p: CapsulePayload) => {
         if (!capsuleStateFirstLogged) {
           capsuleStateFirstLogged = true;
@@ -491,7 +504,17 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         // Any new recording session must drop prior ASR text — including when
         // the previous capsule was still transcribing/polishing/done from
         // dictation (selection-voice Start used to keep the stale stream).
-        if (p.state === 'recording' && previous !== 'recording' && !sessionChanged) {
+        const sessionId = p.sessionId;
+        const reactivatedSession =
+          p.state === 'recording' &&
+          previous !== 'recording' &&
+          !sessionChanged &&
+          !previousTranscript.sessionStartObserved &&
+          sessionId != null &&
+          nextTranscript.sessionId === sessionId;
+        if (reactivatedSession) {
+          void replayActiveSessionTranscript(sessionId);
+        } else if (p.state === 'recording' && previous !== 'recording' && !sessionChanged) {
           nextTranscript = beginTranscriptGeneration(nextTranscript);
         }
         if (

@@ -495,9 +495,11 @@ for (const overlay of [false, true]) {
       .every(([key, value]) => key !== 'setState' || value !== 'idle'),
   );
   probe('P3', 'stream_finished', { overlay, updates: 20, primary_active: true });
-  // Returning to allScreens reactivates the mirror without disturbing the primary.
+  // Returning to allScreens must replay the active session rather than reopening the old-session gate.
   bus.emit(mirrorLabel, 'capsule:state', { state: 'recording', sessionId: 'session' });
-  assert.equal(mirror.values.setState, 'recording');
+  await until(() => mirror.values.setState === 'recording');
+  transcript(mirror, 31, 'reactivated text');
+  assert.equal(mirror.values[textKey], 'reactivated text');
   assert.equal(primary.values[textKey], 'x'.repeat(30));
   release(primary);
   release(mirror);

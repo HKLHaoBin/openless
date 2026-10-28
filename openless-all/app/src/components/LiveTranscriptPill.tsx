@@ -148,6 +148,16 @@ export function CapsuleTranscriptOverlay() {
       const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
       if (cancelled) return;
       const target = { kind: 'WebviewWindow' as const, label: getCurrentWebviewWindow().label };
+      const replayActiveSessionTranscript = async (sessionId: string) => {
+        const snapshot = await getCapsuleSnapshot();
+        if (cancelled || !snapshot || snapshot.sessionId !== sessionId) return;
+        const current = transcriptRef.current;
+        if (shouldRetryTranscriptSnapshot(current, snapshot)) return;
+        const next = applyTranscriptSnapshot(current, snapshot);
+        if (next === current) return;
+        transcriptRef.current = next;
+        setText(next.text);
+      };
       const stateHandle = await listen<CapsulePayload>(
         'capsule:state',
         (event) => {
@@ -162,7 +172,21 @@ export function CapsuleTranscriptOverlay() {
           if (payload.capsuleStyle) setStyle(parseCapsuleStyle(payload.capsuleStyle) ?? 'classic');
           setSelectionPolish(payload.selectionPolish === true);
           setTranslation(payload.translation === true);
-          if (payload.state === 'recording' && previousState !== 'recording' && !sessionChanged) {
+          const sessionId = payload.sessionId;
+          const reactivatedSession =
+            payload.state === 'recording' &&
+            previousState !== 'recording' &&
+            !sessionChanged &&
+            !previousTranscript.sessionStartObserved &&
+            sessionId != null &&
+            sessionTranscript.sessionId === sessionId;
+          if (reactivatedSession) {
+            void replayActiveSessionTranscript(sessionId);
+          } else if (
+            payload.state === 'recording' &&
+            previousState !== 'recording' &&
+            !sessionChanged
+          ) {
             transcriptRef.current = beginTranscriptGeneration(transcriptRef.current);
             setText(transcriptRef.current.text);
           } else if (sessionChanged) {
