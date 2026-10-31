@@ -27,7 +27,7 @@ const instantiate = new Function(
   'deps',
   `const {loadSequence,packsLoaded,pendingDeletes,listStylePacks,setPacks,setSelectedId,
     setBusy,showSaveStatus,t,window,setUndoDelete,deleteStylePack,packs,editorOpen,
-    selectedId,startEditorClose,getStylePackPresentation,departing,cardRefs,cardDeparture,mounted}=deps;
+    selectedId,startEditorClose,getStylePackPresentation,departing,cardRefs,cardDeparture,mounted,markZipDiagnostic}=deps;
     ${compiled}; return {${names.join(',')}};`,
 );
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -42,7 +42,7 @@ function deferred() {
 function context() {
   const pack = { id: 'imported', name: 'Fixture', kind: 'imported', active: true };
   const other = { id: 'builtin', name: 'Builtin', kind: 'builtin', active: false };
-  const state = { rows: [pack, other], selected: pack.id, undo: null, errors: [], deleted: [] };
+  const state = { rows: [pack, other], selected: pack.id, undo: null, errors: [], deleted: [], diagnostics: [] };
   const pendingDeletes = { current: new Map() };
   const timers = new Map();
   let timerId = 0;
@@ -59,6 +59,9 @@ function context() {
     cardRefs: { current: new Map() },
     cardDeparture: () => Promise.resolve(),
     mounted: { current: true },
+    markZipDiagnostic: (operation, event, facts) => {
+      if (operation) state.diagnostics.push({ operation, event, facts });
+    },
     listStylePacks: () => listing(),
     deleteStylePack: (id) => {
       state.deleted.push(id);
@@ -151,4 +154,34 @@ function context() {
   assert.equal(c.pendingDeletes.current.size, 0);
   assert.equal(c.state.errors[0][0], 'failed');
 }
-console.log('Style deletion lifecycle regressions passed');
+// The extracted real load handler retains its diagnostic dependency. Its
+// observer sees the applied list, not just a successful list RPC.
+{
+  const c = context();
+  const operation = { id: 'opaque-test-operation', sequence: 0 };
+  await c.api.loadPacks(c.pack.id, operation);
+  assert.deepEqual(c.state.rows, [c.pack, c.other]);
+  assert.deepEqual(c.state.diagnostics.map((entry) => entry.event), ['list_started', 'list_applied']);
+  assert.deepEqual(c.state.diagnostics[1].facts, { count: 2, present: true });
+  assert.equal(c.state.diagnostics[1].operation, operation);
+}
+// Superseded and rejected reads have their own outcomes, never list_applied.
+{
+  const c = context();
+  const operation = { id: 'opaque-test-operation', sequence: 0 };
+  const stale = deferred();
+  c.listing(() => stale.promise);
+  const first = c.api.loadPacks(c.pack.id, operation);
+  c.listing(() => Promise.resolve([c.other]));
+  await c.api.loadPacks(c.other.id);
+  stale.resolve([c.pack, c.other]);
+  await first;
+  assert.deepEqual(c.state.rows, [c.other]);
+  assert.deepEqual(c.state.diagnostics.map((entry) => entry.event), ['list_started', 'list_superseded']);
+  c.state.diagnostics.length = 0;
+  c.listing(() => Promise.reject(new Error('fixture list failure')));
+  await c.api.loadPacks(c.pack.id, operation);
+  assert.deepEqual(c.state.diagnostics.map((entry) => entry.event), ['list_started', 'list_error']);
+  assert.deepEqual(c.state.rows, [c.other]);
+}
+console.log('Style deletion lifecycle and diagnostic observer regressions passed');
