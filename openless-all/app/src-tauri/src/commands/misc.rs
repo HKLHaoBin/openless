@@ -252,19 +252,41 @@ pub async fn stop_microphone_level_monitor(app: AppHandle) {
 /// through the JNI ContentResolver instead, avoiding the 0-byte files caused by
 /// tauri-plugin-fs's detachFd.
 #[tauri::command]
-pub fn export_error_log(target_path: String) -> Result<(), String> {
+pub fn export_error_log(
+    target_path: String,
+    frontend_coverage: Option<crate::issue1320_diagnostics::FrontendDelivery>,
+) -> Result<(), String> {
     let src = resolve_openless_log_path()?;
+    #[cfg(not(target_os = "android"))]
+    let _ = frontend_coverage;
 
     #[cfg(target_os = "android")]
     {
         if target_path.starts_with("content://") {
             let bytes = std::fs::read(&src).map_err(|e| format!("读取日志失败：{e}"))?;
+            let bytes = crate::issue1320_diagnostics::include_in_error_log(bytes, frontend_coverage)?;
             return crate::android::jni::android::write_content_uri(&target_path, &bytes)
                 .map_err(|e| format!("复制日志失败：{e}"));
         }
         let path = target_path
             .strip_prefix("file://")
             .unwrap_or(target_path.as_str());
+        #[cfg(feature = "issue-1320-diagnostics")]
+        {
+            let bytes = std::fs::read(&src).map_err(|e| format!("读取日志失败：{e}"))?;
+            let bytes = crate::issue1320_diagnostics::include_in_error_log(bytes, frontend_coverage)?;
+            // Preserve std::fs::copy's same-file protection (including hard links).
+            use std::os::unix::fs::MetadataExt;
+            let source = std::fs::metadata(&src).map_err(|e| format!("读取日志失败：{e}"))?;
+            if let Ok(destination) = std::fs::metadata(path) {
+                if source.dev() == destination.dev() && source.ino() == destination.ino() {
+                    return Err("日志导出目标不能是源日志".to_owned());
+                }
+            }
+            return std::fs::write(std::path::Path::new(path), bytes)
+                .map_err(|e| format!("复制日志失败：{e}"));
+        }
+        #[cfg(not(feature = "issue-1320-diagnostics"))]
         return std::fs::copy(&src, std::path::Path::new(path))
             .map(|_| ())
             .map_err(|e| format!("复制日志失败：{e}"));
@@ -282,9 +304,13 @@ pub fn export_error_log(target_path: String) -> Result<(), String> {
 /// 无法正常弹出的 CREATE_DOCUMENT / SAF 保存对话框。
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub fn export_error_log_to_downloads(file_name: String) -> Result<String, String> {
+pub fn export_error_log_to_downloads(
+    file_name: String,
+    frontend_coverage: Option<crate::issue1320_diagnostics::FrontendDelivery>,
+) -> Result<String, String> {
     let src = resolve_openless_log_path()?;
     let bytes = std::fs::read(&src).map_err(|e| format!("读取日志失败：{e}"))?;
+    let bytes = crate::issue1320_diagnostics::include_in_error_log(bytes, frontend_coverage)?;
     crate::android::jni::android::write_public_download(&file_name, &bytes)
         .map_err(|e| format!("导出日志失败：{e}"))
 }

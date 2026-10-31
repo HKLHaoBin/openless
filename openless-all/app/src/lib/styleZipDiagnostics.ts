@@ -142,3 +142,24 @@ export function createStyleZipDiagnostics(enabled: boolean, invoke: Invoke) {
   };
   return { enabled, refresh, emit, start, summary };
 }
+
+// One producer per WebView realm; survives Style page unmounts. A WebView reload
+// creates a new random producer instance and retains unknown previous coverage.
+let shared: ReturnType<typeof createStyleZipDiagnostics> | undefined;
+export function getStyleZipDiagnostics(enabled: boolean, invoke: Invoke) {
+  if (!enabled) return createStyleZipDiagnostics(false, invoke);
+  shared ??= createStyleZipDiagnostics(true, invoke);
+  return shared;
+}
+
+export function zipDiagnosticDelivery() {
+  if (!shared) return undefined;
+  const value = shared.summary();
+  const bounded = (count: number) => Math.min(4_294_967_295, Math.max(0, count));
+  return {
+    instanceId: value.instanceId,
+    skipped: bounded(value.skipped),
+    failed: bounded(value.failed),
+    pending: bounded(value.inFlight),
+  };
+}

@@ -27,7 +27,8 @@ const instantiate = new Function(
   'deps',
   `const {loadSequence,packsLoaded,pendingDeletes,listStylePacks,setPacks,setSelectedId,
     setBusy,showSaveStatus,t,window,setUndoDelete,deleteStylePack,packs,editorOpen,
-    selectedId,startEditorClose,getStylePackPresentation,departing,cardRefs,cardDeparture,mounted}=deps;
+    selectedId,startEditorClose,getStylePackPresentation,departing,cardRefs,cardDeparture,mounted,
+    zipDiagnostics,diagnosticImport}=deps;
     ${compiled}; return {${names.join(',')}};`,
 );
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -44,6 +45,8 @@ function context() {
   const other = { id: 'builtin', name: 'Builtin', kind: 'builtin', active: false };
   const state = { rows: [pack, other], selected: pack.id, undo: null, errors: [], deleted: [] };
   const pendingDeletes = { current: new Map() };
+  const diagnosticImport = { current: null };
+  const observations = [];
   const timers = new Map();
   let timerId = 0;
   let listing = () => Promise.resolve([pack, other]);
@@ -55,6 +58,8 @@ function context() {
     loadSequence: { current: 0 },
     packsLoaded: { current: true },
     pendingDeletes,
+    diagnosticImport,
+    zipDiagnostics: { emit: (...args) => observations.push(args) },
     departing: { current: new Set() },
     cardRefs: { current: new Map() },
     cardDeparture: () => Promise.resolve(),
@@ -85,6 +90,8 @@ function context() {
   });
   return {
     api,
+    diagnosticImport,
+    observations,
     state,
     pack,
     other,
@@ -97,6 +104,39 @@ function context() {
       deletion = fn;
     },
   };
+}
+
+// The actual page handler associates row observation with its applied list array.
+{
+  const c = context();
+  const operation = { runId: 'run', operationId: 'operation' };
+  c.diagnosticImport.current = { context: operation, finished: false };
+  await c.api.loadPacks(c.pack.id, operation);
+  assert.equal(c.diagnosticImport.current.appliedPacks, c.state.rows);
+  assert.deepEqual(c.observations, [['list_applied', operation, { present: true, count: 2 }]]);
+}
+{
+  const c = context();
+  const operation = { runId: 'run', operationId: 'operation' };
+  c.diagnosticImport.current = { context: operation, finished: false };
+  const stale = deferred();
+  c.listing(() => stale.promise);
+  const pending = c.api.loadPacks(c.pack.id, operation);
+  c.listing(() => Promise.resolve([c.other]));
+  await c.api.loadPacks();
+  stale.resolve([c.pack, c.other]);
+  await pending;
+  assert.equal(c.diagnosticImport.current.appliedPacks, undefined);
+  assert.deepEqual(c.observations, [['list_superseded', operation]]);
+  assert.deepEqual(c.state.rows, [c.other]);
+}
+{
+  const c = context();
+  const operation = { runId: 'run', operationId: 'operation' };
+  c.listing(() => Promise.reject(new Error('fixture list failure')));
+  await c.api.loadPacks(c.pack.id, operation);
+  assert.deepEqual(c.observations, [['list_failed', operation]]);
+  assert.equal(c.state.errors[0][0], 'failed');
 }
 
 // Refresh/prefs:changed cannot resurrect or select an optimistically removed row.

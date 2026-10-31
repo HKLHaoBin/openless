@@ -217,7 +217,13 @@ pub fn import_style_pack_from_zip(
             crate::persistence::STYLE_PACK_ARCHIVE_MAX_COMPRESSED_BYTES,
         );
         #[cfg(feature = "issue-1320-diagnostics")]
-        observe(if read.is_ok() { Event::ContentRead } else { Event::ContentFailed });
+        match &read {
+            Ok(bytes) => crate::issue1320_diagnostics::observe(
+                Event::ContentRead, diagnostic_context.as_ref(),
+                Facts { bytes: Some(bytes.len() as u64), ..Facts::default() },
+            ),
+            Err(_) => observe(Event::ContentFailed),
+        }
         let bytes = read?;
         let result = core
             .import_style_pack_bytes(&bytes)
@@ -240,10 +246,46 @@ pub fn export_style_pack_to_zip(
     target_path: String,
 ) -> Result<String, String> {
     log::info!(
-        "[style-pack] command export requested id={} target_path={}",
-        id,
-        target_path
+        "[style-pack] command export requested target_kind={}",
+        if target_path.starts_with("content://") {
+            "content-uri"
+        } else {
+            "file-path"
+        }
     );
+    #[cfg(target_os = "android")]
+    {
+        #[cfg(feature = "issue-1320-diagnostics")]
+        use crate::issue1320_sink::{Event, Facts};
+        #[cfg(feature = "issue-1320-diagnostics")]
+        let context = crate::issue1320_diagnostics::backend_context();
+        #[cfg(feature = "issue-1320-diagnostics")]
+        let observe = |event, facts| crate::issue1320_diagnostics::observe(event, context.as_ref(), facts);
+        #[cfg(feature = "issue-1320-diagnostics")]
+        observe(Event::ExportStarted, Facts::default());
+        let result = crate::style_zip_transfer::export_zip(
+            &target_path,
+            || {
+                let bytes = core.export_style_pack_bytes(&id).map_err(|error| error.to_string())?;
+                #[cfg(feature = "issue-1320-diagnostics")]
+                observe(Event::ExportEncoded, Facts { bytes: Some(bytes.len() as u64), ..Facts::default() });
+                Ok(bytes)
+            },
+            |uri, bytes| {
+                #[cfg(feature = "issue-1320-diagnostics")]
+                observe(Event::ExportWriteStarted, Facts { bytes: Some(bytes.len() as u64), ..Facts::default() });
+                crate::android::jni::android::write_content_uri(uri, bytes)
+            },
+            || {
+                core.export_style_pack_path(&id, std::path::Path::new(&target_path))
+                    .map_err(|error| error.to_string())
+            },
+        );
+        #[cfg(feature = "issue-1320-diagnostics")]
+        observe(if result.is_ok() { Event::ExportSaved } else { Event::ExportFailed }, Facts::default());
+        result?;
+    }
+    #[cfg(not(target_os = "android"))]
     core.export_style_pack_path(&id, std::path::Path::new(&target_path))
         .map_err(|e| e.to_string())?;
     Ok(target_path)

@@ -37,6 +37,7 @@ def main():
         safe_keys = {
             "source", "event_seq", "present", "busy", "count", "duration_ms", "feedback", "stage",
             "error_code",
+            "bytes",
             "native_activity_covered", "plugin_callback_covered", "frontend_delivery", "build_id",
             "dropped", "subsequent_records_discarded",
             "frontend_skipped", "frontend_failed", "frontend_pending",

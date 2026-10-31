@@ -94,6 +94,15 @@ mod enabled {
         sink.record(event, operation, facts);
     }
 
+    pub fn backend_context() -> Option<Correlation> {
+        let Some(Ok(sink)) = SINK.get() else { return None; };
+        let sink = sink.lock().ok()?;
+        Some(Correlation {
+            run_id: sink.run_id().to_owned(),
+            operation_id: uuid::Uuid::new_v4().simple().to_string(),
+        })
+    }
+
     pub fn frontend(event: &str, correlation: &Correlation, facts: FrontendFacts) -> Result<(), &'static str> {
         let event = Event::frontend(event).ok_or("invalid_event")?;
         let sink = sink()?;
@@ -113,7 +122,7 @@ mod enabled {
         Ok(())
     }
 
-    pub fn export(delivery: Option<FrontendDelivery>) -> Result<String, &'static str> {
+    pub fn snapshot(delivery: Option<FrontendDelivery>) -> Result<Vec<u8>, &'static str> {
         let bytes = {
             let mut sink = sink()?.lock().map_err(|_| "lock_failure")?;
             let facts = if let Some(delivery) = delivery {
@@ -127,13 +136,12 @@ mod enabled {
             };
             sink.snapshot_for_export(facts).map_err(|_| "snapshot_or_coverage_failure")?
         };
-        crate::android::jni::android::write_public_download("issue-1320-style-zip.ndjson", &bytes)
-            .map_err(|_| "export_failure")
+        Ok(bytes)
     }
 }
 
 #[cfg(all(target_os = "android", feature = "issue-1320-diagnostics"))]
-pub use enabled::observe;
+pub use enabled::{observe, backend_context};
 
 #[tauri::command]
 pub fn style_zip_diagnostic_context() -> Coverage {
@@ -151,10 +159,13 @@ pub fn record_style_zip_diagnostic(event: String, correlation: Correlation, fact
     { let _ = (event, correlation, facts); Err("disabled".to_owned()) }
 }
 
-#[tauri::command]
-pub fn export_style_zip_diagnostics(frontend_coverage: Option<FrontendDelivery>) -> Result<String, String> {
+/// Bundle only in the exported copy; never append to the ordinary application log.
+pub(crate) fn include_in_error_log(bytes: Vec<u8>, frontend_coverage: Option<FrontendDelivery>) -> Result<Vec<u8>, String> {
     #[cfg(all(target_os = "android", feature = "issue-1320-diagnostics"))]
-    { enabled::export(frontend_coverage).map_err(str::to_owned) }
+    {
+        let snapshot = enabled::snapshot(frontend_coverage).map_err(str::to_owned)?;
+        Ok(crate::issue1320_sink::bundle_export(&bytes, &snapshot))
+    }
     #[cfg(not(all(target_os = "android", feature = "issue-1320-diagnostics")))]
-    { let _ = frontend_coverage; Err("disabled".to_owned()) }
+    { let _ = frontend_coverage; Ok(bytes) }
 }

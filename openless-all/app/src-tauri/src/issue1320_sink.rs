@@ -25,6 +25,11 @@ pub enum Event {
     ContentFailed,
     ArchiveSaved,
     ArchiveFailed,
+    ExportStarted,
+    ExportEncoded,
+    ExportWriteStarted,
+    ExportSaved,
+    ExportFailed,
     ListApplied,
     ListSuperseded,
     ListFailed,
@@ -71,6 +76,11 @@ impl Event {
             Self::ContentFailed => ("P4", "\"H3\"", "content_failed", "error", "backend"),
             Self::ArchiveSaved => ("P4", "\"H3\"", "archive_saved", "returned", "backend"),
             Self::ArchiveFailed => ("P4", "\"H3\"", "archive_failed", "error", "backend"),
+            Self::ExportStarted => ("P4", "\"H3\"", "export_started", "started", "backend"),
+            Self::ExportEncoded => ("P4", "\"H3\"", "export_encoded", "returned", "backend"),
+            Self::ExportWriteStarted => ("P4", "\"H3\"", "export_write_started", "started", "backend"),
+            Self::ExportSaved => ("P4", "\"H3\"", "export_saved", "returned", "backend"),
+            Self::ExportFailed => ("P4", "\"H3\"", "export_failed", "error", "backend"),
             Self::ListApplied => ("P5", "\"H3\"", "list_applied", "applied", "frontend"),
             Self::ListSuperseded => ("P5", "\"H3\"", "list_superseded", "superseded", "frontend"),
             Self::ListFailed => ("P5", "\"H3\"", "list_failed", "error", "frontend"),
@@ -83,6 +93,7 @@ impl Event {
 
 #[derive(Default, Clone)]
 pub struct Facts {
+    pub bytes: Option<u64>,
     pub event_seq: Option<u32>,
     pub present: Option<bool>,
     pub busy: Option<bool>,
@@ -151,6 +162,9 @@ impl Sink {
         let (probe, hypotheses, name, outcome, source) = event.metadata();
         let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
         let mut safe = format!("\"source\":\"{source}\"");
+        if let Some(bytes) = facts.bytes {
+            safe.push_str(&format!(",\"bytes\":{bytes}"));
+        }
         if let Some(seq) = facts.event_seq {
             safe.push_str(&format!(",\"event_seq\":{seq}"));
         }
@@ -257,6 +271,15 @@ impl Sink {
     }
 }
 
+/// Copies both sources into one returned artifact; the source files are untouched.
+pub fn bundle_export(ordinary: &[u8], snapshot: &[u8]) -> Vec<u8> {
+    let mut bytes = ordinary.to_vec();
+    if !bytes.ends_with(b"\n") { bytes.push(b'\n'); }
+    bytes.extend_from_slice(b"\n=== OpenLess ZIP diagnostics (NDJSON; partial coverage) ===\n");
+    bytes.extend_from_slice(snapshot);
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,11 +375,14 @@ mod tests {
             Event::PickerSelected, Event::PickerCancelled, Event::Failed,
             Event::ImportRequested, Event::ContentRead, Event::ContentFailed,
             Event::ArchiveSaved, Event::ArchiveFailed, Event::ListApplied,
+            Event::ExportStarted, Event::ExportEncoded, Event::ExportWriteStarted,
+            Event::ExportSaved, Event::ExportFailed,
             Event::ListSuperseded, Event::ListFailed, Event::UiCommitted,
             Event::FeedbackCommitted, Event::LimitReached,
         ] {
             sink.record(event, None, Facts {
                 event_seq: Some(1), present: Some(false), busy: Some(true),
+                bytes: Some(5696),
                 stage: Some(u8::MAX), feedback: Some(u8::MAX),
                 error_code: Some(u8::MAX),
                 skipped: Some(1), failed: Some(2), pending: Some(3),
@@ -413,5 +439,18 @@ mod tests {
         let text = String::from_utf8(exported).unwrap();
         assert!(text.contains("\"frontend_failed\":1"));
         assert!(text.contains("\"frontend_pending\":2"));
+    }
+
+    #[test]
+    fn centralized_export_preserves_sources_and_contains_qualified_snapshot() {
+        let ordinary = b"ordinary application log without newline";
+        let mut sink = sink("bundle.ndjson");
+        let snapshot = sink.snapshot_for_export(Facts { failed: Some(2), pending: Some(1), ..Facts::default() }).unwrap();
+        let bundled = bundle_export(ordinary, &snapshot);
+        assert!(bundled.starts_with(ordinary));
+        assert!(bundled.ends_with(&snapshot));
+        assert_eq!(sink.snapshot().unwrap(), snapshot);
+        assert_eq!(ordinary, b"ordinary application log without newline");
+        assert!(String::from_utf8(bundled).unwrap().contains("\"frontend_failed\":2"));
     }
 }

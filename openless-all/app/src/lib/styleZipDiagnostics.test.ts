@@ -1,4 +1,4 @@
-import { createStyleZipDiagnostics, zipDiagnosticErrorCode, zipDiagnosticFeedback, type ZipDiagnosticFacts } from './styleZipDiagnostics';
+import { createStyleZipDiagnostics, getStyleZipDiagnostics, zipDiagnosticDelivery, zipDiagnosticErrorCode, zipDiagnosticFeedback, type ZipDiagnosticFacts } from './styleZipDiagnostics';
 
 const assert = {
   equal(actual: unknown, expected: unknown, message = 'values differ') {
@@ -89,3 +89,18 @@ assert.match(remounted.summary().instanceId ?? '', /^[a-f0-9]{32}$/);
 assert.ok(client.summary().instanceId !== remounted.summary().instanceId);
 assert.equal(rejected.summary().failed, 1);
 assert.equal(remounted.summary().failed, 0);
+
+// The central export retains the producer across page remounts and reports
+// an unresolved transport without waiting for it or hiding it behind backend loss.
+assert.equal(zipDiagnosticDelivery(), undefined);
+const unresolvedInvoke = async <T>(command: string): Promise<T> => {
+  if (command === 'style_zip_diagnostic_context')
+    return { enabled: true, runId, status: 'ready' } as T;
+  return new Promise<T>(() => {});
+};
+const sharedClient = getStyleZipDiagnostics(true, unresolvedInvoke);
+await sharedClient.refresh();
+sharedClient.start();
+assert.equal(zipDiagnosticDelivery()?.pending, 1);
+assert.equal(getStyleZipDiagnostics(true, unresolvedInvoke), sharedClient);
+assert.equal(zipDiagnosticDelivery()?.instanceId, sharedClient.summary().instanceId);

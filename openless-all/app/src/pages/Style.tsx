@@ -1,7 +1,7 @@
 import { isHarmonyHost, invokeHarmony } from '../lib/harmonyBridge';
 import { invoke } from '@tauri-apps/api/core';
 import { isAndroid } from '../lib/platform';
-import { createStyleZipDiagnostics, zipDiagnosticErrorCode, zipDiagnosticFeedback, type ZipDiagnosticContext } from '../lib/styleZipDiagnostics';
+import { getStyleZipDiagnostics, zipDiagnosticErrorCode, zipDiagnosticFeedback, type ZipDiagnosticContext } from '../lib/styleZipDiagnostics';
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
@@ -177,18 +177,16 @@ export function Style() {
   const [saveMessage, setSaveMessage] = useState('');
   // [DEBUG-STYLE-ZIP-1320] Android diagnostic build only; normal builds stay silent.
   const [zipDiagnostics] = useState(() =>
-    createStyleZipDiagnostics(
+    getStyleZipDiagnostics(
       import.meta.env.VITE_ISSUE_1320_DIAGNOSTICS === 'true' && isTauri && isAndroid(),
       invoke,
     ),
   );
-  const [diagnosticNotice, setDiagnosticNotice] = useState(
-    'ZIP diagnostics: coverage unknown / 覆盖未知',
-  );
-  const [diagnosticExporting, setDiagnosticExporting] = useState(false);
+
   const diagnosticImport = useRef<{
     context: ZipDiagnosticContext;
     packId?: string;
+    appliedPacks?: StylePack[];
     finished: boolean;
   } | null>(null);
   const diagnosticFeedback = useRef<{
@@ -214,12 +212,7 @@ export function Style() {
   );
   useEffect(() => {
     if (!zipDiagnostics.enabled) return;
-    void zipDiagnostics.refresh().then(({ coverage }) => {
-      if (mounted.current)
-        setDiagnosticNotice(
-          `ZIP diagnostics: ${coverage?.status ?? 'unknown'}; native Activity/plugin callback NOT covered / 原生回调未覆盖`,
-        );
-    });
+    void zipDiagnostics.refresh();
     return () => {
       const context = diagnosticImport.current?.context ?? diagnosticFeedback.current?.context;
       if (context) zipDiagnostics.emit('unmounted', context);
@@ -230,7 +223,7 @@ export function Style() {
     if (!operation) return;
     // P5/H3: actual post-commit row ref + state, not a backend Ok or setState claim.
     zipDiagnostics.emit('ui_committed', operation.context, {
-      present: operation.packId
+      present: operation.packId && operation.appliedPacks === packs
         ? Boolean(cardRefs.current.get(operation.packId)?.isConnected)
         : undefined,
       busy: busy === 'importing',
@@ -322,6 +315,8 @@ export function Style() {
       // A refresh must not resurrect a row whose undo window or delete is active.
       const next = listed.filter((pack) => !pendingDeletes.current.has(pack.id));
       packsLoaded.current = true;
+      if (diagnosticContext && diagnosticImport.current?.context === diagnosticContext)
+        diagnosticImport.current.appliedPacks = next;
       setPacks(next);
       const nextSelectedId =
         (preferredId && next.some((pack) => pack.id === preferredId) && preferredId) ||
@@ -737,31 +732,6 @@ export function Style() {
     }
   };
 
-  const handleExportZipDiagnostics = async () => {
-    setDiagnosticExporting(true);
-    try {
-      const delivery = zipDiagnostics.summary();
-      const bounded = (count: number) => Math.min(4_294_967_295, count);
-      const path = await invoke<string>('export_style_zip_diagnostics', {
-        frontendCoverage: {
-          instanceId: delivery.instanceId,
-          skipped: bounded(delivery.skipped),
-          failed: bounded(delivery.failed),
-          pending: bounded(delivery.inFlight),
-        },
-      });
-      const { coverage, skipped, failed, inFlight } = await zipDiagnostics.refresh();
-      setDiagnosticNotice(
-        `Exported / 已导出: ${path}. Coverage=${coverage?.status ?? 'unknown'}; dropped=${coverage?.dropped ?? 'unknown'}; JS current-page skipped=${skipped}, failed=${failed}, pending=${inFlight}. Previous page delivery unknown; snapshot only; no native callback coverage / 仅当前页面快照，先前页面送达情况未知，原生回调未覆盖`,
-      );
-    } catch {
-      setDiagnosticNotice(
-        'ZIP diagnostic export failed / ZIP诊断导出失败；coverage unknown / 覆盖未知',
-      );
-    } finally {
-      setDiagnosticExporting(false);
-    }
-  };
 
   const handlePublishToMarketplace = async (pack = selectedPack) => {
     if (!pack) return;
@@ -972,20 +942,11 @@ export function Style() {
             >
               {busy === 'importing' ? t('common.loading') : t('style.pack.importZip')}
             </Btn>
-            {zipDiagnostics.enabled && (
-              <Btn
-                variant="ghost"
-                onClick={() => void handleExportZipDiagnostics()}
-                disabled={diagnosticExporting}
-              >
-                {diagnosticExporting ? 'Exporting / 导出中' : 'Export ZIP diagnostics / 导出ZIP诊断'}
-              </Btn>
-            )}
+
           </div>
         }
       />
 
-      {zipDiagnostics.enabled && <div role="status">{diagnosticNotice}</div>}
 
       {/* Anchored to the console card's top-right — same zone as the marketplace / refresh /
           import ZIP buttons; the pale blue pill flashes for 0.8s only and never covers the
