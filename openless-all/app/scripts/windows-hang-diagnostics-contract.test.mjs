@@ -58,7 +58,25 @@ assert.match(windowsLayout, /host\.on_main_thread_observed\(crate::issue1266_deb
 assert.ok(windowsLayout.indexOf('move ||') < windowsLayout.indexOf('capsule_window()'));
 assert.doesNotMatch(windowsLayout, /self\.clone\(|capsule\.clone\(|self\.app/);
 assert.match(layoutWatch, /#\[cfg\(not\(target_os = "windows"\)\)\]\s*let capsule = self\.clone\(\)/);
-const borrowedDispatch = coordinatorHost.slice(coordinatorHost.indexOf('fn on_main_thread_observed<'), coordinatorHost.indexOf('pub(crate) fn native_capsule_status('));
+// Bound this assertion by the method's own closing indentation, not the name
+// of an unrelated next method (beta may rename/remove that neighbor).
+function rustMethod(source, signature) {
+  const start = source.indexOf(signature);
+  assert.ok(start >= 0, `missing Rust method: ${signature}`);
+  const end = source.indexOf('\n    }', start);
+  assert.ok(end >= 0, `missing Rust method boundary: ${signature}`);
+  return source.slice(start, end + '\n    }'.length);
+}
+const extractionFixture = `impl Host {
+    fn observed() {
+        if ready { send(); }
+    }
+    fn unrelated() { app.clone(); }
+}`;
+assert.equal(rustMethod(extractionFixture, 'fn observed('), 'fn observed() {\n        if ready { send(); }\n    }');
+assert.throws(() => rustMethod(extractionFixture, 'fn missing('), /missing Rust method:/);
+assert.throws(() => rustMethod('    fn unclosed() {', 'fn unclosed('), /missing Rust method boundary:/);
+const borrowedDispatch = rustMethod(coordinatorHost, 'fn on_main_thread_observed<');
 assert.match(borrowedDispatch, /MainDispatch::new\(kind\)/);
 assert.match(borrowedDispatch, /let task = dispatch\.wrap\(task\)/);
 assert.match(borrowedDispatch, /self\.app\.lock\(\)\.as_ref\(\)/);
