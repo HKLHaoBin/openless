@@ -135,10 +135,23 @@ pub(crate) fn close_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 return;
             };
             if let Err(error) = window.destroy() {
-                if let Some(lifecycle) = app_for_main.try_state::<MainWindowLifecycle>() {
+                let reopen = if let Some(lifecycle) = app_for_main.try_state::<MainWindowLifecycle>() {
                     let mut state = lifecycle.lock();
+                    let reopen = state.reopen_pending;
                     state.closing = false;
                     state.reopen_pending = false;
+                    reopen
+                } else {
+                    false
+                };
+                // The unload step intentionally replaced the document before destroy. If the
+                // native destroy fails, restore the main document before the next open instead
+                // of leaving a hidden, reusable about:blank WebView behind.
+                let _ = window.eval("location.replace('index.html')");
+                if reopen {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
                 }
                 log::warn!("[main] destroy after WebView unload failed: {error}");
             }
