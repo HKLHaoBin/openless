@@ -27,7 +27,7 @@ const instantiate = new Function(
   'deps',
   `const {loadSequence,packsLoaded,pendingDeletes,listStylePacks,setPacks,setSelectedId,
     setBusy,showSaveStatus,t,window,setUndoDelete,deleteStylePack,packs,editorOpen,
-    selectedId,startEditorClose,getStylePackPresentation,departing,cardRefs,cardDeparture,mounted,markZipDiagnostic,diagnosticRow}=deps;
+    selectedId,startEditorClose,getStylePackPresentation,departing,cardRefs,cardDeparture,mounted}=deps;
     ${compiled}; return {${names.join(',')}};`,
 );
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -42,7 +42,7 @@ function deferred() {
 function context() {
   const pack = { id: 'imported', name: 'Fixture', kind: 'imported', active: true };
   const other = { id: 'builtin', name: 'Builtin', kind: 'builtin', active: false };
-  const state = { rows: [pack, other], selected: pack.id, undo: null, errors: [], deleted: [], diagnostics: [] };
+  const state = { rows: [pack, other], selected: pack.id, undo: null, errors: [], deleted: [] };
   const pendingDeletes = { current: new Map() };
   const timers = new Map();
   let timerId = 0;
@@ -59,10 +59,6 @@ function context() {
     cardRefs: { current: new Map() },
     cardDeparture: () => Promise.resolve(),
     mounted: { current: true },
-    diagnosticRow: { current: null },
-    markZipDiagnostic: (operation, event, facts) => {
-      if (operation) state.diagnostics.push({ operation, event, facts });
-    },
     listStylePacks: () => listing(),
     deleteStylePack: (id) => {
       state.deleted.push(id);
@@ -155,71 +151,4 @@ function context() {
   assert.equal(c.pendingDeletes.current.size, 0);
   assert.equal(c.state.errors[0][0], 'failed');
 }
-// The extracted real load handler retains its diagnostic dependency. Its
-// observer sees the applied list, not just a successful list RPC.
-{
-  const c = context();
-  const operation = { id: 'opaque-test-operation', sequence: 0 };
-  await c.api.loadPacks(c.pack.id, operation);
-  assert.deepEqual(c.state.rows, [c.pack, c.other]);
-  assert.deepEqual(c.state.diagnostics.map((entry) => entry.event), ['list_started', 'list_applied']);
-  assert.deepEqual(c.state.diagnostics[1].facts, { count: 2, present: true });
-  assert.equal(c.state.diagnostics[1].operation, operation);
-}
-// Superseded and rejected reads have their own outcomes, never list_applied.
-{
-  const c = context();
-  const operation = { id: 'opaque-test-operation', sequence: 0 };
-  const stale = deferred();
-  c.listing(() => stale.promise);
-  const first = c.api.loadPacks(c.pack.id, operation);
-  c.listing(() => Promise.resolve([c.other]));
-  await c.api.loadPacks(c.other.id);
-  stale.resolve([c.pack, c.other]);
-  await first;
-  assert.deepEqual(c.state.rows, [c.other]);
-  assert.deepEqual(c.state.diagnostics.map((entry) => entry.event), ['list_started', 'list_superseded']);
-  c.state.diagnostics.length = 0;
-  c.listing(() => Promise.reject(new Error('fixture list failure')));
-  await c.api.loadPacks(c.pack.id, operation);
-  assert.deepEqual(c.state.diagnostics.map((entry) => entry.event), ['list_started', 'list_error']);
-  assert.deepEqual(c.state.rows, [c.other]);
-}
-// Execute the actual render observer with a newer unrelated list: it must not
-// attribute that DOM to the earlier operation whose rows were superseded.
-{
-  const node = page.body.statements.find((statement) =>
-    ts.isExpressionStatement(statement) && ts.isCallExpression(statement.expression) &&
-    statement.expression.expression.getText(source) === 'useEffect' &&
-    statement.expression.arguments[0]?.getText(source).includes('const target = diagnosticRow.current'),
-  );
-  assert(node, 'bounded row observer callback must exist');
-  const observerCode = ts.transpileModule(`const observe = ${node.expression.arguments[0].getText(source)}; observe();`, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const observe = new Function('deps', `const {diagnosticRow,packs,markZipDiagnostic,document,window}=deps; ${observerCode}`);
-  const originalRows = [{ id: 'fixture-row' }];
-  const operation = { id: 'opaque-test-operation', sequence: 0 };
-  const diagnosticRow = { current: { id: 'fixture-row', operation, rows: originalRows } };
-  const events = [];
-  const deps = {
-    diagnosticRow, packs: [], window: { innerHeight: 800, innerWidth: 600 },
-    markZipDiagnostic: (op, event, facts) => events.push({ op, event, facts }),
-    document: { querySelectorAll: () => { throw new Error('stale list must not inspect unrelated DOM'); } },
-  };
-  observe(deps);
-  assert.equal(events[0].event, 'row_superseded');
-  assert.equal(diagnosticRow.current, null);
-  events.length = 0;
-  diagnosticRow.current = { id: 'fixture-row', operation, rows: originalRows };
-  deps.packs = originalRows;
-  deps.document = { querySelectorAll: () => [{
-    getAttribute: () => 'fixture-row',
-    getBoundingClientRect: () => ({ width: 100, height: 50, top: 0, left: 0, bottom: 50, right: 100 }),
-  }] };
-  observe(deps);
-  assert.equal(events[0].event, 'row_observed');
-  assert.deepEqual(events[0].facts, { present: true, visible: true });
-  assert.equal(events[0].op, operation);
-}
-console.log('Style deletion lifecycle and diagnostic observer regressions passed');
+console.log('Style deletion lifecycle regressions passed');

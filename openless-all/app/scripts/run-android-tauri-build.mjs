@@ -60,11 +60,6 @@ export function resolveTargets() {
   }).map((e) => e.abi);
 }
 
-export function diagnosticBuildArgs(env) {
-  return env.OPENLESS_STYLE_ZIP_DIAGNOSTICS === '1'
-    ? ['--features', 'issue-1320-diagnostics'] : [];
-}
-
 async function main() {
   const mode = process.argv[2];
   if (mode !== '--debug' && mode !== '--release') {
@@ -76,7 +71,6 @@ async function main() {
   await prepareLocalAsrLibs(targets, env);
   stageMobileRime(targets, env);
   const args = ['tauri', 'android', 'build', '--apk', '--split-per-abi', '--target', ...targets];
-  args.push(...diagnosticBuildArgs(env));
   if (mode === '--debug') {
     args.push('--debug');
   }

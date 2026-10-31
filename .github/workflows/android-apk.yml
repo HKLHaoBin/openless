@@ -38,10 +38,6 @@ on:
         description: 'Build debug mode but sign it with the release keystore (requires ANDROID_KEYSTORE_* secrets).'
         type: boolean
         default: false
-      style_zip_diagnostics:
-        description: 'Manual-only #1320 selected-ZIP boundary diagnostics (not a behavioral fix).'
-        type: boolean
-        default: false
 
 # Repeated pushes of the same tag run only the newest; workflow_dispatch isolates by run_id to avoid mutual cancellation.
 concurrency:
@@ -167,8 +163,6 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       OPENLESS_RELEASE_CHANNEL: ${{ needs.plan.outputs.release_channel }}
       OPENLESS_ANDROID_TARGETS: ${{ matrix.abi }}
-      OPENLESS_STYLE_ZIP_DIAGNOSTICS: ${{ github.event_name == 'workflow_dispatch' && inputs.style_zip_diagnostics && '1' || '' }}
-      VITE_ISSUE1320_DIAGNOSTICS: ${{ github.event_name == 'workflow_dispatch' && inputs.style_zip_diagnostics && '1' || '' }}
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4

@@ -6,13 +6,11 @@ pub(crate) fn export_zip<E>(
     encode: impl FnOnce() -> Result<Vec<u8>, E>,
     write_document: impl FnOnce(&str, &[u8]) -> Result<(), E>,
     write_file: impl FnOnce() -> Result<(), E>,
-) -> Result<Option<usize>, E> {
+) -> Result<(), E> {
     if target.starts_with("content://") {
         let bytes = encode()?;
-        write_document(target, &bytes)?;
-        Ok(Some(bytes.len()))
+        write_document(target, &bytes)
     } else {
-        write_file()?;
-        Ok(None)
+        write_file()
     }
 }

@@ -34,7 +34,6 @@ import { getStylePackPresentation } from '../lib/stylePackPresentation';
 import { SavedToast, type SaveToastState } from '../components/SavedToast';
 import { pickStylePackZipTargetPath, stylePackZipFileName } from '../lib/stylePackZip';
 import { useMobileLayout, useLayoutStack, useConservativeLayout } from '../lib/useMobileLayout';
-import { beginZipDiagnostic, markZipDiagnostic, type ZipDiagnosticOperation } from '../lib/styleZipDiagnostics';
 
 type BusyAction =
   | 'loading'
@@ -149,8 +148,6 @@ export function Style() {
   const reducedMotion = useReducedMotion();
   const loadSequence = useRef(0);
   const packsLoaded = useRef(false);
-  const diagnosticRow = useRef<{ id: string; operation: ZipDiagnosticOperation; rows: StylePack[] } | null>(null);
-
   const baseLayoutStack = useLayoutStack();
   const conservative = useConservativeLayout();
   const stackLayout = conservative || baseLayoutStack;
@@ -238,21 +235,16 @@ export function Style() {
     }
   };
 
-  const loadPacks = async (preferredId?: string | null, diagnostic?: ZipDiagnosticOperation | null) => {
+  const loadPacks = async (preferredId?: string | null) => {
     const sequence = ++loadSequence.current;
-    markZipDiagnostic(diagnostic, 'list_started');
     const initialLoad = !packsLoaded.current;
     if (initialLoad) setBusy('loading');
     try {
       const listed = await listStylePacks();
-      if (sequence !== loadSequence.current) {
-        markZipDiagnostic(diagnostic, 'list_superseded');
-        return;
-      }
+      if (sequence !== loadSequence.current) return;
       // A refresh must not resurrect a row whose undo window or delete is active.
       const next = listed.filter((pack) => !pendingDeletes.current.has(pack.id));
       packsLoaded.current = true;
-      if (diagnostic && preferredId) diagnosticRow.current = { id: preferredId, operation: diagnostic, rows: next };
       setPacks(next);
       const nextSelectedId =
         (preferredId && next.some((pack) => pack.id === preferredId) && preferredId) ||
@@ -260,11 +252,7 @@ export function Style() {
         next[0]?.id ||
         null;
       setSelectedId(nextSelectedId);
-      markZipDiagnostic(diagnostic, 'list_applied', {
-        count: next.length, present: !!preferredId && next.some((pack) => pack.id === preferredId),
-      });
     } catch (loadError) {
-      markZipDiagnostic(diagnostic, 'list_error');
       if (sequence === loadSequence.current)
         showSaveStatus('failed', t('style.pack.loadFailed', { err: String(loadError) }));
     } finally {
@@ -276,27 +264,6 @@ export function Style() {
   useEffect(() => {
     void loadPacks();
   }, []);
-
-  // P4: React has committed this list. DOM presence is not a substitute for the
-  // user's reported visible result (e.g. a row can legitimately be below the fold).
-  useEffect(() => {
-    const target = diagnosticRow.current;
-    if (!target) return;
-    if (target.rows !== packs) {
-      markZipDiagnostic(target.operation, 'row_superseded');
-      diagnosticRow.current = null;
-      return;
-    }
-    const row = Array.from(document.querySelectorAll('[data-ol-style-pack]'))
-      .find((node) => node.getAttribute('data-ol-style-pack') === target.id);
-    const rect = row?.getBoundingClientRect();
-    markZipDiagnostic(target.operation, 'row_observed', {
-      present: !!row,
-      visible: !!rect && rect.width > 0 && rect.height > 0 && rect.bottom > 0
-        && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth,
-    });
-    diagnosticRow.current = null;
-  }, [packs]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -617,8 +584,6 @@ export function Style() {
   };
 
   const handleImportZip = async () => {
-    const diagnostic = beginZipDiagnostic();
-    markZipDiagnostic(diagnostic, 'import_started');
     setBusy('importing');
     try {
       let zipPath: string | null = null;
@@ -635,23 +600,16 @@ export function Style() {
         zipPath = 'mock-style-pack.zip';
       }
       if (!zipPath) {
-        markZipDiagnostic(diagnostic, 'picker_cancelled');
         setBusy(null);
         return;
       }
-      markZipDiagnostic(diagnostic, 'picker_selected', { content_uri: zipPath.startsWith('content://') });
-      markZipDiagnostic(diagnostic, 'ipc_started');
-      const imported = await importStylePackFromZip(zipPath, diagnostic?.id);
-      markZipDiagnostic(diagnostic, 'ipc_ok');
-
+      const imported = await importStylePackFromZip(zipPath);
       showSaveStatus('saved', t('style.pack.importSuccess', { name: imported.name }), true);
-      await loadPacks(imported.id, diagnostic);
+      await loadPacks(imported.id);
     } catch (importError) {
-      markZipDiagnostic(diagnostic, 'import_error');
       showSaveStatus('failed', t('style.pack.importFailed', { err: String(importError) }));
     } finally {
       setBusy(null);
-      markZipDiagnostic(diagnostic, 'import_settled');
     }
   };
 
@@ -864,12 +822,9 @@ export function Style() {
             >
               {busy === 'importing' ? t('common.loading') : t('style.pack.importZip')}
             </Btn>
-
           </div>
         }
       />
-
-
 
       {/* Anchored to the console card's top-right — same zone as the marketplace / refresh /
           import ZIP buttons; the pale blue pill flashes for 0.8s only and never covers the

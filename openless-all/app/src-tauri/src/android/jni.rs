@@ -1278,25 +1278,6 @@ pub mod android {
         )
     }
 
-    /// P5 metadata query only; never record URI/name or open another data stream.
-    #[cfg(feature = "issue-1320-diagnostics")]
-    pub fn content_uri_declared_size(uri: &str) -> Result<Option<u64>, String> {
-        with_android_env(|env, context| {
-            let result = (|| {
-                let class = load_context_class(env, context, "com.openless.app.OpenLessContentReader")?;
-                let uri_obj = jobject_str(env, uri)?;
-                let size = env.call_static_method(class, "declaredSize",
-                    "(Landroid/content/Context;Ljava/lang/String;)J",
-                    &[JValue::Object(context), JValue::Object(&uri_obj)])
-                    .and_then(|value| value.j()).map_err(|_| "document_metadata_unavailable".to_string())?;
-                Ok(u64::try_from(size).ok())
-            })();
-            // A failed optional observer must not poison the real read's JNI call.
-            if env.exception_check().unwrap_or(false) { let _ = env.exception_clear(); }
-            result
-        })
-    }
-
     /// Read at most `max_bytes` from a SAF `content://` URI via Kotlin ContentResolver.
     pub fn read_content_uri(uri: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
         let max_bytes = i32::try_from(max_bytes)

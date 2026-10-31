@@ -1,6 +1,5 @@
 import { isTauri, invokeOrMock } from './shared';
 import { isHarmonyHost, invokeHarmony } from '../harmonyBridge';
-import { getZipDiagnosticCoverage } from '../styleZipDiagnostics';
 
 export { isTauri };
 
@@ -49,7 +48,7 @@ export async function exportErrorLog(suggestedFileName: string): Promise<string 
   if (isAndroid) {
     return invokeOrMock<string>(
       'export_error_log_to_downloads',
-      { fileName: suggestedFileName, styleZipCoverage: getZipDiagnosticCoverage() },
+      { fileName: suggestedFileName },
       () => `~/Downloads/${suggestedFileName}`,
     );
   }
@@ -59,9 +58,7 @@ export async function exportErrorLog(suggestedFileName: string): Promise<string 
     filters: [{ name: 'Log', extensions: ['log', 'txt'] }],
   });
   if (!target) return null;
-  await invokeOrMock<void>('export_error_log', {
-    targetPath: target, styleZipCoverage: getZipDiagnosticCoverage(),
-  }, () => undefined);
+  await invokeOrMock<void>('export_error_log', { targetPath: target }, () => undefined);
   return target;
 }
 
