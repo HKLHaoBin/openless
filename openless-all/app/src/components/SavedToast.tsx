@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import type { CSSProperties } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useReducedMotion } from '../lib/motion';
 import { Icon } from './Icon';
 
@@ -22,6 +22,8 @@ interface SavedToastProps {
   actionLabel?: string;
   onAction?: () => void;
   durationMs?: number;
+  /** [DEBUG-STYLE-ZIP-1320] Observation only; never changes the visibility timer. */
+  onVisibilityChange?: (present: boolean, state: SaveToastState) => void;
 }
 
 export function SavedToast({
@@ -32,11 +34,22 @@ export function SavedToast({
   actionLabel,
   onAction,
   durationMs,
+  onVisibilityChange,
 }: SavedToastProps) {
   // Internal state lets the toast time itself out (even if the parent's timer runs
   // longer than 0.8s).
   const [internalVisible, setInternalVisible] = useState(false);
+  const toastRef = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotion();
+
+  useEffect(() => {
+    if (!onVisibilityChange) return;
+    try {
+      onVisibilityChange(internalVisible && Boolean(toastRef.current?.isConnected), saveState);
+    } catch {
+      // Diagnostic callbacks must not affect the existing toast/product behavior.
+    }
+  }, [internalVisible, saveState, message, onVisibilityChange]);
 
   useEffect(() => {
     if (saveState !== 'idle') {
@@ -96,6 +109,7 @@ export function SavedToast({
     <AnimatePresence>
       {internalVisible && (
         <motion.div
+          ref={toastRef}
           role={failed ? 'alert' : 'status'}
           initial={offscreen}
           animate={{ opacity: 1, x: 0, y: 0 }}

@@ -72,6 +72,9 @@ mod hotkey;
 mod hotkey;
 mod insertion;
 mod issue1266_debug;
+mod issue1320_diagnostics;
+#[cfg(all(target_os = "android", feature = "issue-1320-diagnostics"))]
+mod issue1320_sink;
 mod llm_gemini;
 #[cfg(mobile)]
 mod mobile_runtime;
@@ -401,6 +404,9 @@ macro_rules! app_invoke_handler_desktop {
             commands::reset_builtin_style_pack,
             commands::delete_style_pack,
             commands::import_style_pack_from_zip,
+            issue1320_diagnostics::style_zip_diagnostic_context,
+            issue1320_diagnostics::record_style_zip_diagnostic,
+            issue1320_diagnostics::export_style_zip_diagnostics,
             commands::export_style_pack_to_zip,
             commands::set_default_polish_mode,
             commands::set_style_enabled,
@@ -699,6 +705,9 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::reset_builtin_style_pack,
             $crate::commands::delete_style_pack,
             $crate::commands::import_style_pack_from_zip,
+            $crate::issue1320_diagnostics::style_zip_diagnostic_context,
+            $crate::issue1320_diagnostics::record_style_zip_diagnostic,
+            $crate::issue1320_diagnostics::export_style_zip_diagnostics,
             $crate::commands::export_style_pack_to_zip,
             $crate::commands::set_default_polish_mode,
             $crate::commands::set_style_enabled,

@@ -1,5 +1,8 @@
 import { isHarmonyHost, invokeHarmony } from '../lib/harmonyBridge';
-import { type CSSProperties, useEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { isAndroid } from '../lib/platform';
+import { createStyleZipDiagnostics, zipDiagnosticErrorCode, zipDiagnosticFeedback, type ZipDiagnosticContext } from '../lib/styleZipDiagnostics';
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import {
@@ -172,6 +175,69 @@ export function Style() {
   const [busy, setBusy] = useState<BusyAction>('loading');
   const [saveState, setSaveState] = useState<SaveToastState>('idle');
   const [saveMessage, setSaveMessage] = useState('');
+  // [DEBUG-STYLE-ZIP-1320] Android diagnostic build only; normal builds stay silent.
+  const [zipDiagnostics] = useState(() =>
+    createStyleZipDiagnostics(
+      import.meta.env.VITE_ISSUE_1320_DIAGNOSTICS === 'true' && isTauri && isAndroid(),
+      invoke,
+    ),
+  );
+  const [diagnosticNotice, setDiagnosticNotice] = useState(
+    'ZIP diagnostics: coverage unknown / 覆盖未知',
+  );
+  const [diagnosticExporting, setDiagnosticExporting] = useState(false);
+  const diagnosticImport = useRef<{
+    context: ZipDiagnosticContext;
+    packId?: string;
+    finished: boolean;
+  } | null>(null);
+  const diagnosticFeedback = useRef<{
+    context: ZipDiagnosticContext;
+    shownAt?: number;
+  } | null>(null);
+  const observeZipFeedback = useCallback(
+    (present: boolean, state: SaveToastState) => {
+      const operation = diagnosticFeedback.current;
+      if (!operation) return;
+      zipDiagnostics.emit('feedback_committed', operation.context, {
+        present,
+        feedback: state === 'saved' ? 1 : state === 'failed' ? 2 : state === 'saving' ? 3 : 0,
+        durationMs:
+          !present && operation.shownAt !== undefined
+            ? performance.now() - operation.shownAt
+            : undefined,
+      });
+      if (present && operation.shownAt === undefined) operation.shownAt = performance.now();
+      else if (!present && operation.shownAt !== undefined) diagnosticFeedback.current = null;
+    },
+    [zipDiagnostics],
+  );
+  useEffect(() => {
+    if (!zipDiagnostics.enabled) return;
+    void zipDiagnostics.refresh().then(({ coverage }) => {
+      if (mounted.current)
+        setDiagnosticNotice(
+          `ZIP diagnostics: ${coverage?.status ?? 'unknown'}; native Activity/plugin callback NOT covered / 原生回调未覆盖`,
+        );
+    });
+    return () => {
+      const context = diagnosticImport.current?.context ?? diagnosticFeedback.current?.context;
+      if (context) zipDiagnostics.emit('unmounted', context);
+    };
+  }, [zipDiagnostics]);
+  useEffect(() => {
+    const operation = diagnosticImport.current;
+    if (!operation) return;
+    // P5/H3: actual post-commit row ref + state, not a backend Ok or setState claim.
+    zipDiagnostics.emit('ui_committed', operation.context, {
+      present: operation.packId
+        ? Boolean(cardRefs.current.get(operation.packId)?.isConnected)
+        : undefined,
+      busy: busy === 'importing',
+      feedback: zipDiagnosticFeedback(operation.context, diagnosticFeedback.current?.context, saveState),
+    });
+    if (operation.finished && busy !== 'importing') diagnosticImport.current = null;
+  }, [packs, busy, saveState, zipDiagnostics]);
   const statusTimer = useRef<number | null>(null);
   const pendingDeletes = useRef(
     new Map<string, { pack: StylePack; timer: number; index: number; committing: boolean }>(),
@@ -215,7 +281,15 @@ export function Style() {
     };
   }, []);
 
-  const showSaveStatus = (state: SaveToastState, message: string, temporary = false) => {
+  const showSaveStatus = (
+    state: SaveToastState,
+    message: string,
+    temporary = false,
+    diagnosticContext?: ZipDiagnosticContext,
+  ) => {
+    // Attribute only feedback explicitly produced by this import/its list refresh.
+    // Another feature's toast must not inherit the most recent import operation.
+    diagnosticFeedback.current = diagnosticContext ? { context: diagnosticContext } : null;
     if (statusTimer.current !== null) {
       window.clearTimeout(statusTimer.current);
       statusTimer.current = null;
@@ -235,13 +309,16 @@ export function Style() {
     }
   };
 
-  const loadPacks = async (preferredId?: string | null) => {
+  const loadPacks = async (preferredId?: string | null, diagnosticContext?: ZipDiagnosticContext) => {
     const sequence = ++loadSequence.current;
     const initialLoad = !packsLoaded.current;
     if (initialLoad) setBusy('loading');
     try {
       const listed = await listStylePacks();
-      if (sequence !== loadSequence.current) return;
+      if (sequence !== loadSequence.current) {
+        if (diagnosticContext) zipDiagnostics.emit('list_superseded', diagnosticContext);
+        return;
+      }
       // A refresh must not resurrect a row whose undo window or delete is active.
       const next = listed.filter((pack) => !pendingDeletes.current.has(pack.id));
       packsLoaded.current = true;
@@ -252,9 +329,20 @@ export function Style() {
         next[0]?.id ||
         null;
       setSelectedId(nextSelectedId);
+      if (diagnosticContext)
+        zipDiagnostics.emit('list_applied', diagnosticContext, {
+          present: Boolean(preferredId && next.some((pack) => pack.id === preferredId)),
+          count: next.length,
+        });
     } catch (loadError) {
+      if (diagnosticContext) zipDiagnostics.emit('list_failed', diagnosticContext);
       if (sequence === loadSequence.current)
-        showSaveStatus('failed', t('style.pack.loadFailed', { err: String(loadError) }));
+        showSaveStatus(
+          'failed',
+          t('style.pack.loadFailed', { err: String(loadError) }),
+          false,
+          diagnosticContext,
+        );
     } finally {
       if (initialLoad && sequence === loadSequence.current)
         setBusy((current) => (current === 'loading' ? null : current));
@@ -585,17 +673,28 @@ export function Style() {
 
   const handleImportZip = async () => {
     setBusy('importing');
+    const diagnosticContext = zipDiagnostics.start();
+    if (diagnosticContext) {
+      diagnosticImport.current = { context: diagnosticContext, finished: false };
+    }
+    const diagnosticStarted = diagnosticContext ? performance.now() : 0;
+    let diagnosticStage: 0 | 1 | 2 | 3 = 0;
     try {
       let zipPath: string | null = null;
       if (isHarmonyHost) {
         zipPath = await invokeHarmony<string | null>('pick_style_pack_zip');
       } else if (isTauri) {
+        zipDiagnostics.emit('plugin_loading', diagnosticContext);
         const { open } = await import('@tauri-apps/plugin-dialog');
+        zipDiagnostics.emit('plugin_ready', diagnosticContext);
+        diagnosticStage = 1;
+        zipDiagnostics.emit('picker_opening', diagnosticContext);
         const picked = await open({
           filters: [{ name: 'Style Pack ZIP', extensions: ['zip'] }],
           multiple: false,
         });
         zipPath = typeof picked === 'string' ? picked : null;
+        zipDiagnostics.emit(zipPath ? 'picker_selected' : 'picker_cancelled', diagnosticContext);
       } else {
         zipPath = 'mock-style-pack.zip';
       }
@@ -603,13 +702,64 @@ export function Style() {
         setBusy(null);
         return;
       }
-      const imported = await importStylePackFromZip(zipPath);
-      showSaveStatus('saved', t('style.pack.importSuccess', { name: imported.name }), true);
-      await loadPacks(imported.id);
+      diagnosticStage = 2;
+      const imported = await importStylePackFromZip(zipPath, diagnosticContext);
+      if (diagnosticImport.current && diagnosticImport.current.context === diagnosticContext) {
+        diagnosticImport.current.packId = imported.id;
+      }
+      showSaveStatus(
+        'saved',
+        t('style.pack.importSuccess', { name: imported.name }),
+        true,
+        diagnosticContext,
+      );
+      diagnosticStage = 3;
+      await loadPacks(imported.id, diagnosticContext);
     } catch (importError) {
-      showSaveStatus('failed', t('style.pack.importFailed', { err: String(importError) }));
+      zipDiagnostics.emit('failed', diagnosticContext, {
+        stage: diagnosticStage,
+        errorCode: zipDiagnosticErrorCode(importError),
+      });
+      showSaveStatus(
+        'failed',
+        t('style.pack.importFailed', { err: String(importError) }),
+        false,
+        diagnosticContext,
+      );
     } finally {
       setBusy(null);
+      if (diagnosticImport.current && diagnosticImport.current.context === diagnosticContext) {
+        diagnosticImport.current.finished = true;
+      }
+      zipDiagnostics.emit('finished', diagnosticContext, {
+        durationMs: diagnosticContext ? performance.now() - diagnosticStarted : undefined,
+      });
+    }
+  };
+
+  const handleExportZipDiagnostics = async () => {
+    setDiagnosticExporting(true);
+    try {
+      const delivery = zipDiagnostics.summary();
+      const bounded = (count: number) => Math.min(4_294_967_295, count);
+      const path = await invoke<string>('export_style_zip_diagnostics', {
+        frontendCoverage: {
+          instanceId: delivery.instanceId,
+          skipped: bounded(delivery.skipped),
+          failed: bounded(delivery.failed),
+          pending: bounded(delivery.inFlight),
+        },
+      });
+      const { coverage, skipped, failed, inFlight } = await zipDiagnostics.refresh();
+      setDiagnosticNotice(
+        `Exported / 已导出: ${path}. Coverage=${coverage?.status ?? 'unknown'}; dropped=${coverage?.dropped ?? 'unknown'}; JS current-page skipped=${skipped}, failed=${failed}, pending=${inFlight}. Previous page delivery unknown; snapshot only; no native callback coverage / 仅当前页面快照，先前页面送达情况未知，原生回调未覆盖`,
+      );
+    } catch {
+      setDiagnosticNotice(
+        'ZIP diagnostic export failed / ZIP诊断导出失败；coverage unknown / 覆盖未知',
+      );
+    } finally {
+      setDiagnosticExporting(false);
     }
   };
 
@@ -822,9 +972,20 @@ export function Style() {
             >
               {busy === 'importing' ? t('common.loading') : t('style.pack.importZip')}
             </Btn>
+            {zipDiagnostics.enabled && (
+              <Btn
+                variant="ghost"
+                onClick={() => void handleExportZipDiagnostics()}
+                disabled={diagnosticExporting}
+              >
+                {diagnosticExporting ? 'Exporting / 导出中' : 'Export ZIP diagnostics / 导出ZIP诊断'}
+              </Btn>
+            )}
           </div>
         }
       />
+
+      {zipDiagnostics.enabled && <div role="status">{diagnosticNotice}</div>}
 
       {/* Anchored to the console card's top-right — same zone as the marketplace / refresh /
           import ZIP buttons; the pale blue pill flashes for 0.8s only and never covers the
@@ -837,6 +998,7 @@ export function Style() {
         actionLabel={undoDelete ? t('style.pack.undoDelete') : undefined}
         onAction={undoDelete ? () => restoreDeletedPack(undoDelete.id) : undefined}
         durationMs={undoDelete ? 6000 : undefined}
+        onVisibilityChange={zipDiagnostics.enabled ? observeZipFeedback : undefined}
       />
 
       <Card

@@ -38,6 +38,10 @@ on:
         description: 'Build debug mode but sign it with the release keystore (requires ANDROID_KEYSTORE_* secrets).'
         type: boolean
         default: false
+      style_zip_diagnostics:
+        description: 'Opt-in issue 1320 ZIP picker observation (branch dispatch only; no behavior fix).'
+        type: boolean
+        default: false
 
 # Repeated pushes of the same tag run only the newest; workflow_dispatch isolates by run_id to avoid mutual cancellation.
 concurrency:
@@ -163,6 +167,10 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       OPENLESS_RELEASE_CHANNEL: ${{ needs.plan.outputs.release_channel }}
       OPENLESS_ANDROID_TARGETS: ${{ matrix.abi }}
+      OPENLESS_BUILD_ID: ${{ github.sha }}
+      # Never enable observation in tag/scheduled builds or publish it as a release.
+      OPENLESS_STYLE_ZIP_DIAGNOSTICS: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.style_zip_diagnostics && 'true' || 'false' }}
+      VITE_ISSUE_1320_DIAGNOSTICS: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.style_zip_diagnostics && 'true' || 'false' }}
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
@@ -374,6 +382,39 @@ jobs:
           OPENLESS_EXPECTED_GRADLE_ABIS: ${{ matrix.gradle_abi }}
         run: node scripts/collect-android-split-apks.mjs
 
+      - name: Record APK source and checksum
+        shell: bash
+        env:
+          APK_PATH: ${{ steps.apk.outputs.apk_path }}
+          APK_ABI: ${{ matrix.gradle_abi }}
+          APK_MODE: ${{ needs.plan.outputs.mode }}
+          APK_SIGNING: ${{ needs.plan.outputs.signing }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          apk = Path(os.environ['APK_PATH'])
+          evidence = {
+              'schema': 'openless.android-build.v1',
+              'source_sha': os.environ['GITHUB_SHA'],
+              'abi': os.environ['APK_ABI'],
+              'mode': os.environ['APK_MODE'],
+              'signing_mode': os.environ['APK_SIGNING'],
+              'style_zip_diagnostics': os.environ['OPENLESS_STYLE_ZIP_DIAGNOSTICS'] == 'true',
+              'apk_name': apk.name,
+              'apk_bytes': apk.stat().st_size,
+              'apk_sha256': hashlib.file_digest(apk.open('rb'), 'sha256').hexdigest(),
+          }
+          Path('android-build-evidence.json').write_text(json.dumps(evidence, indent=2) + '\n')
+          PY
+
+      - name: Upload APK build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-android-build-evidence-${{ matrix.gradle_abi }}
+          path: android-build-evidence.json
+          if-no-files-found: error
+
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -393,6 +434,8 @@ jobs:
           | Signing | ${{ needs.plan.outputs.signing_label }} |
           | Artifact label | \`${{ needs.plan.outputs.label }}\` |
           | Fast profile | \`${{ needs.plan.outputs.fast_profile }}\` |
+          | ZIP diagnostics | \`${{ env.OPENLESS_STYLE_ZIP_DIAGNOSTICS }}\` (observation only) |
+          | Source SHA | \`${{ github.sha }}\` |
           | Rust cache hit | \`${{ steps.rust-cache.outputs.cache-hit }}\` |
 
           EOF

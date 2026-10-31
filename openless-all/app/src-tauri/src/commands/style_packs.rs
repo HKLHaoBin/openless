@@ -189,7 +189,19 @@ pub fn delete_style_pack(
 pub fn import_style_pack_from_zip(
     core: CoreState<'_>,
     zip_path: String,
+    diagnostic_context: Option<crate::issue1320_diagnostics::Correlation>,
 ) -> Result<StylePack, String> {
+    // [DEBUG-STYLE-ZIP-1320] P4 / H3: never pass paths or errors to the sink.
+    #[cfg(all(target_os = "android", feature = "issue-1320-diagnostics"))]
+    use crate::issue1320_sink::{Event, Facts};
+    #[cfg(all(target_os = "android", feature = "issue-1320-diagnostics"))]
+    let observe = |event| crate::issue1320_diagnostics::observe(
+        event, diagnostic_context.as_ref(), Facts::default(),
+    );
+    #[cfg(all(target_os = "android", feature = "issue-1320-diagnostics"))]
+    observe(Event::ImportRequested);
+    #[cfg(not(all(target_os = "android", feature = "issue-1320-diagnostics")))]
+    let _ = diagnostic_context;
     log::info!(
         "[style-pack] command import requested source_kind={}",
         if zip_path.starts_with("content://") {
@@ -200,16 +212,25 @@ pub fn import_style_pack_from_zip(
     );
     #[cfg(target_os = "android")]
     if zip_path.starts_with("content://") {
-        let bytes = crate::android::jni::android::read_content_uri(
+        let read = crate::android::jni::android::read_content_uri(
             &zip_path,
             crate::persistence::STYLE_PACK_ARCHIVE_MAX_COMPRESSED_BYTES,
-        )?;
-        return core
+        );
+        #[cfg(feature = "issue-1320-diagnostics")]
+        observe(if read.is_ok() { Event::ContentRead } else { Event::ContentFailed });
+        let bytes = read?;
+        let result = core
             .import_style_pack_bytes(&bytes)
             .map_err(|error| error.to_string());
+        #[cfg(feature = "issue-1320-diagnostics")]
+        observe(if result.is_ok() { Event::ArchiveSaved } else { Event::ArchiveFailed });
+        return result;
     }
-    core.import_style_pack_path(std::path::Path::new(&zip_path))
-        .map_err(|e| e.to_string())
+    let result = core.import_style_pack_path(std::path::Path::new(&zip_path))
+        .map_err(|e| e.to_string());
+    #[cfg(all(target_os = "android", feature = "issue-1320-diagnostics"))]
+    observe(if result.is_ok() { Event::ArchiveSaved } else { Event::ArchiveFailed });
+    result
 }
 
 #[tauri::command]

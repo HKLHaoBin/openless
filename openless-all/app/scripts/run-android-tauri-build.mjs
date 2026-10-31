@@ -60,6 +60,16 @@ export function resolveTargets() {
   }).map((e) => e.abi);
 }
 
+export function androidBuildArgs(targets, mode, env = process.env) {
+  const args = ['tauri', 'android', 'build', '--apk', '--split-per-abi', '--target', ...targets];
+  if (mode === '--debug') args.push('--debug');
+  // [DEBUG-STYLE-ZIP-1320] Strict opt-in; release/default builds remain unchanged.
+  if (env.OPENLESS_STYLE_ZIP_DIAGNOSTICS === 'true') {
+    args.push('--features', 'issue-1320-diagnostics');
+  }
+  return args;
+}
+
 async function main() {
   const mode = process.argv[2];
   if (mode !== '--debug' && mode !== '--release') {
@@ -70,10 +80,7 @@ async function main() {
   const env = { ...process.env };
   await prepareLocalAsrLibs(targets, env);
   stageMobileRime(targets, env);
-  const args = ['tauri', 'android', 'build', '--apk', '--split-per-abi', '--target', ...targets];
-  if (mode === '--debug') {
-    args.push('--debug');
-  }
+  const args = androidBuildArgs(targets, mode, env);
 
   console.log(`[android-build] targets=${targets.join(',')} mode=${mode.slice(2)}`);
   // #1103: Tauri CLI runs an initial cargo build for the first target to
