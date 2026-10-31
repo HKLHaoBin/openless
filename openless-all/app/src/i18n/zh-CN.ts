@@ -1,3 +1,4 @@
+import { desktopGuideZhCN as desktopGuide } from './desktopGuide';
 import { siwcZhCN as siwc } from './siwc';
 // Simplified Chinese resources — kept in sync with the product's current copy.
 // The eight locale files share one structure; add/remove keys in all of them together.
@@ -6,6 +7,7 @@ import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhCN as experimentalAsr } from './experimentalAsr';
 
 export const zhCN = {
+  desktopGuide,
   siwc,
   experimentalAsr,
   uiRefinement,
@@ -1228,6 +1230,11 @@ export const zhCN = {
       unavailable: '当前平台暂无可用的测试功能。',
     },
     selectionWorkspace: {
+      extraControls: '额外控件',
+      extraControlsDesc: '配置提问与编辑判断及模型输出格式；普通使用无需调整。',
+      openExtraControls: '更多',
+      extraControlsSaveHint: '修改后自动保存。',
+      extraControlsDone: '完成',
       title: '选区助手',
       hint: '有选区时按同一快捷键：关闭语音编辑则润色；开启后口述指令，可提问或编辑选区。无选区但光标在文本框时：可「帮我写」成稿或提问。',
       polishHotkey: '选区助手快捷键',
@@ -1470,6 +1477,35 @@ export const zhCN = {
       lowLatencyDictationDesc:
         '保持麦克风流就绪，并在内存中保留最多 500 毫秒音频，减少按下热键后第一句话被漏识别的情况。确认录音前不会保存或上传音频；此模式会增加功耗并保持系统麦克风指示灯亮起。',
       dsp: {
+        aec: '系统回声消除',
+        systemNoise: '系统降噪',
+        systemAgc: '系统自动增益',
+        unavailable: '当前设备不支持',
+        androidEffectsHint:
+          'Android 系统音效在软件处理链之前生效。建议避免重复开启同类效果。启动不支持时回退到常规采集。',
+        effectsActive: '本次录音已启用系统音效。',
+        spectrum: '输入／处理后频谱',
+        spectrumHint:
+          '仅显示当前增强录音，不会启动麦克风、保存或上传音频。关闭面板或进入后台后停止监测。',
+        spectrumLegend: '灰色：输入 · 彩色：处理后 · 20 Hz–24 kHz',
+        spectrumWaiting: '开启语音增强并开始录音后显示频谱。',
+        presets: '均衡器预设',
+        choosePreset: '选择预设',
+        preset_normal: '平直',
+        preset_brightVocal: '明亮人声',
+        preset_deepVoice: '低沉人声',
+        preset_podcast: '播客',
+        preset_vocalClarity: '清晰人声',
+        preset_warmVocal: '温暖人声',
+
+        aecOff: '关闭',
+        aecLight: '轻量（省 CPU）',
+        aecModel: '模型（更强）',
+        aecModelHint:
+          '模型版抑制更强，但约是轻量版的 3 倍 CPU；老机器建议用轻量。',
+        aecHint:
+          '外放时压掉扬声器回授；需要扬声器参考信号，戴耳机可以关掉。',
+        buffer: '输出缓冲区',
         title: '语音增强设置',
         description: 'RNNoise 更轻量；PureVox 模型降噪耗时较高。设置在下一次录音生效。',
         noise: '降噪算法',
@@ -1494,6 +1530,9 @@ export const zhCN = {
         down: '下移',
         reset: '恢复增强默认设置',
       },
+      echoCancellationLabel: '播放回声抑制',
+      echoCancellationDesc:
+        '保持系统声音播放，使用本机播放参考抑制回声。macOS 需 14.6 或更新版本及系统音频录制权限；不支持的设备、蓝牙路径或 Linux ALSA 环境回退为普通麦克风录音。下次开始采集时生效。',
       audioEnhancementLabel: '语音增强',
       audioEnhancementDesc:
         '应用 RNNoise 或 PureVox 降噪、自动增益和限幅。默认关闭，设置在下一次录音生效。',
@@ -1578,20 +1617,15 @@ export const zhCN = {
         '转写不超过 N 个字（不计空白）时直接插入原文，不调用润色模型。0 = 关闭。翻译模式始终润色。',
       polishContextWindowLabel: '对话上下文窗口（分钟）',
       polishContextWindowDesc: '把最近 N 分钟内已润色的转写作为多轮上下文，0 = 关闭。',
+      debugArchiveProcessedLabel: '保存处理后的音频',
+      debugArchiveProcessedDesc: '降噪与增益之后的版本，仍保存在原来的录制文件里。',
+      debugArchiveRawLabel: '另存一份处理前的音频',
+      debugArchiveRawDesc: '同目录下另存 <session>.raw.wav 便于对照；只开这一项时，原始音频直接存进主档案。',
       recordAudioForDebugLabel: '保留原始录音（调试）',
       recordAudioForDebugDesc: '保存原始麦克风音频为 wav，便于排查识别问题。',
       audioRecordingMaxEntriesLabel: '原始录音保留条数',
       audioRecordingMaxEntriesDesc: '本地保留 wav 文件数上限，留空 = 200。',
       startupGroupTitle: '启动',
-      lowMemoryBackgroundLabel: '低内存后台模式',
-      lowMemoryBackgroundDesc:
-        '重启后生效。关闭主界面时释放窗口，录音时按需显示原生胶囊；空闲时关闭麦克风预热。本地模型仍按原有设置释放。',
-      lowMemoryRestartLabel: '重启后生效',
-      lowMemoryRestartDesc: '低内存后台模式的开关已保存，重启应用后才会切换运行模式。',
-      lowMemoryRestartNow: '立即重启',
-      lowMemoryCapsuleErrorLabel: '原生胶囊不可用',
-      lowMemoryCapsuleErrorDesc:
-        '听写仍可进行，但不会显示悬浮胶囊。辅助程序可能缺失或被系统拦截，请重新安装应用。',
       startMinimizedLabel: '启动时静默运行',
       startMinimizedDesc: '所有启动路径都不弹主窗口，仅菜单栏 / 托盘运行。',
       autoUpdateCheckLabel: '自动检查更新',
@@ -1640,6 +1674,7 @@ export const zhCN = {
       autoSaveHint: '字段修改后自动保存；完成配置后，可手动验证连接。',
       nameHint: '名称仅用于区分同一供应商的多个渠道，不影响模型或连接。',
       errModel: '模型',
+      errThinking: '需开启思考',
       verify: '验证',
       verifyHint: '点一下真实调用一次接口，确认这张卡现在能用',
       errTimeout: '超时',
@@ -1851,6 +1886,7 @@ export const zhCN = {
       llmProtocolHeaderConflict:
         'Messages 已自动设置鉴权和版本请求头，请移除额外 Headers 中的 x-api-key 和 anthropic-version。',
       llmStreamError: '服务端返回流式错误，请检查模型和请求参数。',
+      llmThinkingRequired: '该模型不接受关闭思考。请打开模型旁的「思考」开关后重新验证。',
       saveProtocol: '保存协议设置',
       thinkingModeHint:
         '按所选请求格式和模型支持的参数启用、关闭或降低思考，不向提示词注入控制指令。',

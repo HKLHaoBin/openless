@@ -1,3 +1,4 @@
+import { desktopGuideEs as desktopGuide } from './desktopGuide';
 import { siwcEs as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 
@@ -5,6 +6,7 @@ import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const es: typeof zhCN = {
+  desktopGuide,
   siwc,
   experimentalAsr,
   uiRefinement,
@@ -1296,6 +1298,12 @@ export const es: typeof zhCN = {
       unavailable: 'Todavía no hay funciones de prueba disponibles en esta plataforma.',
     },
     selectionWorkspace: {
+      extraControls: 'Controles avanzados',
+      extraControlsDesc:
+        'Configura la decisión entre pregunta y edición y el formato de salida del modelo.',
+      openExtraControls: 'Más',
+      extraControlsSaveHint: 'Los cambios se guardan automáticamente.',
+      extraControlsDone: 'Listo',
       title: 'Asistente de selección',
       hint: 'Selecciona texto y usa un solo atajo: mejora el texto si la edición por voz está desactivada; si está activada, mantén pulsado y habla, y luego elige Preguntar o Editar.',
       polishHotkey: 'Atajo del asistente de selección',
@@ -1566,6 +1574,35 @@ export const es: typeof zhCN = {
       lowLatencyDictationDesc:
         'Mantén preparado el flujo del micrófono y conserva hasta 500 ms en memoria para reducir la pérdida de voz justo después del atajo. El audio no se guarda ni se sube antes de confirmar la grabación; consume más energía y mantiene activo el indicador del micrófono.',
       dsp: {
+        aec: 'System echo cancellation',
+        systemNoise: 'System noise suppression',
+        systemAgc: 'System automatic gain',
+        unavailable: 'Unavailable on this device',
+        androidEffectsHint:
+          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+        effectsActive: 'System effects are active for this recording.',
+        spectrum: 'Input / processed spectrum',
+        spectrumHint:
+          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+        spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
+        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        presets: 'Equalizer presets',
+        choosePreset: 'Choose a preset',
+        preset_normal: 'Flat',
+        preset_brightVocal: 'Bright vocal',
+        preset_deepVoice: 'Deep voice',
+        preset_podcast: 'Podcast',
+        preset_vocalClarity: 'Vocal clarity',
+        preset_warmVocal: 'Warm vocal',
+
+        aecOff: 'Desactivado',
+        aecLight: 'Ligero (poca CPU)',
+        aecModel: 'Modelo (más potente)',
+        aecModelHint:
+          'El modelo cancela más pero cuesta unas 3x más CPU; en equipos antiguos usa Ligero.',
+        aecHint:
+          'Suprime la realimentación del altavoz. Necesita una señal de referencia; con auriculares puedes dejarlo apagado.',
+        buffer: 'Búfer de salida',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',
@@ -1593,6 +1630,9 @@ export const es: typeof zhCN = {
         down: 'Move down',
         reset: 'Reset enhancement settings',
       },
+      echoCancellationLabel: 'Cancelación del eco de reproducción',
+      echoCancellationDesc:
+        'Usa una referencia local sin silenciar la reproducción. En macOS requiere 14.6+ y permiso para grabar audio del sistema. Los dispositivos, rutas Bluetooth o entornos Linux ALSA no compatibles usan solo el micrófono. Se aplica en la próxima captura.',
       audioEnhancementLabel: 'Mejora de voz',
       audioEnhancementDesc:
         'Reducción de ruido RNNoise o PureVox, ganancia automática y limitación. Desactivada por defecto; los cambios se aplican a la próxima grabación.',
@@ -1672,6 +1712,10 @@ export const es: typeof zhCN = {
       polishContextWindowLabel: 'Ventana de contexto para mejorar texto (minutos)',
       polishContextWindowDesc:
         'Usa las transcripciones mejoradas de los últimos N minutos como contexto de varias intervenciones. 0 = desactivado.',
+      debugArchiveProcessedLabel: 'Conservar el audio procesado',
+      debugArchiveProcessedDesc: 'La versión tras reducción de ruido y ganancia, en el archivo de grabación existente.',
+      debugArchiveRawLabel: 'Conservar también el audio sin procesar',
+      debugArchiveRawDesc: 'Escribe además <session>.raw.wav junto a él. Si solo activas esto, el audio sin procesar va al archivo principal.',
       recordAudioForDebugLabel: 'Conservar grabación original (depuración)',
       recordAudioForDebugDesc:
         'Guarda el audio original del micrófono en WAV para investigar problemas de reconocimiento.',
@@ -1693,16 +1737,6 @@ export const es: typeof zhCN = {
       voiceActivationTimeoutEnabled: 'Detener al agotarse el tiempo',
       voiceActivationTimeoutSeconds: 'Tiempo de espera (segundos)',
       startupGroupTitle: 'Inicio',
-      lowMemoryBackgroundLabel: 'Modo de fondo con poca memoria',
-      lowMemoryBackgroundDesc:
-        'Se aplica al reiniciar. Libera la ventana principal al cerrarla y muestra la cápsula nativa cuando se necesita. Desactiva el precalentamiento del micrófono en reposo. Conserva la configuración de descarga de los modelos locales.',
-      lowMemoryRestartLabel: 'Se aplica tras reiniciar',
-      lowMemoryRestartDesc:
-        'El cambio del modo de fondo de baja memoria está guardado; el modo en ejecución cambia al reiniciar la aplicación.',
-      lowMemoryRestartNow: 'Reiniciar ahora',
-      lowMemoryCapsuleErrorLabel: 'Cápsula nativa no disponible',
-      lowMemoryCapsuleErrorDesc:
-        'El dictado sigue funcionando, pero no se mostrará la cápsula flotante. Puede que falte el programa auxiliar o esté bloqueado; reinstala la app.',
       startMinimizedLabel: 'Iniciar minimizado (sin ventana principal)',
       startMinimizedDesc:
         'Al iniciar, solo se muestra la barra de menús o la bandeja del sistema, nunca la ventana principal.',
@@ -1755,6 +1789,7 @@ export const es: typeof zhCN = {
       nameHint:
         'El nombre permite distinguir canales del mismo proveedor. No afecta al modelo ni a la conexión.',
       errModel: 'Modelo',
+      errThinking: 'activa Razonamiento',
       verify: 'Verificar',
       verifyHint: 'Hace una llamada real a la API para comprobar si este canal funciona ahora',
       errTimeout: 'tiempo agotado',
@@ -1979,6 +2014,8 @@ export const es: typeof zhCN = {
         'Messages establece automáticamente las cabeceras de autenticación y versión. Elimina x-api-key y anthropic-version de las cabeceras adicionales.',
       llmStreamError:
         'El servidor devolvió un error de transmisión. Comprueba el modelo y los parámetros de la solicitud.',
+      llmThinkingRequired:
+        'Este modelo no admite el razonamiento desactivado. Activa «Razonamiento» junto al modelo y vuelve a verificar.',
       saveProtocol: 'Guardar ajustes del protocolo',
       thinkingModeHint:
         'Activa, desactiva o reduce el razonamiento mediante los parámetros admitidos por el formato y el modelo. No se añaden instrucciones de control al prompt.',

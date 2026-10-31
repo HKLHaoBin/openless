@@ -50,6 +50,21 @@ assert.match(capsuleHost, /Kind::MirrorDispatch/);
 assert.match(capsuleHost, /Kind::LayoutDispatch/);
 assert.match(coordinatorHost, /MainDispatch::new\(Kind::HostDispatch\)/);
 assert.match(coordinatorHost, /app\.run_on_main_thread\(dispatch\.wrap\(task\)\)/);
+// beta moved the Windows timer onto a handle-free host. Preserve that ownership
+// boundary while retaining P2 LayoutDispatch provenance on the real queued task.
+const layoutWatch = capsuleHost.slice(capsuleHost.indexOf('fn start_layout_watch('), capsuleHost.indexOf('fn refresh_watched_layout('));
+const windowsLayout = layoutWatch.match(/#\[cfg\(target_os = "windows"\)\]\s*\{([\s\S]*?)\n                \}/)[1];
+assert.match(windowsLayout, /host\.on_main_thread_observed\(crate::issue1266_debug::Kind::LayoutDispatch/);
+assert.ok(windowsLayout.indexOf('move ||') < windowsLayout.indexOf('capsule_window()'));
+assert.doesNotMatch(windowsLayout, /self\.clone\(|capsule\.clone\(|self\.app/);
+assert.match(layoutWatch, /#\[cfg\(not\(target_os = "windows"\)\)\]\s*let capsule = self\.clone\(\)/);
+const borrowedDispatch = coordinatorHost.slice(coordinatorHost.indexOf('fn on_main_thread_observed<'), coordinatorHost.indexOf('pub(crate) fn native_capsule_status('));
+assert.match(borrowedDispatch, /MainDispatch::new\(kind\)/);
+assert.match(borrowedDispatch, /let task = dispatch\.wrap\(task\)/);
+assert.match(borrowedDispatch, /self\.app\.lock\(\)\.as_ref\(\)/);
+assert.match(borrowedDispatch, /app\.run_on_main_thread\(task\)\.is_ok\(\)/);
+assert.match(borrowedDispatch, /dispatch\.dispatched\(queued\)/);
+assert.doesNotMatch(borrowedDispatch, /clone_handle|self\.app\(\)|app\.clone\(/);
 assert.match(helper, /EXECUTING\.with\(Cell::get\)/);
 assert.match(helper, /current\.replace\(Some\(self\.operation\)\)/);
 assert.match(helper, /current\.set\(self\.previous\)/);

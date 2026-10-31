@@ -1,3 +1,4 @@
+import { desktopGuideJa as desktopGuide } from './desktopGuide';
 import { siwcJa as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 import { en } from './en';
@@ -10,6 +11,7 @@ import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const ja: typeof zhCN = {
   ...en,
+  desktopGuide,
   siwc,
   experimentalAsr,
   uiRefinement,
@@ -1269,6 +1271,11 @@ export const ja: typeof zhCN = {
       unavailable: 'このプラットフォームでは、利用できるテスト機能はまだありません。',
     },
     selectionWorkspace: {
+      extraControls: '追加設定',
+      extraControlsDesc: '質問と編集の判定、モデル出力形式を調整します。通常は変更不要です。',
+      openExtraControls: 'その他',
+      extraControlsSaveHint: '変更は自動保存されます。',
+      extraControlsDone: '完了',
       title: '選択範囲アシスタント',
       hint: 'テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。',
       polishHotkey: '選択範囲アシスタントのショートカット',
@@ -1533,6 +1540,35 @@ export const ja: typeof zhCN = {
       lowLatencyDictationDesc:
         'マイクストリームを準備し、最大 500 ミリ秒をメモリに保持して、ホットキー直後の音声が欠落しにくくします。録音を確定するまで音声は保存・アップロードされません。電力を多く使い、マイク使用中の表示が続きます。',
       dsp: {
+        aec: 'System echo cancellation',
+        systemNoise: 'System noise suppression',
+        systemAgc: 'System automatic gain',
+        unavailable: 'Unavailable on this device',
+        androidEffectsHint:
+          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+        effectsActive: 'System effects are active for this recording.',
+        spectrum: 'Input / processed spectrum',
+        spectrumHint:
+          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+        spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
+        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        presets: 'Equalizer presets',
+        choosePreset: 'Choose a preset',
+        preset_normal: 'Flat',
+        preset_brightVocal: 'Bright vocal',
+        preset_deepVoice: 'Deep voice',
+        preset_podcast: 'Podcast',
+        preset_vocalClarity: 'Vocal clarity',
+        preset_warmVocal: 'Warm vocal',
+
+        aecOff: 'オフ',
+        aecLight: '軽量（低 CPU）',
+        aecModel: 'モデル（高精度）',
+        aecModelHint:
+          'モデル版はより強く抑圧しますが CPU は約 3 倍です。古い端末では軽量版を推奨します。',
+        aecHint:
+          'スピーカー使用時の回り込みを抑えます。参照信号が必要なので、ヘッドホンならオフで構いません。',
+        buffer: '出力バッファ',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
         equalizer: 'Equalizer',
@@ -1560,6 +1596,9 @@ export const ja: typeof zhCN = {
         down: 'Move down',
         reset: 'Reset enhancement settings',
       },
+      echoCancellationLabel: '再生エコーキャンセル',
+      echoCancellationDesc:
+        '再生音を止めずにローカルの再生音を参照してエコーを抑制します。macOS は 14.6 以降とシステム音声の収録許可が必要です。非対応デバイス、Bluetooth 経路、Linux ALSA では通常のマイク録音に戻ります。次の収録開始時に適用されます。',
       audioEnhancementLabel: '音声強調',
       audioEnhancementDesc:
         'RNNoise または PureVox のノイズ抑制、自動ゲイン、リミッターを適用します。既定ではオフ。変更は次の録音から有効です。',
@@ -1637,6 +1676,10 @@ export const ja: typeof zhCN = {
       polishContextWindowLabel: '会話コンテキスト窓（分）',
       polishContextWindowDesc:
         '直近 N 分間の整文済み転写をマルチターン文脈として渡します。0 = 無効。',
+      debugArchiveProcessedLabel: '処理後の音声を保存',
+      debugArchiveProcessedDesc: 'ノイズ低減とゲイン適用後の音声で、従来の録音ファイルに保存されます。',
+      debugArchiveRawLabel: '処理前の音声も保存',
+      debugArchiveRawDesc: '同じフォルダに <session>.raw.wav を追加保存します。これだけを有効にすると元音声がメインに保存されます。',
       recordAudioForDebugLabel: '元の録音を保持（デバッグ）',
       recordAudioForDebugDesc: '生のマイク音声を wav で保存し、認識問題の診断に利用。',
       audioRecordingMaxEntriesLabel: '元音声の保持件数',
@@ -1656,16 +1699,6 @@ export const ja: typeof zhCN = {
       voiceActivationTimeoutEnabled: 'タイムアウトで停止',
       voiceActivationTimeoutSeconds: 'タイムアウト（秒）',
       startupGroupTitle: '起動',
-      lowMemoryBackgroundLabel: '省メモリバックグラウンドモード',
-      lowMemoryBackgroundDesc:
-        '再起動後に適用。メイン画面を閉じると解放し、録音時のみネイティブカプセルを表示します。待機中のマイク事前起動を無効にします。ローカルモデルの解放設定は維持されます。',
-      lowMemoryRestartLabel: '再起動後に適用',
-      lowMemoryRestartDesc:
-        '低メモリバックグラウンドモードの設定を保存しました。実行モードの切り替えにはアプリの再起動が必要です。',
-      lowMemoryRestartNow: '今すぐ再起動',
-      lowMemoryCapsuleErrorLabel: 'ネイティブカプセル利用不可',
-      lowMemoryCapsuleErrorDesc:
-        'ディクテーションは引き続き利用できますが、フローティングカプセルは表示されません。ヘルパーが見つからないかブロックされている可能性があります。アプリを再インストールしてください。',
       startMinimizedLabel: '起動時にメインウィンドウを表示しない',
       startMinimizedDesc:
         'どの起動経路でもメインウィンドウを開かず、メニューバー / トレイのみで動作。',
@@ -1716,6 +1749,7 @@ export const ja: typeof zhCN = {
       nameHint:
         '同じプロバイダーのチャンネルを区別するための名前です。モデルや接続には影響しません。',
       errModel: 'モデル',
+      errThinking: '思考をオンに',
       verify: '検証',
       verifyHint: '実際に API を1回呼んで、このチャネルが今使えるか確認します',
       errTimeout: 'タイムアウト',
@@ -1941,6 +1975,8 @@ export const ja: typeof zhCN = {
         'Messages の認証とバージョンヘッダーは自動設定されます。追加ヘッダーから x-api-key と anthropic-version を削除してください。',
       llmStreamError:
         'サーバーがストリームエラーを返しました。モデルとリクエスト設定を確認してください。',
+      llmThinkingRequired:
+        'このモデルは思考をオフにできません。モデル欄の横の「思考」をオンにしてから、もう一度検証してください。',
       saveProtocol: 'プロトコル設定を保存',
       thinkingModeHint:
         '選択したリクエスト形式とモデルが対応するパラメータで思考を有効化、無効化または軽減します。プロンプトに制御指示は追加しません。',

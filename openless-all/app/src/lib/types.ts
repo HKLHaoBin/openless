@@ -341,8 +341,19 @@ export interface StylePackRuntimeDiagnostics {
 }
 
 export type AudioDspStage =
-  'noiseReduction' | 'dereverb' | 'equalizer' | 'amplifier' | 'agc' | 'vad';
+  | 'acousticEchoCancellation'
+  | 'noiseReduction'
+  | 'dereverb'
+  | 'equalizer'
+  | 'amplifier'
+  | 'agc'
+  | 'vad';
 export interface AudioDspConfig {
+  /** 回声消除算法：轻量 NLMS 省 CPU，aec7 模型抑制更强但约 3 倍开销。 */
+  aecMode: 'off' | 'light' | 'model';
+  androidAecEnabled?: boolean;
+  androidNoiseSuppressionEnabled?: boolean;
+  androidAgcEnabled?: boolean;
   noiseReduction: 'off' | 'rnnoise' | 'purevox' | 'spectral';
   noiseStrength: number;
   gainDb: number;
@@ -357,15 +368,6 @@ export interface AudioDspConfig {
   equalizerPreampDb: number;
   equalizerBandsDb: number[];
   processingOrder: AudioDspStage[];
-}
-
-/** Runtime health of the disposable native capsule sidecar (desktop only). */
-export interface NativeCapsuleStatus {
-  /** Whether the launch-time low-memory background switch is active. */
-  active: boolean;
-  /** False when the sidecar helper is missing or failed to initialize. */
-  available: boolean;
-  error: string | null;
 }
 
 export interface UserPreferences {
@@ -392,9 +394,10 @@ export interface UserPreferences {
   lowLatencyDictationEnabled: boolean;
   /** Enable the session-frozen speech enhancement chain. Disabled by default. */
   audioEnhancementEnabled: boolean;
+  /** Use a local playback reference for optional echo cancellation. Off by default. */
+  echoCancellationEnabled: boolean;
   audioDsp?: AudioDspConfig;
   /** Desktop resource policy, applied after restarting the application. */
-  lowMemoryBackgroundEnabled: boolean;
   /** Enable local-only voice activation while idle (Windows desktop only). */
   voiceActivationEnabled: boolean;
   voiceActivationWakeEnabled: boolean;
@@ -592,6 +595,10 @@ export interface UserPreferences {
   /** Whether to keep the raw microphone audio file (wav) per session, for debugging ASR misrecognition / mic sensitivity.
    *  Default false. When on, it uses disk space and follows the same cleanup policy as historyRetentionDays. */
   recordAudioForDebug: boolean;
+  /** 调试录音：追加保存「处理后」的音频（主档案 `<session>.wav`）。 */
+  debugArchiveProcessed: boolean;
+  /** 调试录音：额外保存「处理前」的 `<session>.raw.wav`，用于 A/B 对照。 */
+  debugArchiveRaw: boolean;
   /** Number of recent wav files kept in recordings/. null = follows the 200 hard cap; 1..=200 for user-defined values.
    *  Decoupled from historyMaxEntries — many text entries with only the 5 most recent wavs is a valid combination. */
   audioRecordingMaxEntries: number | null;

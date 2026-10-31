@@ -19,6 +19,43 @@ const messages = [
   },
 ];
 
+test('the new capsule keeps a frosted, readable surface in both themes', async ({ page }, info) => {
+  await page.goto(fixture);
+  const pill = page.locator('.ol-default-capsule');
+  await expect(pill).toHaveCSS('opacity', '1');
+  await expect(pill).toHaveCSS('filter', 'none');
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(
+      (theme) => document.documentElement.setAttribute('data-ol-theme', theme),
+      theme,
+    );
+    await patch(page, { state: 'recording', translation: true });
+    await expect(pill).toHaveCSS('width', '116px');
+    const material = await pill.evaluate((element) => {
+      const background = getComputedStyle(element, '::before');
+      const channels = background.backgroundColor.match(/[\d.]+/g)!.map(Number);
+      return {
+        luminance: (channels[0] + channels[1] + channels[2]) / (3 * 255),
+        alpha: channels[3],
+        blur: background.backdropFilter || background.getPropertyValue('-webkit-backdrop-filter'),
+        scheme: getComputedStyle(element).colorScheme,
+      };
+    });
+    expect(material.scheme).toBe(theme);
+    expect(material.alpha).toBeGreaterThan(0.8);
+    expect(material.alpha).toBeLessThan(1);
+    expect(material.blur).toContain('blur(');
+    if (theme === 'dark') expect(material.luminance).toBeLessThan(0.25);
+    else expect(material.luminance).toBeGreaterThan(0.85);
+    await expect(pill.getByRole('button', { name: '取消', exact: true })).toBeEnabled();
+    await expect(page.locator('.ol-classic-translation')).toHaveCSS('color-scheme', theme);
+    await page.screenshot({ path: info.outputPath(`capsule-${theme}.png`) });
+    await patch(page, { state: 'polishing' });
+    await expect(pill.locator('[role="status"]')).toContainText('thinking');
+    await expect(pill).toHaveCSS('opacity', '1');
+  }
+});
+
 test('capsule contracts continuously, changes content in sequence, and can reverse mid-flight', async ({
   page,
 }) => {
@@ -52,8 +89,10 @@ test('capsule contracts continuously, changes content in sequence, and can rever
   await expect(pill).toHaveCSS('width', '116px');
   await patch(page, { leaving: true });
   await page.waitForTimeout(60);
+  expect(await pill.evaluate((element) => getComputedStyle(element).filter)).toContain('blur(');
   await patch(page, { leaving: false });
   await expect(pill).toHaveCSS('opacity', '1');
+  await expect(pill).toHaveCSS('filter', 'none');
   await expect(pill).toHaveCSS('width', '116px');
 });
 
