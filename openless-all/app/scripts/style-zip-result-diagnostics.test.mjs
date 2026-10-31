@@ -8,7 +8,7 @@ const source = readFileSync(new URL('../src/lib/styleZipDiagnostics.ts', import.
 let mockUuidCounter = 0;
 function load(enabled, invoke) {
   const exports = {};
-  const code = ts.transpileModule(source.replace('import.meta.env.VITE_ISSUE1320_DIAGNOSTICS', JSON.stringify(enabled ? '1' : '')), {
+  const code = ts.transpileModule(source.replace('import.meta.env?.VITE_ISSUE1320_DIAGNOSTICS', JSON.stringify(enabled ? '1' : '')), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   vm.runInNewContext(code, {

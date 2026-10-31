@@ -1,5 +1,7 @@
 // [DEBUG-ISSUE-1320-RESULT] Observer only: never await a probe or log user data.
-export const styleZipDiagnosticsEnabled = import.meta.env.VITE_ISSUE1320_DIAGNOSTICS === '1';
+// Shared IPC modules are also imported by plain Node/tsx contract tests, where
+// Vite's import.meta.env is absent. Optional diagnostics default to disabled.
+export const styleZipDiagnosticsEnabled = import.meta.env?.VITE_ISSUE1320_DIAGNOSTICS === '1';
 export type ZipDiagnosticOperation = { id: string; sequence: number };
 type Event =
   | 'import_started' | 'picker_selected' | 'picker_cancelled' | 'ipc_started'
