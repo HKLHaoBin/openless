@@ -72,6 +72,7 @@ mod hotkey;
 mod hotkey;
 mod insertion;
 mod issue1266_debug;
+mod style_zip_diagnostics;
 mod llm_gemini;
 #[cfg(mobile)]
 mod mobile_runtime;
@@ -402,6 +403,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::delete_style_pack,
             commands::import_style_pack_from_zip,
             commands::export_style_pack_to_zip,
+            commands::style_zip_diagnostic_event,
+            commands::export_style_zip_diagnostics,
             commands::set_default_polish_mode,
             commands::set_style_enabled,
             commands::check_accessibility_permission,
@@ -700,6 +703,8 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::delete_style_pack,
             $crate::commands::import_style_pack_from_zip,
             $crate::commands::export_style_pack_to_zip,
+            $crate::commands::style_zip_diagnostic_event,
+            $crate::commands::export_style_zip_diagnostics,
             $crate::commands::set_default_polish_mode,
             $crate::commands::set_style_enabled,
             $crate::commands::check_accessibility_permission,

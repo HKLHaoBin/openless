@@ -95,8 +95,8 @@ export function deleteStylePack(id: string): Promise<void> {
   });
 }
 
-export function importStylePackFromZip(zipPath: string): Promise<StylePack> {
-  return invokeOrMock('import_style_pack_from_zip', { zipPath }, () =>
+export function importStylePackFromZip(zipPath: string, diagnosticOperation?: string): Promise<StylePack> {
+  return invokeOrMock('import_style_pack_from_zip', { zipPath, diagnosticOperation }, () =>
     mockImportStylePackFromZip(zipPath),
   );
 }

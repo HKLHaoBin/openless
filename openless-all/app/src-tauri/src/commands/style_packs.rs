@@ -189,27 +189,83 @@ pub fn delete_style_pack(
 pub fn import_style_pack_from_zip(
     core: CoreState<'_>,
     zip_path: String,
+    diagnostic_operation: Option<String>,
 ) -> Result<StylePack, String> {
+    use crate::style_zip_diagnostics::{self as diagnostic, Event, Facts};
+    let operation = diagnostic::operation(diagnostic_operation.as_deref());
     log::info!(
         "[style-pack] command import requested source_kind={}",
-        if zip_path.starts_with("content://") {
-            "content-uri"
-        } else {
-            "file-path"
-        }
+        if zip_path.starts_with("content://") { "content-uri" } else { "file-path" }
     );
     #[cfg(target_os = "android")]
     if zip_path.starts_with("content://") {
+        let started = std::time::Instant::now();
+        diagnostic::record(&operation, Event::ReadStarted,
+            Facts { content_uri: Some(true), ..Default::default() });
         let bytes = crate::android::jni::android::read_content_uri(
             &zip_path,
             crate::persistence::STYLE_PACK_ARCHIVE_MAX_COMPRESSED_BYTES,
-        )?;
-        return core
-            .import_style_pack_bytes(&bytes)
-            .map_err(|error| error.to_string());
+        ).map_err(|error| {
+            diagnostic::record(&operation, Event::ReadError, Facts {
+                error_code: Some(diagnostic::ErrorCode::UriRead),
+                duration_ms: Some(started.elapsed().as_millis() as u64), ..Default::default()
+            });
+            error
+        })?;
+        diagnostic::record(&operation, Event::ReadOk, Facts {
+            bytes: Some(bytes.len() as u64),
+            duration_ms: Some(started.elapsed().as_millis() as u64), ..Default::default()
+        });
+        diagnostic::record(&operation, Event::CoreStarted, Facts::default());
+        let result = core.import_style_pack_bytes(&bytes);
+        record_style_zip_core_result(&operation, &result);
+        return result.map_err(|error| error.to_string());
     }
-    core.import_style_pack_path(std::path::Path::new(&zip_path))
-        .map_err(|e| e.to_string())
+    diagnostic::record(&operation, Event::CoreStarted, Facts { content_uri: Some(false), ..Default::default() });
+    let result = core.import_style_pack_path(std::path::Path::new(&zip_path));
+    record_style_zip_core_result(&operation, &result);
+    result.map_err(|error| error.to_string())
+}
+
+fn record_style_zip_core_result(operation: &str, result: &Result<StylePack, openless_core::BackendError>) {
+    use crate::style_zip_diagnostics::{self as diagnostic, Event, Facts};
+    match result {
+        Ok(_) => diagnostic::record(operation, Event::CoreOk, Facts::default()),
+        Err(error) => diagnostic::record(operation, Event::CoreError, Facts {
+            error_code: Some(diagnostic::core_error_code(error)), ..Default::default()
+        }),
+    }
+}
+
+/// [DEBUG-ISSUE-1320-RESULT] Strict enums/numeric facts only; raw client errors are rejected.
+#[tauri::command]
+pub fn style_zip_diagnostic_event(
+    operation_id: String,
+    event: crate::style_zip_diagnostics::Event,
+    facts: crate::style_zip_diagnostics::Facts,
+) {
+    if event.frontend() {
+        let operation = crate::style_zip_diagnostics::operation(Some(&operation_id));
+        crate::style_zip_diagnostics::record(&operation, event, facts);
+    }
+}
+
+#[tauri::command]
+pub fn export_style_zip_diagnostics(frontend_failures: Option<u64>, frontend_pending: Option<u64>) -> Result<serde_json::Value, String> {
+    #[cfg(all(target_os = "android", feature = "issue-1320-diagnostics"))]
+    {
+        use crate::style_zip_diagnostics::{self as diagnostic, Event, Facts};
+        diagnostic::record(&diagnostic::operation(None), Event::CoverageSnapshot, Facts {
+            frontend_failures, frontend_pending, frontend_history_unknown: Some(true), ..Default::default()
+        });
+        let report = crate::style_zip_diagnostics::sink::export()?;
+        return serde_json::to_value(report).map_err(|_| "diagnostic_report_failed".into());
+    }
+    #[cfg(not(all(target_os = "android", feature = "issue-1320-diagnostics")))]
+    {
+        let _ = (frontend_failures, frontend_pending);
+        Err("diagnostics_disabled".into())
+    }
 }
 
 #[tauri::command]
