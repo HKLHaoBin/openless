@@ -2,6 +2,7 @@ package com.openless.app
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Log
 import androidx.annotation.Keep
 import java.io.ByteArrayOutputStream
@@ -27,6 +28,21 @@ sealed class OpenLessReadResult {
 object OpenLessContentReader {
     private const val TAG = "OpenLessContentReader"
     private const val BUFFER_BYTES = 8 * 1024
+
+    /** P5: metadata only. Never query/display names or open/read the stream twice. */
+    @Keep
+    @JvmStatic
+    fun declaredSize(context: Context, uriString: String): Long {
+        return try {
+            val uri = Uri.parse(uriString)
+            if (uri.scheme != "content") return -1L
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                val column = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (column < 0 || !cursor.moveToFirst() || cursor.isNull(column)) -1L
+                else cursor.getLong(column).takeIf { it >= 0L } ?: -1L
+            } ?: -1L
+        } catch (_: Exception) { -1L }
+    }
 
     @Keep
     @JvmStatic

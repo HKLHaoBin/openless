@@ -27,7 +27,7 @@ const instantiate = new Function(
   'deps',
   `const {loadSequence,packsLoaded,pendingDeletes,listStylePacks,setPacks,setSelectedId,
     setBusy,showSaveStatus,t,window,setUndoDelete,deleteStylePack,packs,editorOpen,
-    selectedId,startEditorClose,getStylePackPresentation,departing,cardRefs,cardDeparture,mounted,markZipDiagnostic}=deps;
+    selectedId,startEditorClose,getStylePackPresentation,departing,cardRefs,cardDeparture,mounted,markZipDiagnostic,diagnosticRow}=deps;
     ${compiled}; return {${names.join(',')}};`,
 );
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -59,6 +59,7 @@ function context() {
     cardRefs: { current: new Map() },
     cardDeparture: () => Promise.resolve(),
     mounted: { current: true },
+    diagnosticRow: { current: null },
     markZipDiagnostic: (operation, event, facts) => {
       if (operation) state.diagnostics.push({ operation, event, facts });
     },
@@ -183,5 +184,42 @@ function context() {
   await c.api.loadPacks(c.pack.id, operation);
   assert.deepEqual(c.state.diagnostics.map((entry) => entry.event), ['list_started', 'list_error']);
   assert.deepEqual(c.state.rows, [c.other]);
+}
+// Execute the actual render observer with a newer unrelated list: it must not
+// attribute that DOM to the earlier operation whose rows were superseded.
+{
+  const node = page.body.statements.find((statement) =>
+    ts.isExpressionStatement(statement) && ts.isCallExpression(statement.expression) &&
+    statement.expression.expression.getText(source) === 'useEffect' &&
+    statement.expression.arguments[0]?.getText(source).includes('const target = diagnosticRow.current'),
+  );
+  assert(node, 'bounded row observer callback must exist');
+  const observerCode = ts.transpileModule(`const observe = ${node.expression.arguments[0].getText(source)}; observe();`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const observe = new Function('deps', `const {diagnosticRow,packs,markZipDiagnostic,document,window}=deps; ${observerCode}`);
+  const originalRows = [{ id: 'fixture-row' }];
+  const operation = { id: 'opaque-test-operation', sequence: 0 };
+  const diagnosticRow = { current: { id: 'fixture-row', operation, rows: originalRows } };
+  const events = [];
+  const deps = {
+    diagnosticRow, packs: [], window: { innerHeight: 800, innerWidth: 600 },
+    markZipDiagnostic: (op, event, facts) => events.push({ op, event, facts }),
+    document: { querySelectorAll: () => { throw new Error('stale list must not inspect unrelated DOM'); } },
+  };
+  observe(deps);
+  assert.equal(events[0].event, 'row_superseded');
+  assert.equal(diagnosticRow.current, null);
+  events.length = 0;
+  diagnosticRow.current = { id: 'fixture-row', operation, rows: originalRows };
+  deps.packs = originalRows;
+  deps.document = { querySelectorAll: () => [{
+    getAttribute: () => 'fixture-row',
+    getBoundingClientRect: () => ({ width: 100, height: 50, top: 0, left: 0, bottom: 50, right: 100 }),
+  }] };
+  observe(deps);
+  assert.equal(events[0].event, 'row_observed');
+  assert.deepEqual(events[0].facts, { present: true, visible: true });
+  assert.equal(events[0].op, operation);
 }
 console.log('Style deletion lifecycle and diagnostic observer regressions passed');

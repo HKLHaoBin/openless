@@ -252,26 +252,35 @@ pub async fn stop_microphone_level_monitor(app: AppHandle) {
 /// through the JNI ContentResolver instead, avoiding the 0-byte files caused by
 /// tauri-plugin-fs's detachFd.
 #[tauri::command]
-pub fn export_error_log(target_path: String) -> Result<(), String> {
+pub fn export_error_log(
+    target_path: String,
+    style_zip_coverage: Option<crate::style_zip_diagnostics::FrontendCoverage>,
+) -> Result<(), String> {
     let src = resolve_openless_log_path()?;
 
     #[cfg(target_os = "android")]
     {
         if target_path.starts_with("content://") {
-            let bytes = std::fs::read(&src).map_err(|e| format!("读取日志失败：{e}"))?;
+            let mut bytes = std::fs::read(&src).map_err(|e| format!("读取日志失败：{e}"))?;
+            crate::style_zip_diagnostics::append_to_error_log(&mut bytes, style_zip_coverage)?;
             return crate::android::jni::android::write_content_uri(&target_path, &bytes)
                 .map_err(|e| format!("复制日志失败：{e}"));
         }
         let path = target_path
             .strip_prefix("file://")
             .unwrap_or(target_path.as_str());
-        return std::fs::copy(&src, std::path::Path::new(path))
-            .map(|_| ())
+        if let (Ok(source), Ok(target)) = (src.canonicalize(), std::path::Path::new(path).canonicalize()) {
+            if source == target { return Err("不能覆盖原始应用日志".into()); }
+        }
+        let mut bytes = std::fs::read(&src).map_err(|e| format!("读取日志失败：{e}"))?;
+        crate::style_zip_diagnostics::append_to_error_log(&mut bytes, style_zip_coverage)?;
+        return std::fs::write(std::path::Path::new(path), &bytes)
             .map_err(|e| format!("复制日志失败：{e}"));
     }
 
     #[cfg(not(target_os = "android"))]
     {
+        let _ = style_zip_coverage;
         std::fs::copy(&src, std::path::Path::new(&target_path))
             .map(|_| ())
             .map_err(|e| format!("复制日志失败：{e}"))
@@ -282,9 +291,13 @@ pub fn export_error_log(target_path: String) -> Result<(), String> {
 /// 无法正常弹出的 CREATE_DOCUMENT / SAF 保存对话框。
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub fn export_error_log_to_downloads(file_name: String) -> Result<String, String> {
+pub fn export_error_log_to_downloads(
+    file_name: String,
+    style_zip_coverage: Option<crate::style_zip_diagnostics::FrontendCoverage>,
+) -> Result<String, String> {
     let src = resolve_openless_log_path()?;
-    let bytes = std::fs::read(&src).map_err(|e| format!("读取日志失败：{e}"))?;
+    let mut bytes = std::fs::read(&src).map_err(|e| format!("读取日志失败：{e}"))?;
+    crate::style_zip_diagnostics::append_to_error_log(&mut bytes, style_zip_coverage)?;
     crate::android::jni::android::write_public_download(&file_name, &bytes)
         .map_err(|e| format!("导出日志失败：{e}"))
 }
