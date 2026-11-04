@@ -189,6 +189,15 @@ impl SelectionVoiceService {
         polisher: Option<Arc<dyn TextPolisher>>,
         voice_sessions: Arc<crate::voice_session::VoiceSessionGate>,
     ) -> Self {
+        // Selection Voice owns text-only continuation calls, including the
+        // Voice Edit host's plan requests. Route them centrally so every host
+        // uses the selected pipeline and cancellation reaches the same adapter.
+        let polisher = polisher.map(|traditional| {
+            Arc::new(crate::cloud_providers::SharedAuxiliaryTextPolisher::new(
+                Arc::clone(&credential_store),
+                traditional,
+            )) as Arc<dyn TextPolisher>
+        });
         Self {
             state: Arc::new(RwLock::new(SelectionVoiceState::default())),
             events: events.clone(),
@@ -384,16 +393,33 @@ impl SelectionVoiceWorkflow {
                 "selection voice model runtime is not configured",
             )
         })?;
-        // #1119 product B: first-stage instruction text may already come from Omni
-        // (audio→text in VoiceTranscriptionSession). Intent classification and
-        // EditPlan still use this traditional LLM polisher; SharedAuxiliaryTextPolisher
-        // is intentionally not required for correctness of capture alignment.
-        let llm = crate::provider_resolution::resolve_session_provider(
-            &self.credential_store,
-            ProviderSlot::Llm,
-            &preferences.active_llm_provider,
-        )
-        .await?;
+        let multimodal = crate::shared_types::effective_pipeline_mode(
+            preferences.multimodal_pipeline_enabled,
+            preferences.pipeline_mode,
+        ) == crate::shared_types::PipelineMode::Multimodal;
+        // Resolve only the selected namespace: a disabled or broken traditional
+        // LLM must not block a configured Omni channel (or serve as a fallback).
+        let (llm, omni) = if multimodal {
+            (
+                ProviderInvocation::for_provider("selection-voice-unused-llm"),
+                crate::provider_resolution::resolve_session_provider(
+                    &self.credential_store,
+                    ProviderSlot::Omni,
+                    &preferences.active_omni_provider,
+                )
+                .await?,
+            )
+        } else {
+            (
+                crate::provider_resolution::resolve_session_provider(
+                    &self.credential_store,
+                    ProviderSlot::Llm,
+                    &preferences.active_llm_provider,
+                )
+                .await?,
+                ProviderInvocation::for_provider("selection-voice-unused-omni"),
+            )
+        };
         let translation_only = translation_target.is_some();
         let style_pack = crate::style_packs::builtin_style_pack_for_mode(if translation_only {
             PolishMode::Raw
@@ -406,7 +432,7 @@ impl SelectionVoiceWorkflow {
             DictationProviderInvocations::new(
                 ProviderInvocation::for_provider("selection-voice-unused-asr"),
                 llm,
-                ProviderInvocation::for_provider("selection-voice-unused-omni"),
+                omni,
             ),
             Vec::new(),
             Vec::new(),
@@ -418,7 +444,9 @@ impl SelectionVoiceWorkflow {
         } else {
             PolishMode::Light
         };
-        context.polish.style_system_prompt = if translation_only {
+        // Traditional polish composes translation from translation_active;
+        // Omni text completion consumes this prompt directly instead.
+        context.polish.style_system_prompt = if translation_only && !multimodal {
             style_pack.prompt
         } else {
             system_prompt

@@ -1986,8 +1986,8 @@ pub async fn validate_shared_omni_provider(
 }
 
 /// First-stage Omni for Selection Voice / Less Computer (#1119 product B):
-/// audio + prompt → instruction/command text. Downstream intent / EditPlan /
-/// Agent submit still use their existing LLM (or Agent) paths.
+/// audio + prompt → instruction/command text. Selection Voice routes downstream
+/// text work through its selected pipeline; Less Computer keeps its Agent path.
 ///
 /// Empty Omni output is returned as `Ok("")` so callers can apply product
 /// policy (e.g. Less Computer Dictate → `Empty` outcome without a chat error;
