@@ -275,7 +275,7 @@ async fn selection_translation_keeps_its_target_prompt_on_the_omni_route() {
     ))
     .await
     .unwrap();
-    assert_eq!(preview.text, "你好");
+    assert_eq!(preview.preview.text, "你好");
     let requests = within(server).await.unwrap();
     let prompt = requests[0].1["messages"][0]["content"].as_str().unwrap();
     assert!(prompt.contains("中文"));
@@ -428,7 +428,7 @@ async fn traditional_and_disabled_multimodal_modes_keep_the_existing_polisher() 
             })
             .await
             .unwrap();
-        assert_eq!(preview.text, "alpha gamma");
+        assert_eq!(preview.preview.text, "alpha gamma");
         let calls = traditional.0.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].llm.provider_id, "deepseek");
