@@ -211,16 +211,38 @@ class OpenLessRuntimeServiceInstrumentedTest {
     private fun notification(): Notification? = context.getSystemService(NotificationManager::class.java)
         .activeNotifications.firstOrNull { it.id == 42002 }?.notification
     private fun text() = notification()?.extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()
-    private fun awaitText(expected: String) = await("foreground notification: $expected") {
-        foreground() && text() == expected
+    // Android 12+ may defer a DEFAULT FGS notification even after the service is
+    // foreground. Keep the service-start assertion separate and unchanged; only
+    // the notification observation accounts for the emulator's actual policy.
+    // AOSP ActivityManagerConstants: deferred_fgs_notification_interval defaults
+    // to 10_000ms, longer than this fixture's ordinary 5_000ms lifecycle budget.
+    private val notificationDeferralMs: Long by lazy {
+        if (Build.VERSION.SDK_INT < 31) 0L else {
+            val descriptor = instrumentation.uiAutomation.executeShellCommand(
+                "device_config get activity_manager deferred_fgs_notification_interval",
+            )
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use {
+                it.readText().trim().toLongOrNull()?.coerceAtLeast(0L) ?: 10_000L
+            }
+        }
     }
-    private fun await(message: String, predicate: () -> Boolean) {
-        val deadline = SystemClock.uptimeMillis() + 5000
+
+    private fun awaitText(expected: String) {
+        await("runtime must become foreground before notification display") { foreground() }
+        await("foreground notification: $expected (system deferral=${notificationDeferralMs}ms)",
+            timeoutMs = notificationDeferralMs + 5000L,
+        ) { foreground() && text() == expected }
+    }
+    private fun await(message: String, timeoutMs: Long = 5000L, predicate: () -> Boolean) {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
         do {
             instrumentation.waitForIdleSync()
             if (predicate()) return
             SystemClock.sleep(25)
         } while (SystemClock.uptimeMillis() < deadline)
-        assertTrue(message, predicate())
+        assertTrue("$message; running=${running()}, foreground=${foreground()}, text=${text()}, " +
+            "ime=${OpenLessRuntimeService.imeRequested}, auth=${OpenLessRuntimeService.authorizationActive()}",
+            predicate(),
+        )
     }
 }
