@@ -91,6 +91,7 @@ mod polish;
 #[cfg(not(mobile))]
 mod ask_window;
 mod recorder;
+mod recording_companion;
 #[cfg(not(mobile))]
 mod remote_server;
 #[cfg(not(mobile))]
