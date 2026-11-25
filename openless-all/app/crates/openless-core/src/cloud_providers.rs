@@ -1663,7 +1663,7 @@ pub(crate) async fn build_cloud_channel_provider(
     if provider_type == crate::polish::CODEX_OAUTH_PROVIDER_ID {
         let mut config = crate::polish::CodexOAuthConfig::new(model)
             .with_thinking_enabled(thinking);
-        if let Some(effort) = strategy_reasoning_effort(overrides) {
+        if let Some(effort) = strategy_reasoning_effort_override(overrides) {
             // Codex uses the Responses API, whose effort enum does not accept
             // `none`; omit that unsupported override rather than sending a
             // request that the endpoint rejects.
@@ -1765,7 +1765,7 @@ pub(crate) async fn build_cloud_channel_provider(
     )
     .with_protocol(protocol)
     .with_thinking_enabled(thinking)
-    .with_reasoning_effort(strategy_reasoning_effort(overrides))
+    .with_reasoning_effort(strategy_reasoning_effort_override(overrides))
     .with_max_tokens_override(overrides.and_then(|value| value.max_tokens))
     .with_temperature(temperature)
     .with_extra_headers(extra_headers);
@@ -1972,6 +1972,20 @@ fn omni_temperature(
             configured_temperature,
         )
     })
+}
+
+fn strategy_reasoning_effort_override(
+    overrides: Option<&crate::polish_strategy::PolishRequestOverrides>,
+) -> Option<String> {
+    overrides
+        .and_then(|overrides| overrides.reasoning_effort)
+        .map(|effort| match effort {
+            crate::polish_strategy::ReasoningEffort::None => "none",
+            crate::polish_strategy::ReasoningEffort::Low => "low",
+            crate::polish_strategy::ReasoningEffort::Medium => "medium",
+            crate::polish_strategy::ReasoningEffort::High => "high",
+        })
+        .map(str::to_string)
 }
 
 fn strategy_reasoning_effort(context: &DictationContext) -> Option<String> {
