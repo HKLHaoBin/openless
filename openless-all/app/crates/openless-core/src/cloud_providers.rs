@@ -1116,7 +1116,7 @@ impl Drop for PolishRegistration {
     }
 }
 
-enum CloudPolisherProvider {
+pub(crate) enum CloudPolisherProvider {
     OpenAi(crate::polish::ActiveLLMProvider),
     Gemini(crate::llm_gemini::GeminiProvider),
 }
@@ -1597,6 +1597,185 @@ pub(crate) async fn llm_channel_configured(
         .or_else(|| default_llm_endpoint(provider_type).map(str::to_string))
         .is_some()
 }
+
+pub(crate) async fn build_cloud_channel_provider(
+    credentials: &dyn CredentialStore,
+    route: &crate::dictation_context::ProviderInvocation,
+    deepseek_suite: bool,
+    thinking: bool,
+    overrides: Option<&crate::polish_strategy::PolishRequestOverrides>,
+) -> Result<CloudPolisherProvider, BackendError> {
+    if deepseek_suite {
+        let suite = crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials).await?;
+        require_configured(&suite.api_key, "DeepSeek suite API key")?;
+        let config = crate::polish::OpenAICompatibleConfig::new(
+            "deepseek",
+            "DeepSeek suite",
+            crate::deepseek_suite::ENDPOINT,
+            suite.api_key,
+            crate::deepseek_suite::MODEL,
+        )
+        .with_thinking_enabled(thinking);
+        return Ok(CloudPolisherProvider::OpenAi(
+            crate::polish::ActiveLLMProvider::OpenAI(
+                crate::polish::OpenAICompatibleLLMProvider::new(config),
+            ),
+        ));
+    }
+    let channel_id = route.provider_id.trim();
+    let provider_type = route.provider_type.trim();
+    if channel_id.is_empty() || provider_type.is_empty() {
+        return Err(BackendError::new(
+            BackendErrorCode::InvalidArgument,
+            "LLM channel id and provider type must not be empty",
+        ));
+    }
+    let model = route
+        .model
+        .clone()
+        .and_then(non_blank_owned)
+        .or_else(|| default_llm_model(provider_type).map(str::to_string))
+        .ok_or_else(|| {
+            BackendError::new(BackendErrorCode::Provider, "LLM model is not configured")
+        })?;
+    if provider_type == crate::siwc::PROVIDER_ID {
+        let service = credentials
+            .siwc()
+            .ok_or_else(|| crate::siwc::error("unavailable").into_backend())?;
+        let access = service
+            .access(channel_id)
+            .await
+            .map_err(crate::siwc::SiwcError::into_backend)?;
+        let config = crate::polish::OpenAICompatibleConfig::new(
+            crate::siwc::PROVIDER_ID,
+            "ChatGPT Plan",
+            crate::siwc::API_BASE,
+            "",
+            model,
+        )
+        .with_temperature(None);
+        let provider =
+            crate::polish::OpenAICompatibleLLMProvider::new(config).with_siwc_access(access);
+        return Ok(CloudPolisherProvider::OpenAi(
+            crate::polish::ActiveLLMProvider::OpenAI(provider),
+        ));
+    }
+    if provider_type == crate::polish::CODEX_OAUTH_PROVIDER_ID {
+        let mut config = crate::polish::CodexOAuthConfig::new(model)
+            .with_thinking_enabled(thinking);
+        if let Some(effort) = strategy_reasoning_effort(overrides) {
+            // Codex uses the Responses API, whose effort enum does not accept
+            // `none`; omit that unsupported override rather than sending a
+            // request that the endpoint rejects.
+            let effort = (effort != "none").then_some(effort);
+            config = config.with_reasoning_effort(effort);
+        }
+        config = config.with_max_output_tokens(overrides.and_then(|value| value.max_tokens));
+        let provider = crate::polish::CodexOAuthLLMProvider::new(config);
+        return Ok(CloudPolisherProvider::OpenAi(
+            crate::polish::ActiveLLMProvider::Codex(provider),
+        ));
+    }
+
+    let api_key = read_channel_credential(
+        credentials,
+        CredentialNamespace::Llm,
+        channel_id,
+        LLM_API_KEY_ACCOUNT,
+    )
+    .await?
+    .unwrap_or_default();
+    let configured_endpoint = read_channel_credential(
+        credentials,
+        CredentialNamespace::Llm,
+        channel_id,
+        LLM_ENDPOINT_ACCOUNT,
+    )
+    .await?;
+    if crate::provider_rules::api_key_required(
+        crate::ProviderKind::Llm,
+        provider_type,
+        configured_endpoint.as_deref(),
+    ) {
+        require_configured(&api_key, "LLM API key")?;
+    }
+    let endpoint = configured_endpoint
+        .and_then(non_blank_owned)
+        .or_else(|| default_llm_endpoint(provider_type).map(str::to_string))
+        .ok_or_else(|| {
+            BackendError::new(BackendErrorCode::Provider, "LLM endpoint is not configured")
+        })?;
+    crate::endpoint_security::validate_http_endpoint(&endpoint)
+        .map_err(|error| map_llm_error(error.to_string()))?;
+    if provider_type == "gemini" {
+        let thinking_enabled = overrides
+            .and_then(|value| value.reasoning_effort)
+            .map(|effort| !matches!(effort, crate::polish_strategy::ReasoningEffort::None))
+            .unwrap_or(thinking);
+        let mut config =
+            crate::llm_gemini::GeminiConfig::new(api_key, model, endpoint.trim_end_matches('/'))
+                .with_thinking_enabled(thinking_enabled)
+                .with_max_output_tokens(overrides.and_then(|value| value.max_tokens));
+        if let Some(temperature) = overrides.and_then(|value| value.temperature()) {
+            config = config.with_temperature(temperature);
+        }
+        let provider = crate::llm_gemini::GeminiProvider::new(config);
+        return Ok(CloudPolisherProvider::Gemini(provider));
+    }
+
+    let protocol =
+        crate::llm_protocol::LlmProtocolConfig::load(credentials, channel_id, provider_type)
+            .await?;
+    let configured_temperature = read_channel_credential(
+        credentials,
+        CredentialNamespace::Llm,
+        channel_id,
+        LLM_TEMPERATURE_ACCOUNT,
+    )
+    .await?
+    .as_deref()
+    .map(parse_temperature)
+    .transpose()?
+    .flatten();
+    let strategy_temperature = overrides
+        .and_then(|overrides| overrides.temperature());
+    let temperature = strategy_temperature.or_else(|| {
+        crate::polish::openai_compatible_temperature_for_provider(
+            provider_type,
+            configured_temperature,
+        )
+    });
+    let extra_headers = read_channel_credential(
+        credentials,
+        CredentialNamespace::Llm,
+        channel_id,
+        LLM_EXTRA_HEADERS_ACCOUNT,
+    )
+    .await?
+    .as_deref()
+    .map(parse_extra_headers)
+    .transpose()?
+    .unwrap_or_default();
+    let config = crate::polish::OpenAICompatibleConfig::new(
+        provider_type,
+        "OpenLess LLM",
+        endpoint,
+        api_key,
+        model,
+    )
+    .with_protocol(protocol)
+    .with_thinking_enabled(thinking)
+    .with_reasoning_effort(strategy_reasoning_effort(overrides))
+    .with_max_tokens_override(overrides.and_then(|value| value.max_tokens))
+    .with_temperature(temperature)
+    .with_extra_headers(extra_headers);
+    Ok(CloudPolisherProvider::OpenAi(
+        crate::polish::ActiveLLMProvider::OpenAI(crate::polish::OpenAICompatibleLLMProvider::new(
+            config,
+        )),
+    ))
+}
+
 
 async fn build_cloud_polisher_provider(
     credentials: &dyn CredentialStore,
