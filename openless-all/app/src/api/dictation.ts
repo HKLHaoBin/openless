@@ -1,6 +1,7 @@
 import type {
   BackendEvent,
   CapsulePayload,
+  DictationJobSnapshot,
   InsertFallbackCardPayload,
   PendingCorrection,
   UserPreferences,
@@ -25,7 +26,8 @@ export function getCapsuleAuxiliarySnapshot() {
   return invokeOrPreview<{
     suggestions: PendingCorrection[];
     fallback: InsertFallbackCardPayload | null;
-  }>('get_capsule_auxiliary_snapshot', undefined, () => ({ suggestions: [], fallback: null }));
+    processing: DictationJobSnapshot[];
+  }>('get_capsule_auxiliary_snapshot', undefined, () => ({ suggestions: [], fallback: null, processing: [] }));
 }
 
 export function createCapsuleSubscriptions() {
@@ -43,5 +45,7 @@ export function createCapsuleSubscriptions() {
       events.listen('vocab:suggested', onPayload, 'window'),
     fallback: (onPayload: (payload: InsertFallbackCardPayload | null) => void) =>
       events.listen('insert:fallback', onPayload, 'window'),
+    jobs: (onPayload: (payload: DictationJobSnapshot[]) => void) =>
+      events.listen('dictation:jobs', onPayload, 'app'),
   };
 }

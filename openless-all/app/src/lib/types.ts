@@ -856,6 +856,12 @@ export type CapsuleState =
 /** Recording capsule style: 'siri' = flowing Siri light-effect version (default); 'classic' = Openless classic pill version. */
 export type CapsuleStyle = 'siri' | 'classic' | 'typeless';
 
+/** Minimal frontend projection for background dictation jobs shown by the capsule. */
+export interface DictationJobSnapshot {
+  sessionId?: string | null;
+  translationActive?: boolean;
+}
+
 export interface CapsulePayload {
   qa?: boolean;
   /** Session generation that owns this capsule frame. */

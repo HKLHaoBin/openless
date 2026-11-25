@@ -6,11 +6,13 @@
 
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 const SESSION_ID: &str = "issue-1460-windows-voice-crash";
 const ATTEMPT_ID: &str = "A1-instrumented-audio-lifecycle";
 const CHANGE_ID: &str = "C1-voice-crash-probes";
 static EVENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static RUN_ID: OnceLock<String> = OnceLock::new();
 
 pub(crate) fn initialize() {
     record(
@@ -39,7 +41,7 @@ pub(crate) fn record(
             "session_id": SESSION_ID,
             "attempt_id": ATTEMPT_ID,
             "change_id": CHANGE_ID,
-            "run_id": format!("pid-{}", std::process::id()),
+            "run_id": run_id(),
             "probe_id": probe_id,
             "hypothesis_ids": hypotheses,
             "event": event,
@@ -60,6 +62,16 @@ pub(crate) fn record(
 
 pub(crate) const fn enabled() -> bool {
     cfg!(all(target_os = "windows", feature = "issue-1460-diagnostics"))
+}
+
+fn run_id() -> &'static str {
+    RUN_ID.get_or_init(|| {
+        let started_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        format!("pid-{}-start-{}", std::process::id(), started_at_ms)
+    })
 }
 
 fn build_id() -> &'static str {
