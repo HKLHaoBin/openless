@@ -177,7 +177,7 @@ for (const fragment of [
 ])
   assert.ok(gate.includes(fragment));
 const build = steps.find((step) => step.name === 'Build (Windows)').run;
-assert.match(build, /diagnostic_args=\(--features issue-1266-diagnostics\)/);
+assert.match(build, /diagnostic_features\+=\(issue-1266-diagnostics\)/);
 // Signed and unsigned paths compile NSIS once, then reuse that executable for
 // MSI. Both commands must retain the same diagnostics feature selection.
 assert.equal((build.match(/build "\$\{diagnostic_args\[@\]\}" --bundles nsis/g) ?? []).length, 2);
