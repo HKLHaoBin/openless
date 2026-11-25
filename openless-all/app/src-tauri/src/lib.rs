@@ -2121,7 +2121,7 @@ pub fn log_dir_path() -> std::path::PathBuf {
 }
 
 pub(crate) fn require_ask_anything() -> Result<(), String> {
-    if ask_anything_available() {
+    if recording_companion::ask_anything_available() {
         Ok(())
     } else {
         Err("Ask Anything is disabled in this build".into())
