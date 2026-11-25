@@ -19,6 +19,24 @@ mod selection {
     // Selection capture is unrelated to keyboard classification in this test harness.
     pub fn prefetch_selection_workspace_capture() {}
 }
+mod ask_window {
+    pub fn active_space_epoch() -> u64 { 0 }
+    pub fn foreground_pid() -> Option<u32> { None }
+    pub mod hotkey {
+        #[derive(Clone, Copy)]
+        pub enum Disposition { Stock, Pass, Consume }
+        pub fn keyboard_edge(_keycode: u16, _down: bool, _repeat: bool, _recording: bool) -> Disposition {
+            Disposition::Pass
+        }
+        pub fn reset_physical_state() {}
+        pub fn can_buffer_space() -> bool { false }
+        pub fn fn_is_held() -> bool { false }
+        pub fn abort_fn_companion() {}
+    }
+}
+mod unicode_keystroke {
+    pub fn is_secure_input_enabled() -> bool { false }
+}
 #[path = "../../src/mobile_stubs/combo_hotkey.rs"]
 mod combo_hotkey;
 #[path = "../../src/hotkey.rs"]
