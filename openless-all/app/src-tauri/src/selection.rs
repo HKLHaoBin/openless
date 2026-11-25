@@ -15,6 +15,10 @@
 //! Linux 的选区读取路径。
 
 // 仅 macOS / Windows 的模拟复制路径用 sleep。
+const SELECTION_TRUNCATE_HEAD: usize = 2000;
+const SELECTION_TRUNCATE_TAIL: usize = 2000;
+const SELECTION_TRUNCATED_MARKER: &str = "\n[…truncated…]\n";
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::Duration;
 
@@ -26,7 +30,12 @@ mod target_position;
 #[cfg(target_os = "windows")]
 use clipboard_capture::ClipboardPollOutcome;
 
-/// Selection context read from the foreground app.
+pub(crate) fn is_truncated_selection_stand_in(text: &str) -> bool {
+    let marker_len = SELECTION_TRUNCATED_MARKER.chars().count();
+    text.contains(SELECTION_TRUNCATED_MARKER)
+        && text.chars().count() == SELECTION_TRUNCATE_HEAD + marker_len + SELECTION_TRUNCATE_TAIL
+}
+
 /// `text` is the complete selected range, including boundary whitespace.
 /// `source_app` is a human-readable label for the foreground app (optional).
 #[derive(Debug, Clone)]
