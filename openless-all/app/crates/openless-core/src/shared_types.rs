@@ -642,6 +642,9 @@ pub struct UserPreferences {
     pub custom_combo_hotkey: Option<ComboBinding>,
     #[serde(default = "default_translation_hotkey")]
     pub translation_hotkey: ShortcutBinding,
+    /// Number of Shift taps used to enter translation mode; absent preserves the legacy default of one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translation_shift_tap_count: Option<std::num::NonZeroU8>,
     /// "Switch style" global hotkey. `None` = disabled (no global key
     /// registered); `Some(...)` = registered. Defaults to `Some(default key)`
     /// — zero behavior change for existing users, only newly clearable
@@ -1176,6 +1179,8 @@ struct UserPreferencesWire {
     qa_save_history: bool,
     custom_combo_hotkey: Option<ComboBinding>,
     translation_hotkey: Option<ShortcutBinding>,
+    #[serde(default)]
+    translation_shift_tap_count: Option<std::num::NonZeroU8>,
     switch_style_hotkey: Option<ShortcutBinding>,
     open_app_hotkey: Option<ShortcutBinding>,
     #[serde(default)]
@@ -1430,6 +1435,7 @@ impl Default for UserPreferencesWire {
             qa_save_history: prefs.qa_save_history,
             custom_combo_hotkey: prefs.custom_combo_hotkey,
             translation_hotkey: None,
+            translation_shift_tap_count: prefs.translation_shift_tap_count,
             // Carry the default key (Some) so a missing field still means enabled; None exclusively means "user disabled".
             switch_style_hotkey: prefs.switch_style_hotkey,
             open_app_hotkey: prefs.open_app_hotkey,
@@ -1685,6 +1691,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             translation_hotkey: wire
                 .translation_hotkey
                 .unwrap_or_else(default_translation_hotkey),
+            translation_shift_tap_count: wire.translation_shift_tap_count,
             // Pass the Option through: None = user disabled — no
             // unwrap_or_else collapse back to the default key (the root
             // cause of #576 "can't disable"). A missing field falls to the
@@ -1758,6 +1765,12 @@ impl<'de> Deserialize<'de> for UserPreferences {
 }
 
 impl UserPreferences {
+    /// Return the effective translation Shift tap count, preserving the legacy default.
+    pub fn translation_shift_tap_count(&self) -> u8 {
+        self.translation_shift_tap_count
+            .map_or(1, std::num::NonZeroU8::get)
+    }
+
     /// Field-by-field rescue of a preferences.json that fails strict
     /// deserialization.
     ///
@@ -2078,6 +2091,7 @@ impl Default for UserPreferences {
             qa_save_history: false,
             custom_combo_hotkey: None,
             translation_hotkey: default_translation_hotkey(),
+            translation_shift_tap_count: None,
             switch_style_hotkey: default_switch_style_hotkey(),
             open_app_hotkey: default_open_app_hotkey(),
             style_pack_hotkeys: Vec::new(),
