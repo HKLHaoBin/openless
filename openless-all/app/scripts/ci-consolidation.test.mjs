@@ -25,7 +25,7 @@ for (const [id, area] of [
 }
 assert.equal(
   ci.jobs['ui-motion'].if,
-  "(github.event_name != 'workflow_dispatch' || inputs.live_acceptance == 'off') && always() && !(${desktopOnly})",
+  `(github.event_name != 'workflow_dispatch' || inputs.live_acceptance == 'off') && always() && !(${desktopOnly})`,
 );
 assert.equal(
   ci.jobs['windows-checks']['runs-on'],
