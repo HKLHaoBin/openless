@@ -3373,6 +3373,13 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                         return;
                     };
                     let error = map_recorder_error(runtime_error);
+                    crate::issue1460_debug::record(
+                        "P3",
+                        &["H1", "H2", "H3"],
+                        "runtime_error_received",
+                        "error",
+                        serde_json::json!({ "error_class": "recorder_runtime" }),
+                    );
                     let _ =
                         fault_progress.publish(openless_core::RecordingEvent::Fatal(error.clone()));
                     let backend = backend.lock().as_ref().and_then(std::sync::Weak::upgrade);

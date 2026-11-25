@@ -263,6 +263,15 @@ fn handle_microphone_stream_error(
         cpal::StreamError::DeviceNotAvailable => "device_not_available",
         cpal::StreamError::BackendSpecific { .. } => "backend_error",
     };
+    if error_count == 1 {
+        crate::issue1460_debug::record(
+            "P3",
+            &["H1", "H2"],
+            "microphone_stream_error",
+            "error",
+            serde_json::json!({ "error_kind": kind, "error_count": error_count }),
+        );
+    }
     state.diagnostics.event(
         "P2",
         "[\"H1\",\"H2\",\"H3\"]",
@@ -1934,6 +1943,19 @@ impl Recorder {
             });
         let write_processed = archives.write_processed;
         let archive_active = archive_writer.is_some();
+        crate::issue1460_debug::record(
+            "P1",
+            &["H1", "H2", "H3", "H4"],
+            "capture_start_requested",
+            "observed",
+            serde_json::json!({
+                "archive_active": archive_active,
+                "write_processed": write_processed,
+                "raw_archive_present": raw_writer.is_some(),
+                "enhancement_enabled": processing.enhancement_enabled,
+                "echo_cancellation_enabled": processing.echo_cancellation_enabled,
+            }),
+        );
         let archive_for_thread = archive_writer.clone();
         let raw_for_thread = raw_writer.clone();
         // AEC 的扬声器参考：与录音同生命周期，Drop 时停流。
@@ -1965,6 +1987,13 @@ impl Recorder {
             }) {
             Ok(handle) => handle,
             Err(error) => {
+                crate::issue1460_debug::record(
+                    "P1",
+                    &["H1", "H2"],
+                    "capture_thread_spawn",
+                    "error",
+                    serde_json::json!({ "error_class": "thread_spawn" }),
+                );
                 if let Some(archive) = archive_writer.as_ref() {
                     archive.finish();
                 }
@@ -1979,6 +2008,13 @@ impl Recorder {
         let startup_result = match startup_rx.recv() {
             Ok(result) => result,
             Err(error) => {
+                crate::issue1460_debug::record(
+                    "P1",
+                    &["H1", "H2", "H3"],
+                    "capture_start_result",
+                    "error",
+                    serde_json::json!({ "error_class": "startup_channel_closed" }),
+                );
                 if let Some(archive) = archive_writer.as_ref() {
                     archive.finish();
                 }
@@ -1988,12 +2024,26 @@ impl Recorder {
             }
         };
         if let Err(error) = startup_result {
+            crate::issue1460_debug::record(
+                "P1",
+                &["H1", "H2", "H3"],
+                "capture_start_result",
+                "error",
+                serde_json::json!({ "error_class": "startup_error" }),
+            );
             let _ = join_handle.join();
             if let Some(archive) = archive_writer.as_ref() {
                 archive.finish();
             }
             return Err(error);
         }
+        crate::issue1460_debug::record(
+            "P1",
+            &["H1", "H2", "H3"],
+            "capture_start_result",
+            "ok",
+            serde_json::json!({ "archive_active": archive_active }),
+        );
 
         Ok((
             Self {
@@ -2022,6 +2072,13 @@ impl Recorder {
     ///
     /// Takes `self` (consuming), matching the Swift API semantics — a one-shot resource.
     pub fn stop(self) {
+        crate::issue1460_debug::record(
+            "P4",
+            &["H4"],
+            "recorder_stop_requested",
+            "observed",
+            serde_json::json!({}),
+        );
         let operation = DebugOperation::new(DebugProbe::P5);
         let _scope = operation.scope();
         operation.record(DebugEvent::Entered, DebugOutcome::Observed,
@@ -2041,6 +2098,15 @@ impl Recorder {
         if let Some(handle) = join_handle.lock().take() {
             operation.mark(DebugEvent::JoinEntered);
             let result = handle.join();
+            crate::issue1460_debug::record(
+                "P4",
+                &["H4"],
+                "recorder_join",
+                if result.is_ok() { "ok" } else { "error" },
+                serde_json::json!({
+                    "thread_result": if result.is_ok() { "returned" } else { "panicked" },
+                }),
+            );
             operation.record(DebugEvent::JoinReturned,
                 if result.is_ok() { DebugOutcome::Ok } else { DebugOutcome::Error }, DebugFacts::default());
             if let Err(err) = result {
@@ -2340,6 +2406,13 @@ fn run_audio_thread(
     ) {
         Ok(worker) => worker,
         Err(error) => {
+            crate::issue1460_debug::record(
+                "P3",
+                &["H2", "H3"],
+                "audio_processing_worker_start",
+                "error",
+                serde_json::json!({ "error_class": "processor_start" }),
+            );
             let _ = startup_tx.send(Err(error));
             return;
         }
@@ -2355,6 +2428,13 @@ fn run_audio_thread(
     ) {
         Ok(s) => s,
         Err(err) => {
+            crate::issue1460_debug::record(
+                "P2",
+                &["H1", "H2"],
+                "native_stream_start",
+                "error",
+                serde_json::json!({ "error_class": "native_stream_start" }),
+            );
             *state.processor_sender.lock() = None;
             drop(frame_tx);
             processor.finish();
@@ -2366,6 +2446,13 @@ fn run_audio_thread(
 
     // build_input_stream returns only after native playback starts successfully.
     // Playback taps stay after this signal: they must not keep the microphone closed.
+    crate::issue1460_debug::record(
+        "P2",
+        &["H1", "H2", "H3"],
+        "native_stream_start",
+        "ok",
+        serde_json::json!({ "aec_requested": processing.echo_cancellation_enabled }),
+    );
     let _ = startup_tx.send(Ok(()));
     let playback_reference = if processing.echo_cancellation_enabled {
         let stop = Arc::clone(&stop_flag);
@@ -2489,6 +2576,13 @@ fn run_audio_thread(
                         // First callback received; check for it stopping
                         let elapsed = last_time.elapsed();
                         if elapsed.as_secs() > CALLBACK_TIMEOUT_SECS {
+                            crate::issue1460_debug::record(
+                                "P3",
+                                &["H1", "H2"],
+                                "watchdog_fault",
+                                "error",
+                                serde_json::json!({ "error_class": "callback_silent", "elapsed_secs": elapsed.as_secs() }),
+                            );
                             log::error!(
                                 "[recorder] watchdog: 录音回调已停止 {} 秒，触发错误恢复",
                                 elapsed.as_secs()
@@ -2505,6 +2599,13 @@ fn run_audio_thread(
                         // First callback not yet received; check the deadline
                         let elapsed = watchdog_start_time.elapsed();
                         if elapsed.as_secs() > FIRST_CALLBACK_DEADLINE_SECS {
+                            crate::issue1460_debug::record(
+                                "P3",
+                                &["H1", "H2"],
+                                "watchdog_fault",
+                                "error",
+                                serde_json::json!({ "error_class": "first_callback_timeout", "elapsed_secs": elapsed.as_secs() }),
+                            );
                             log::error!(
                                 "[recorder] watchdog: {} 秒内未收到首次回调，触发错误恢复",
                                 elapsed.as_secs()
@@ -2550,6 +2651,13 @@ fn run_audio_thread(
     drop(frame_tx);
     processor.finish();
     log::info!("[recorder] audio processor stopped (accepted frames drained)");
+    crate::issue1460_debug::record(
+        "P4",
+        &["H4"],
+        "audio_thread_exit",
+        "ok",
+        serde_json::json!({ "stop_requested": true }),
+    );
 
     // Wait for the watchdog thread to exit
     if let Some(handle) = watchdog_handle {
@@ -2930,6 +3038,13 @@ fn build_stream_for_format(
                         })) {
                             Ok(()) => {}
                             Err(TrySendError::Disconnected(_)) => {
+                                crate::issue1460_debug::record(
+                                    "P3",
+                                    &["H2", "H3"],
+                                    "audio_processing_delivery",
+                                    "error",
+                                    serde_json::json!({ "error_class": "worker_disconnected" }),
+                                );
                                 if state.accepting_audio.swap(false, Ordering::AcqRel) {
                                     let _ = runtime_error_for_callback.send(
                                         RecorderError::EngineFailed("audio processing worker disconnected".into()),
@@ -2938,6 +3053,13 @@ fn build_stream_for_format(
                                 stop_flag.store(true, Ordering::Release);
                             }
                             Err(TrySendError::Full(_)) => {
+                                crate::issue1460_debug::record(
+                                    "P3",
+                                    &["H2", "H3"],
+                                    "audio_processing_delivery",
+                                    "error",
+                                    serde_json::json!({ "error_class": "queue_full" }),
+                                );
                                 state.diagnostics.event("P4", "[\"H4\"]", "processing_backpressure", "queue_full", "{}");
                                 if state.accepting_audio.swap(false, Ordering::AcqRel) {
                                     let _ = runtime_error_for_callback.send(

@@ -50,6 +50,11 @@ on:
         type: boolean
         required: false
         default: false
+      windows_voice_crash_diagnostics:
+        description: Opt-in issue 1460 Windows voice-crash diagnostic build (branch dispatch only)
+        type: boolean
+        required: false
+        default: false
       release_tag:
         description: Existing draft Stable tag to repair (admin only, Windows only)
         type: string
@@ -61,7 +66,7 @@ on:
 # Tag publishes and draft repairs use a unique group
 # and are not cancelled: cancelling them would abort a release.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && format('{0}-{1}-{2}-{3}', github.ref, inputs.platform, inputs.windows_hang_diagnostics, inputs.macos_smoke_sha) || format('{0}-{1}', github.ref, github.run_id) }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && format('{0}-{1}-{2}-{3}-{4}', github.ref, inputs.platform, inputs.windows_hang_diagnostics, inputs.windows_voice_crash_diagnostics, inputs.macos_smoke_sha) || format('{0}-{1}', github.ref, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' }}
 
 jobs:
@@ -115,6 +120,7 @@ jobs:
       # On workflow_dispatch / non-tag triggers github.ref_name is not a tag string, endsWith
       # returns false, and it falls back to stable — dispatch behavior unchanged.
       OPENLESS_HANG_DIAGNOSTICS: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_hang_diagnostics && matrix.platform == 'windows-latest' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && 'true' || 'false' }}
+      OPENLESS_VOICE_CRASH_DIAGNOSTICS: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_voice_crash_diagnostics && matrix.platform == 'windows-latest' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && 'true' || 'false' }}
       OPENLESS_RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
       OPENLESS_RELEASE_IS_TAG: ${{ (startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')) || inputs.release_tag != '' }}
       OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(inputs.release_tag || github.ref_name, '-beta-tauri') || contains(inputs.release_tag || github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
@@ -410,9 +416,16 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: none
         run: |
           set +e
-          diagnostic_args=()
+          diagnostic_features=()
           if [ "$OPENLESS_HANG_DIAGNOSTICS" = true ]; then
-            diagnostic_args=(--features issue-1266-diagnostics)
+            diagnostic_features+=(issue-1266-diagnostics)
+          fi
+          if [ "$OPENLESS_VOICE_CRASH_DIAGNOSTICS" = true ]; then
+            diagnostic_features+=(issue-1460-diagnostics)
+          fi
+          diagnostic_args=()
+          if [ "${#diagnostic_features[@]}" -gt 0 ]; then
+            diagnostic_args=(--features "$(IFS=,; echo "${diagnostic_features[*]}")")
           fi
           # WiX/MSI only accepts a numeric prerelease identifier.  Manual
           # validation runs use the repository's Beta version even though the
@@ -659,6 +672,8 @@ jobs:
             protocol_revision = '0x4F4C0009'
             issue_1266_diagnostics = ($env:OPENLESS_HANG_DIAGNOSTICS -eq 'true')
             diagnostic_session = $(if ($env:OPENLESS_HANG_DIAGNOSTICS -eq 'true') { 'issue-1266-2e2c7a47' } else { $null })
+            issue_1460_voice_crash_diagnostics = ($env:OPENLESS_VOICE_CRASH_DIAGNOSTICS -eq 'true')
+            diagnostic_voice_crash_session = $(if ($env:OPENLESS_VOICE_CRASH_DIAGNOSTICS -eq 'true') { 'issue-1460-windows-voice-crash' } else { $null })
           } | ConvertTo-Json -Compress | Set-Content -Encoding utf8NoBOM (Join-Path $manifestDir 'openless-provenance.json')
 
       # ── Collect artifacts ──
@@ -793,7 +808,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           retention-days: 14
-          name: ${{ env.OPENLESS_HANG_DIAGNOSTICS == 'true' && 'openless-windows-x64-issue-1266-diagnostics' || 'openless-windows-x64' }}
+          name: ${{ env.OPENLESS_VOICE_CRASH_DIAGNOSTICS == 'true' && 'openless-windows-x64-issue-1460-voice-crash-diagnostics' || env.OPENLESS_HANG_DIAGNOSTICS == 'true' && 'openless-windows-x64-issue-1266-diagnostics' || 'openless-windows-x64' }}
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi

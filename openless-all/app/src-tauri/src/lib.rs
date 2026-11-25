@@ -72,6 +72,7 @@ mod hotkey;
 mod hotkey;
 mod insertion;
 mod issue1266_debug;
+mod issue1460_debug;
 mod llm_gemini;
 #[cfg(target_os = "macos")]
 mod macos_capsule_input;
@@ -854,6 +855,7 @@ fn permission_requires_visible_start(
 fn run_desktop() {
     // Credential authorization can precede Tauri setup. Keep its diagnostics visible.
     init_file_logger();
+    issue1460_debug::initialize();
     let foundry_local_runtime = Arc::new(asr::local::FoundryLocalRuntime::new());
     let sherpa_onnx_runtime = Arc::new(asr::local::SherpaOnnxRuntime::new());
     #[cfg(target_os = "windows")]
