@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use std::future::Future;
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -118,6 +119,7 @@ mod voice_edit_session;
 
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static WRITES: AtomicUsize = AtomicUsize::new(0);
+static CAPTURES: AtomicUsize = AtomicUsize::new(0);
 static CAPTURE_GATE: Mutex<Option<Arc<CaptureGate>>> = Mutex::new(None);
 static CAPTURE_SELECTION: Mutex<Option<openless_core::TextSelection>> = Mutex::new(None);
 static CAPTURE_TEXT: Mutex<Option<String>> = Mutex::new(None);
@@ -175,6 +177,7 @@ mod host_document {
         ),
         String,
     > {
+        CAPTURES.fetch_add(1, Ordering::SeqCst);
         let gate = CAPTURE_GATE.lock().unwrap().take();
         if let Some(gate) = gate {
             gate.capture();
@@ -293,6 +296,62 @@ fn fixture() -> (tempfile::TempDir, Arc<Inner>, Arc<GatedEngine>) {
 }
 
 fn fixture_with_transcript(transcript: &str) -> (tempfile::TempDir, Arc<Inner>, Arc<GatedEngine>) {
+    fixture_with_model(transcript, None)
+}
+
+// Use the real core voice_edit_plan service. Only its provider transport is scripted.
+#[derive(Default)]
+struct ScriptedPolisher {
+    responses: Mutex<VecDeque<(Option<Arc<AsyncGate>>, Result<String, BackendError>)>>,
+    calls: Mutex<Vec<(SessionId, String, String, bool)>>,
+}
+
+impl ScriptedPolisher {
+    fn push(&self, text: &str, gate: Option<Arc<AsyncGate>>) {
+        self.responses.lock().unwrap().push_back((gate, Ok(text.into())));
+    }
+
+    fn rewrite(&self, text: &str, gate: Option<Arc<AsyncGate>>) {
+        self.push(&format!(
+            "<edit_plan><full_rewrite><text>{text}</text></full_rewrite></edit_plan>"
+        ), gate);
+    }
+
+    fn fail(&self, gate: Option<Arc<AsyncGate>>) {
+        self.responses.lock().unwrap().push_back((gate, Err(BackendError::new(
+            openless_core::BackendErrorCode::Provider, "PRIVATE_PROVIDER_RESPONSE"
+        ))));
+    }
+}
+
+impl openless_core::TextPolisher for ScriptedPolisher {
+    fn polish(
+        &self,
+        id: SessionId,
+        context: Arc<DictationContext>,
+        input: String,
+        _: Arc<dyn openless_core::TextStreamSink>,
+    ) -> Task<Result<openless_core::PolishOutput, BackendError>> {
+        self.calls.lock().unwrap().push((
+            id, input, context.polish.style_system_prompt.clone(), context.polish.translation_active,
+        ));
+        let (gate, response) = self.responses.lock().unwrap().pop_front()
+            .expect("unexpected model invocation");
+        Box::pin(async move {
+            if let Some(gate) = gate { gate.block().await; }
+            response.map(openless_core::PolishOutput::text)
+        })
+    }
+
+    fn cancel(&self, _: SessionId) -> Task<Result<(), BackendError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn fixture_with_model(
+    transcript: &str,
+    model: Option<Arc<ScriptedPolisher>>,
+) -> (tempfile::TempDir, Arc<Inner>, Arc<GatedEngine>) {
     let directory = tempfile::tempdir().unwrap();
     let mut preferences = openless_core::shared_types::UserPreferences::default();
     preferences.voice_edit_enabled = true;
@@ -321,8 +380,16 @@ fn fixture_with_transcript(transcript: &str) -> (tempfile::TempDir, Arc<Inner>, 
             voice_activation_runtime: None,
             services: openless_core::BackendServices::unsupported(),
             local_asr_runtime: None,
-            selection_runtime: None,
-            selection_polisher: None,
+            selection_runtime: model.as_ref().map(|_| {
+                Arc::new(openless_core::testing::FixtureSelectionRuntime::successful(
+                    openless_core::SelectionCapture {
+                        text: "unused external recapture".into(),
+                        source_app: None,
+                    },
+                    InsertOutcome::Inserted,
+                )) as Arc<dyn openless_core::SelectionRuntimeAdapter>
+            }),
+            selection_polisher: model.map(|model| model as Arc<dyn openless_core::TextPolisher>),
             qa_runtime: None,
             marketplace_config: None,
         },
@@ -338,6 +405,296 @@ fn fixture_with_transcript(transcript: &str) -> (tempfile::TempDir, Arc<Inner>, 
         }),
         engine,
     )
+}
+
+async fn text_edit(inner: &Arc<Inner>, id: SessionId, instruction: &str) -> Result<openless_core::VoiceEditSnapshot, String> {
+    voice_edit_session::apply_text_instruction(inner, id, instruction.into(), None, None).await
+}
+
+async fn ready(inner: &Arc<Inner>) -> openless_core::VoiceEditSnapshot {
+    let id = voice_edit_session::start(inner).await.unwrap().session_id;
+    voice_edit_session::finish_dictation(inner, id).await.unwrap()
+}
+
+#[tokio::test]
+async fn typed_and_voice_edits_use_full_current_preview_after_undo_without_recapture() {
+    let _serial = SERIAL.lock().await;
+    WRITES.store(0, Ordering::SeqCst);
+    let captures = CAPTURES.load(Ordering::SeqCst);
+    let original = format!("BEGIN{}END", "中😀".repeat(9000));
+    *CAPTURE_TEXT.lock().unwrap() = Some(format!("prefix{original}suffix"));
+    *CAPTURE_SELECTION.lock().unwrap() = Some(openless_core::TextSelection {
+        start: 6, end: 6 + original.chars().count() as u32,
+    });
+    let model = Arc::new(ScriptedPolisher::default());
+    model.push("English draft", None); // Real translation route accepts plain text.
+    model.rewrite("English second draft", None);
+    model.rewrite("English voice branch", None);
+    let (_directory, inner, engine) = fixture_with_model("调整语气", Some(model.clone()));
+    let initial = ready(&inner).await;
+    let id = initial.session_id;
+    let target = CURRENT_TARGET.lock().unwrap().clone();
+    text_edit(&inner, id, "翻译成英文").await.unwrap();
+    text_edit(&inner, id, "调整语气").await.unwrap();
+    voice_edit_session::undo_preview(&inner, id).await.unwrap();
+    // A disappearing native target must not prevent preview generation.
+    *CURRENT_TARGET.lock().unwrap() = None;
+    voice_edit_session::start_instruction(&inner, id).await.unwrap();
+    let result = voice_edit_session::finish_instruction(&inner, id).await.unwrap();
+    let context = result.context.unwrap();
+    assert_eq!(context.preview, "English voice branch");
+    assert_eq!(context.preview_history, [original.clone(), "English draft".into(), "English voice branch".into()]);
+    assert_eq!(context.turns.len(), 2);
+    {
+        let calls = model.calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].1, original, "translation must receive the entire selection");
+        assert!(calls[0].3);
+        assert!(calls[1].1.contains("<draft>\nEnglish draft\n</draft>"));
+        assert!(calls[2].1.contains("<draft>\nEnglish draft\n</draft>"));
+        assert!(calls[2].1.contains("<instruction>\n调整语气\n</instruction>"));
+        assert!(!calls[2].3, "a new Chinese instruction is not a request to translate back");
+        assert!(calls[2].2.contains("Preserve the current draft's language"));
+        assert!(calls.iter().all(|call| call.0 == id));
+    }
+    assert_eq!(CAPTURES.load(Ordering::SeqCst), captures + 1);
+    assert_eq!(WRITES.load(Ordering::SeqCst), 0);
+    assert_eq!(engine.fixture.actions().iter().filter(|action| matches!(action, FixtureEngineAction::Start(_))).count(), 2);
+    let before = voice_edit_session::snapshot(&inner).unwrap();
+    assert!(voice_edit_session::commit_at_revision(&inner, id, Some(context.preview_revision)).await.is_err());
+    assert_eq!(voice_edit_session::snapshot(&inner).unwrap(), before);
+    *CURRENT_TARGET.lock().unwrap() = target;
+    let committed = voice_edit_session::commit_at_revision(&inner, id, Some(context.preview_revision)).await.unwrap();
+    assert_eq!(committed.phase, VoiceEditPhase::Completed);
+    assert_eq!(inner.inserter.0.lock().unwrap().dispatched, ["English voice branch"]);
+    let history = inner.backend.list_history().unwrap();
+    assert_eq!(history[0].raw_transcript, original);
+    assert_eq!(history[0].final_text, "English voice branch");
+    inner.backend.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_after_undo_and_navigation_have_no_provider_recorder_target_or_history_effects() {
+    let _serial = SERIAL.lock().await;
+    WRITES.store(0, Ordering::SeqCst);
+    let model = Arc::new(ScriptedPolisher::default());
+    for result in ["first", "second", "branch"] { model.rewrite(result, None); }
+    let (directory, inner, engine) = fixture_with_model("", Some(model.clone()));
+    let id = ready(&inner).await.session_id;
+    text_edit(&inner, id, "one").await.unwrap();
+    text_edit(&inner, id, "two").await.unwrap();
+    let captures = CAPTURES.load(Ordering::SeqCst);
+    let actions = engine.fixture.actions();
+    let history = std::fs::read(directory.path().join("history.json")).unwrap();
+    let calls = model.calls.lock().unwrap().len();
+    voice_edit_session::undo_preview(&inner, id).await.unwrap();
+    voice_edit_session::redo_preview(&inner, id).await.unwrap();
+    voice_edit_session::undo_preview(&inner, id).await.unwrap();
+    assert_eq!(std::fs::read(directory.path().join("history.json")).unwrap(), history);
+    assert_eq!(model.calls.lock().unwrap().len(), calls);
+    assert_eq!(engine.fixture.actions(), actions);
+    assert_eq!(CAPTURES.load(Ordering::SeqCst), captures);
+    assert_eq!(WRITES.load(Ordering::SeqCst), 0);
+    let branched = text_edit(&inner, id, "branch now").await.unwrap();
+    assert!(model.calls.lock().unwrap()[2].1.contains("<draft>\nfirst\n</draft>"));
+    assert_eq!(voice_edit_session::redo_preview(&inner, id).await.unwrap(), branched);
+    assert_eq!(branched.context.unwrap().turns[1].instruction_raw, "branch now");
+    inner.backend.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn no_op_provider_failure_and_rejected_plan_preserve_the_complete_redo_path() {
+    let _serial = SERIAL.lock().await;
+    let model = Arc::new(ScriptedPolisher::default());
+    for result in ["first", "second", "first"] { model.rewrite(result, None); }
+    model.fail(None);
+    model.push("PRIVATE_INVALID_PLAN", None);
+    let (_directory, inner, _) = fixture_with_model("", Some(model.clone()));
+    let id = ready(&inner).await.session_id;
+    text_edit(&inner, id, "one").await.unwrap();
+    text_edit(&inner, id, "two").await.unwrap();
+    let before = voice_edit_session::undo_preview(&inner, id).await.unwrap();
+    assert_eq!(text_edit(&inner, id, "no change").await.unwrap(), before);
+    assert_eq!(text_edit(&inner, id, "fail").await.unwrap_err(), "voiceEditPlanFailed");
+    assert_eq!(voice_edit_session::snapshot(&inner).unwrap(), before);
+    assert_eq!(text_edit(&inner, id, "invalid plan").await.unwrap_err(), "voiceEditPlanFailed");
+    assert_eq!(voice_edit_session::snapshot(&inner).unwrap(), before);
+    assert_eq!(voice_edit_session::redo_preview(&inner, id).await.unwrap().context.unwrap().preview, "second");
+    inner.backend.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_history_persistence_preserves_typed_and_voice_preview_transactions() {
+    let _serial = SERIAL.lock().await;
+    for voice in [false, true] {
+        let model = Arc::new(ScriptedPolisher::default());
+        for result in ["first", "second", "discarded", "retry"] { model.rewrite(result, None); }
+        let (directory, inner, _) = fixture_with_model("adjust tone", Some(model));
+        let id = ready(&inner).await.session_id;
+        text_edit(&inner, id, "one").await.unwrap();
+        text_edit(&inner, id, "two").await.unwrap();
+        let before = voice_edit_session::undo_preview(&inner, id).await.unwrap();
+        if voice { voice_edit_session::start_instruction(&inner, id).await.unwrap(); }
+        // Real filesystem failure at the actual persistence boundary, not a fake persist result.
+        let path = directory.path().join("history.json");
+        let saved = directory.path().join("history.saved");
+        std::fs::rename(&path, &saved).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let result = if voice { voice_edit_session::finish_instruction(&inner, id).await }
+            else { text_edit(&inner, id, "will fail to persist").await };
+        assert_eq!(result.unwrap_err(), "voiceEditHistoryUnavailable");
+        assert_eq!(voice_edit_session::snapshot(&inner).unwrap(), before);
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::rename(&saved, &path).unwrap();
+        assert_eq!(voice_edit_session::redo_preview(&inner, id).await.unwrap().context.unwrap().preview, "second");
+        voice_edit_session::undo_preview(&inner, id).await.unwrap();
+        assert_eq!(text_edit(&inner, id, "retry").await.unwrap().context.unwrap().preview, "retry");
+        inner.backend.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn cancelling_a_provider_request_preserves_history_and_fences_late_success_and_failure() {
+    let _serial = SERIAL.lock().await;
+    for (voice, fails) in [(false, false), (false, true), (true, false), (true, true)] {
+        let model = Arc::new(ScriptedPolisher::default());
+        for result in ["first", "second"] { model.rewrite(result, None); }
+        let old_gate = AsyncGate::new();
+        if fails { model.fail(Some(old_gate.clone())); }
+        else { model.rewrite("late old response", Some(old_gate.clone())); }
+        let new_gate = AsyncGate::new();
+        model.rewrite("new response", Some(new_gate.clone()));
+        let (_directory, inner, _) = fixture_with_model("adjust tone", Some(model.clone()));
+        let id = ready(&inner).await.session_id;
+        text_edit(&inner, id, "one").await.unwrap();
+        text_edit(&inner, id, "two").await.unwrap();
+        let before = voice_edit_session::undo_preview(&inner, id).await.unwrap();
+        let old_id = SessionId::new();
+        if voice {
+            voice_edit_session::start_instruction_with_options(&inner, id, Some(old_id), None).await.unwrap();
+        }
+        let old = tokio::spawn({ let inner = inner.clone(); async move {
+            if voice { voice_edit_session::finish_instruction_with_id(&inner, id, Some(old_id)).await }
+            else { voice_edit_session::apply_text_instruction(&inner, id, "old".into(), Some(old_id), None).await }
+        }});
+        entered(&old_gate.entered).await;
+        assert_eq!(voice_edit_session::cancel_instruction(&inner, id, old_id).await.unwrap(), before);
+        let new_id = SessionId::new();
+        let newer = tokio::spawn({ let inner = inner.clone(); async move {
+            voice_edit_session::apply_text_instruction(&inner, id, "new".into(), Some(new_id), None).await
+        }});
+        entered(&new_gate.entered).await;
+        let applying = voice_edit_session::snapshot(&inner).unwrap();
+        assert_eq!(applying.instruction_id, Some(new_id));
+        assert_eq!(applying.phase, VoiceEditPhase::Applying);
+        assert_eq!(text_edit(&inner, id, "busy").await.unwrap_err(), "voiceEditSessionBusy");
+        assert!(voice_edit_session::undo_preview(&inner, id).await.is_err());
+        assert!(voice_edit_session::redo_preview(&inner, id).await.is_err());
+        assert!(voice_edit_session::cancel_instruction(&inner, id, old_id).await.is_err());
+        old_gate.release();
+        assert_eq!(old.await.unwrap().unwrap_err(), "voiceEditInstructionChanged");
+        assert_eq!(voice_edit_session::snapshot(&inner).unwrap(), applying, "old cleanup cannot reset the new operation");
+        new_gate.release();
+        assert_eq!(newer.await.unwrap().unwrap().context.unwrap().preview, "new response");
+        inner.backend.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn cancelling_voice_recording_and_asr_keeps_preview_and_releases_only_its_recording() {
+    let _serial = SERIAL.lock().await;
+    for finishing in [false, true] {
+        let model = Arc::new(ScriptedPolisher::default());
+        let (_directory, inner, engine) = fixture_with_model("adjust", Some(model.clone()));
+        let before = ready(&inner).await;
+        let id = before.session_id;
+        let editing = voice_edit_session::start_instruction(&inner, id).await.unwrap();
+        let gate = AsyncGate::new();
+        let task = if finishing {
+            *engine.finish_gate.lock().unwrap() = Some(gate.clone());
+            let inner = inner.clone();
+            let task = tokio::spawn(async move { voice_edit_session::finish_instruction(&inner, id).await });
+            entered(&gate.entered).await;
+            Some(task)
+        } else { None };
+        assert_eq!(voice_edit_session::cancel_instruction(&inner, id, editing.instruction_id.unwrap()).await.unwrap(), before);
+        assert_eq!(inner.backend.snapshot().dictation.phase, DictationPhase::Idle);
+        if let Some(task) = task {
+            gate.release();
+            assert!(task.await.unwrap().is_err());
+        }
+        assert_eq!(voice_edit_session::snapshot(&inner).unwrap(), before);
+        assert!(model.calls.lock().unwrap().is_empty());
+        assert!(inner.voice_edit_host.lock().dictation_session_id.is_none());
+        inner.backend.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn cancelled_instruction_recorder_start_cannot_attach_to_a_newer_typed_operation() {
+    let _serial = SERIAL.lock().await;
+    let model = Arc::new(ScriptedPolisher::default());
+    let provider = AsyncGate::new();
+    model.rewrite("new preview", Some(provider.clone()));
+    let (_directory, inner, engine) = fixture_with_model("instruction", Some(model));
+    let before = ready(&inner).await;
+    let id = before.session_id;
+    let recorder = AsyncGate::new();
+    *engine.start_gate.lock().unwrap() = Some(recorder.clone());
+    let old_id = SessionId::new();
+    let starting = tokio::spawn({
+        let inner = inner.clone();
+        async move {
+            voice_edit_session::start_instruction_with_options(&inner, id, Some(old_id), None).await
+        }
+    });
+    entered(&recorder.entered).await;
+    assert_eq!(voice_edit_session::cancel_instruction(&inner, id, old_id).await.unwrap(), before);
+    let newer = tokio::spawn({
+        let inner = inner.clone();
+        async move { text_edit(&inner, id, "new typed edit").await }
+    });
+    entered(&provider.entered).await;
+    let applying = voice_edit_session::snapshot(&inner).unwrap();
+    recorder.release();
+    assert_eq!(starting.await.unwrap().unwrap_err(), "voiceEditInstructionChanged");
+    assert_eq!(voice_edit_session::snapshot(&inner).unwrap(), applying);
+    assert!(inner.voice_edit_host.lock().dictation_session_id.is_none());
+    assert_eq!(inner.backend.snapshot().dictation.phase, DictationPhase::Idle);
+    assert!(engine.fixture.actions().iter().any(|action| matches!(action, FixtureEngineAction::Cancel(_))));
+    provider.release();
+    assert_eq!(newer.await.unwrap().unwrap().context.unwrap().preview, "new preview");
+    inner.backend.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stale_session_result_and_stale_displayed_revision_cannot_write_or_mutate_a_successor() {
+    let _serial = SERIAL.lock().await;
+    WRITES.store(0, Ordering::SeqCst);
+    let model = Arc::new(ScriptedPolisher::default());
+    let gate = AsyncGate::new();
+    model.rewrite("old response", Some(gate.clone()));
+    model.rewrite("new preview", None);
+    let (_directory, inner, _) = fixture_with_model("", Some(model.clone()));
+    let original = ready(&inner).await;
+    let old = tokio::spawn({ let inner = inner.clone(); async move { text_edit(&inner, original.session_id, "old").await }});
+    entered(&gate.entered).await;
+    voice_edit_session::cancel(&inner, Some(original.session_id)).await.unwrap();
+    let current = ready(&inner).await;
+    gate.release();
+    assert!(old.await.unwrap().is_err());
+    assert_eq!(voice_edit_session::snapshot(&inner).unwrap(), current);
+    assert!(text_edit(&inner, original.session_id, "wrong session").await.is_err());
+    let edited = text_edit(&inner, current.session_id, "new").await.unwrap();
+    assert_eq!(voice_edit_session::apply_text_instruction(&inner, current.session_id,
+        "stale displayed input".into(), None, Some(0)).await.unwrap_err(), "voiceEditPreviewChanged");
+    assert_eq!(voice_edit_session::commit_at_revision(&inner, current.session_id, Some(0)).await.unwrap_err(), "voiceEditPreviewChanged");
+    assert_eq!(voice_edit_session::snapshot(&inner).unwrap(), edited);
+    assert_eq!(WRITES.load(Ordering::SeqCst), 0);
+    assert_eq!(model.calls.lock().unwrap().len(), 2);
+    voice_edit_session::commit_at_revision(&inner, current.session_id, Some(edited.context.unwrap().preview_revision)).await.unwrap();
+    assert_eq!(inner.inserter.0.lock().unwrap().dispatched, ["new preview"]);
+    inner.backend.shutdown().await.unwrap();
 }
 
 async fn entered(semaphore: &Semaphore) {

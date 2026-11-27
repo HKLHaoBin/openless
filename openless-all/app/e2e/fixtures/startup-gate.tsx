@@ -80,6 +80,9 @@ Object.assign(window, {
           draft: sessionId,
           preview: sessionId,
           turns: [],
+          previewHistory: [sessionId],
+          previewHistoryIndex: 0,
+          previewRevision: 0,
         },
       };
       emit('voice-edit:show', {});

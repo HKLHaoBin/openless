@@ -32,7 +32,23 @@ Object.defineProperty(globalThis, 'window', {
         return {
           sessionId: currentSessionId,
           phase: command === 'start_voice_edit_session' ? 'dictating' : 'preview',
-          context: null,
+          context: {
+            fieldText: 'source',
+            dictatedSegment: '',
+            draft: 'source',
+            preview: 'English draft',
+            turns: [
+              {
+                instructionRaw: '翻译成英文',
+                instructionPolished: '翻译成英文',
+                editPlan: { operations: [{ type: 'full_rewrite', text: 'English draft' }] },
+                previewAfter: 'English draft',
+              },
+            ],
+            previewHistory: ['source', 'English draft'],
+            previewHistoryIndex: 1,
+            previewRevision: 7,
+          },
           target: { kind: 'full_field' },
         };
       },
@@ -52,6 +68,10 @@ try {
     cancelVoiceEditSession,
     cancelAndCloseVoiceEditSession,
     getVoiceEditState,
+    applyVoiceEditTextInstruction,
+    cancelVoiceEditInstruction,
+    undoVoiceEditPreview,
+    redoVoiceEditPreview,
   } = await import('./voice-edit-session');
 
   await openVoiceEditWindow();
@@ -86,6 +106,44 @@ try {
   }
   if (Object.keys(calls[2].args ?? {}).length)
     throw new Error('start must use native field capture');
+
+  calls = [];
+  const producerSessionId = '00000000-0000-4000-8000-000000000002';
+  currentSessionId = producerSessionId;
+  const displayed = await getVoiceEditState();
+  const options = {
+    instructionId: '00000000-0000-4000-8000-000000000001',
+    expectedRevision: displayed!.context!.previewRevision,
+  };
+  await applyVoiceEditTextInstruction(displayed!.sessionId, '调整语气', options);
+  await cancelVoiceEditInstruction(displayed!.sessionId, options.instructionId);
+  await startVoiceEditInstruction(displayed!.sessionId, options);
+  await finalizeVoiceEditInstruction(displayed!.sessionId, options.instructionId);
+  await undoVoiceEditPreview(displayed!.sessionId);
+  await redoVoiceEditPreview(displayed!.sessionId);
+  await commitVoiceEditSession(displayed!.sessionId, displayed!.context!.previewRevision);
+  const historyCalls = calls.slice(1);
+  const expectedHistoryCalls = [
+    {
+      command: 'apply_voice_edit_text_instruction',
+      args: { sessionId: producerSessionId, instruction: '调整语气', ...options },
+    },
+    {
+      command: 'cancel_voice_edit_instruction',
+      args: { sessionId: producerSessionId, instructionId: options.instructionId },
+    },
+    { command: 'start_voice_edit_instruction', args: { sessionId: producerSessionId, ...options } },
+    {
+      command: 'stop_voice_edit_instruction',
+      args: { sessionId: producerSessionId, instructionId: options.instructionId },
+    },
+    { command: 'undo_voice_edit_preview', args: { sessionId: producerSessionId } },
+    { command: 'redo_voice_edit_preview', args: { sessionId: producerSessionId } },
+    { command: 'commit_voice_edit', args: { sessionId: producerSessionId, expectedRevision: 7 } },
+  ];
+  if (JSON.stringify(historyCalls) !== JSON.stringify(expectedHistoryCalls)) {
+    throw new Error('history IPC must preserve the producer revision and operation identity');
+  }
 
   calls = [];
   cancelFails = true;
@@ -139,6 +197,17 @@ for (const [locale, messages] of Object.entries({ zhCN, zhTW, en, ja, ko, de, fr
   }
   if (Object.values(messages.voiceEdit.errors).some((message) => !message)) {
     throw new Error(`${locale} voice edit errors must not be empty`);
+  }
+  for (const key of [
+    'textInstruction',
+    'applyInstruction',
+    'undo',
+    'redo',
+    'cancelInstruction',
+  ] as const) {
+    if (locale !== 'en' && messages.voiceEdit[key] === en.voiceEdit[key]) {
+      throw new Error(`${locale}.${key} must not be an English placeholder`);
+    }
   }
   for (const [key, message] of Object.entries(messages.voiceEdit)) {
     if (typeof message !== 'string') continue;

@@ -24,10 +24,14 @@ export interface VoiceEditContext {
   draft: string;
   preview: string;
   turns: VoiceEditTurn[];
+  previewHistory: string[];
+  previewHistoryIndex: number;
+  previewRevision: number;
 }
 
 export interface VoiceEditSnapshot {
   sessionId: string;
+  instructionId?: string | null;
   phase: VoiceEditPhase;
   context?: VoiceEditContext | null;
   target: { kind: 'selection'; start: number; end: number } | { kind: 'full_field' };
@@ -43,6 +47,9 @@ const mockSnapshot = (phase: VoiceEditPhase = 'dictating'): VoiceEditSnapshot =>
     draft: '',
     preview: '',
     turns: [],
+    previewHistory: [],
+    previewHistoryIndex: 0,
+    previewRevision: 0,
   },
   target: { kind: 'full_field' },
 });
@@ -65,16 +72,65 @@ export function finalizeVoiceEditDictation(sessionId: string): Promise<VoiceEdit
   );
 }
 
-export function startVoiceEditInstruction(sessionId: string): Promise<VoiceEditSnapshot> {
-  return invokeOrMock('start_voice_edit_instruction', { sessionId }, () => mockSnapshot('editing'));
+export interface VoiceEditInstructionOptions {
+  instructionId?: string;
+  expectedRevision?: number;
 }
 
-export function finalizeVoiceEditInstruction(sessionId: string): Promise<VoiceEditSnapshot> {
-  return invokeOrMock('stop_voice_edit_instruction', { sessionId }, () => mockSnapshot('preview'));
+export function startVoiceEditInstruction(
+  sessionId: string,
+  options: VoiceEditInstructionOptions = {},
+): Promise<VoiceEditSnapshot> {
+  return invokeOrMock('start_voice_edit_instruction', { sessionId, ...options }, () =>
+    mockSnapshot('editing'),
+  );
 }
 
-export function commitVoiceEditSession(sessionId: string): Promise<VoiceEditSnapshot> {
-  return invokeOrMock('commit_voice_edit', { sessionId }, () => mockSnapshot('completed'));
+export function finalizeVoiceEditInstruction(
+  sessionId: string,
+  instructionId?: string,
+): Promise<VoiceEditSnapshot> {
+  return invokeOrMock('stop_voice_edit_instruction', { sessionId, instructionId }, () =>
+    mockSnapshot('preview'),
+  );
+}
+
+export function applyVoiceEditTextInstruction(
+  sessionId: string,
+  instruction: string,
+  options: VoiceEditInstructionOptions = {},
+): Promise<VoiceEditSnapshot> {
+  return invokeOrMock(
+    'apply_voice_edit_text_instruction',
+    { sessionId, instruction, ...options },
+    () => mockSnapshot('preview'),
+  );
+}
+
+export function undoVoiceEditPreview(sessionId: string): Promise<VoiceEditSnapshot> {
+  return invokeOrMock('undo_voice_edit_preview', { sessionId }, () => mockSnapshot('preview'));
+}
+
+export function redoVoiceEditPreview(sessionId: string): Promise<VoiceEditSnapshot> {
+  return invokeOrMock('redo_voice_edit_preview', { sessionId }, () => mockSnapshot('preview'));
+}
+
+export function commitVoiceEditSession(
+  sessionId: string,
+  expectedRevision?: number,
+): Promise<VoiceEditSnapshot> {
+  return invokeOrMock('commit_voice_edit', { sessionId, expectedRevision }, () =>
+    mockSnapshot('completed'),
+  );
+}
+
+export function cancelVoiceEditInstruction(
+  sessionId: string,
+  instructionId: string,
+): Promise<VoiceEditSnapshot> {
+  return invokeOrMock('cancel_voice_edit_instruction', { sessionId, instructionId }, () =>
+    mockSnapshot('preview'),
+  );
 }
 
 export function cancelVoiceEditSession(sessionId?: string): Promise<VoiceEditSnapshot | null> {

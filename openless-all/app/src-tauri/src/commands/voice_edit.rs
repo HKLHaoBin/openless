@@ -63,36 +63,74 @@ pub async fn finalize_voice_edit_dictation(
 pub async fn start_voice_edit_instruction(
     coord: CoordinatorState<'_>,
     session_id: openless_core::SessionId,
+    instruction_id: Option<openless_core::SessionId>,
+    expected_revision: Option<u64>,
 ) -> Result<openless_core::VoiceEditSnapshot, String> {
-    coord.start_voice_edit_instruction(session_id).await
+    coord.start_voice_edit_instruction(session_id, instruction_id, expected_revision).await
 }
 #[tauri::command]
 pub async fn finalize_voice_edit_instruction(
     coord: CoordinatorState<'_>,
     session_id: openless_core::SessionId,
+    instruction_id: Option<openless_core::SessionId>,
 ) -> Result<openless_core::VoiceEditSnapshot, String> {
-    coord.finish_voice_edit_instruction(session_id).await
+    coord.finish_voice_edit_instruction(session_id, instruction_id).await
 }
 #[tauri::command]
 pub async fn stop_voice_edit_instruction(
     coord: CoordinatorState<'_>,
     session_id: openless_core::SessionId,
+    instruction_id: Option<openless_core::SessionId>,
 ) -> Result<openless_core::VoiceEditSnapshot, String> {
-    coord.finish_voice_edit_instruction(session_id).await
+    coord.finish_voice_edit_instruction(session_id, instruction_id).await
+}
+#[tauri::command]
+pub async fn apply_voice_edit_text_instruction(
+    coord: CoordinatorState<'_>,
+    session_id: openless_core::SessionId,
+    instruction: String,
+    instruction_id: Option<openless_core::SessionId>,
+    expected_revision: Option<u64>,
+) -> Result<openless_core::VoiceEditSnapshot, String> {
+    coord.apply_voice_edit_text_instruction(session_id, instruction, instruction_id, expected_revision).await
+}
+#[tauri::command]
+pub async fn cancel_voice_edit_instruction(
+    coord: CoordinatorState<'_>,
+    session_id: openless_core::SessionId,
+    instruction_id: openless_core::SessionId,
+) -> Result<openless_core::VoiceEditSnapshot, String> {
+    coord.cancel_voice_edit_instruction(session_id, instruction_id).await
+}
+#[tauri::command]
+pub async fn undo_voice_edit_preview(
+    coord: CoordinatorState<'_>,
+    session_id: openless_core::SessionId,
+) -> Result<openless_core::VoiceEditSnapshot, String> {
+    coord.undo_voice_edit_preview(session_id).await
+}
+#[tauri::command]
+pub async fn redo_voice_edit_preview(
+    coord: CoordinatorState<'_>,
+    session_id: openless_core::SessionId,
+) -> Result<openless_core::VoiceEditSnapshot, String> {
+    coord.redo_voice_edit_preview(session_id).await
 }
 #[tauri::command]
 pub async fn commit_voice_edit_session(
     coord: CoordinatorState<'_>,
     session_id: openless_core::SessionId,
+    expected_revision: Option<u64>,
 ) -> Result<openless_core::VoiceEditSnapshot, String> {
-    coord.commit_voice_edit_session(session_id).await
+    coord.commit_voice_edit_session(session_id, expected_revision).await
 }
 #[tauri::command]
 pub async fn commit_voice_edit(
     coord: CoordinatorState<'_>,
     session_id: openless_core::SessionId,
+    expected_revision: Option<u64>,
 ) -> Result<openless_core::VoiceEditSnapshot, String> {
-    coord.commit_voice_edit_session(session_id).await
+    coord.commit_voice_edit_session(session_id, expected_revision).await
 }
 #[tauri::command]
 pub async fn cancel_voice_edit_session(

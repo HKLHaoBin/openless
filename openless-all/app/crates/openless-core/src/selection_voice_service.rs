@@ -563,7 +563,7 @@ impl SelectionVoiceWorkflow {
         draft: &str,
         instruction: &str,
     ) -> Result<EditPlan, BackendError> {
-        self.generate_edit_plan_with_context(session_id, "", draft, instruction)
+        self.generate_edit_plan_with_context(session_id, "", draft, instruction, false)
             .await
     }
 
@@ -573,6 +573,7 @@ impl SelectionVoiceWorkflow {
         field_context: &str,
         draft: &str,
         instruction: &str,
+        preserve_draft_language: bool,
     ) -> Result<EditPlan, BackendError> {
         let preferences = self.preferences.get();
         if selection_voice_instruction_looks_like_translation(instruction) {
@@ -599,11 +600,14 @@ impl SelectionVoiceWorkflow {
             .map(|pack| style_pack_prompt(&pack, StylePromptKind::VoiceEdit))
             .unwrap_or_default();
         let format = preferences.selection_voice_edit_plan_format;
-        let system_prompt = crate::prompts::resolve_voice_edit_system_prompt(
+        let mut system_prompt = crate::prompts::resolve_voice_edit_system_prompt(
             &preferences.selection_voice_edit_system_prompt,
             &pack_prompt,
             format,
         );
+        if preserve_draft_language {
+            system_prompt.push_str("\nPreserve the current draft's language unless the latest instruction explicitly requests a different language. Edit the complete current draft, not the original field context or an earlier revision.\n");
+        }
         let raw = self
             .model_text(session_id, &preferences, input, system_prompt, None, true)
             .await?;
@@ -1487,6 +1491,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
                     &request.field_context,
                     &request.draft,
                     &polished,
+                    true,
                 )
                 .await?;
             let preview = apply_selection_edit_plan(&request.draft, &plan).map_err(|error| {

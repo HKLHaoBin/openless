@@ -1002,20 +1002,52 @@ impl Coordinator {
     pub(crate) async fn start_voice_edit_instruction(
         &self,
         id: openless_core::SessionId,
+        instruction_id: Option<openless_core::SessionId>,
+        expected_revision: Option<u64>,
     ) -> Result<openless_core::VoiceEditSnapshot, String> {
-        voice_edit_session::start_instruction(&self.inner, id).await
+        voice_edit_session::start_instruction_with_options(&self.inner, id, instruction_id, expected_revision).await
     }
     pub(crate) async fn finish_voice_edit_instruction(
         &self,
         id: openless_core::SessionId,
+        instruction_id: Option<openless_core::SessionId>,
     ) -> Result<openless_core::VoiceEditSnapshot, String> {
-        voice_edit_session::finish_instruction(&self.inner, id).await
+        voice_edit_session::finish_instruction_with_id(&self.inner, id, instruction_id).await
+    }
+    pub(crate) async fn apply_voice_edit_text_instruction(
+        &self,
+        id: openless_core::SessionId,
+        instruction: String,
+        instruction_id: Option<openless_core::SessionId>,
+        expected_revision: Option<u64>,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::apply_text_instruction(&self.inner, id, instruction, instruction_id, expected_revision).await
+    }
+    pub(crate) async fn cancel_voice_edit_instruction(
+        &self,
+        id: openless_core::SessionId,
+        instruction_id: openless_core::SessionId,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::cancel_instruction(&self.inner, id, instruction_id).await
+    }
+    pub(crate) async fn undo_voice_edit_preview(
+        &self,
+        id: openless_core::SessionId,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::undo_preview(&self.inner, id).await
+    }
+    pub(crate) async fn redo_voice_edit_preview(
+        &self,
+        id: openless_core::SessionId,
+    ) -> Result<openless_core::VoiceEditSnapshot, String> {
+        voice_edit_session::redo_preview(&self.inner, id).await
     }
     pub(crate) async fn commit_voice_edit_session(
         &self,
         id: openless_core::SessionId,
+        expected_revision: Option<u64>,
     ) -> Result<openless_core::VoiceEditSnapshot, String> {
-        voice_edit_session::commit(&self.inner, id).await
+        voice_edit_session::commit_at_revision(&self.inner, id, expected_revision).await
     }
     pub(crate) async fn cancel_voice_edit_session(
         &self,

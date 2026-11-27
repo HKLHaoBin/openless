@@ -73,6 +73,14 @@ pub struct VoiceEditContext {
     pub draft: String,
     pub preview: String,
     pub turns: Vec<VoiceEditTurn>,
+    /// Saved preview revisions. The current revision is `preview_history_index`.
+    #[serde(default)]
+    pub preview_history: Vec<String>,
+    #[serde(default)]
+    pub preview_history_index: usize,
+    /// Monotonic token for the currently displayed preview revision.
+    #[serde(default)]
+    pub preview_revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +96,9 @@ pub struct VoiceEditTurn {
 #[serde(rename_all = "camelCase")]
 pub struct VoiceEditSnapshot {
     pub session_id: SessionId,
+    /// Host-owned identity of the current instruction, never a history index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction_id: Option<SessionId>,
     pub phase: VoiceEditPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<VoiceEditContext>,
@@ -110,6 +121,7 @@ pub enum VoiceEditError {
     InvalidSelection,
     InvalidPhase { phase: VoiceEditPhase },
     TooManyTurns,
+    PreviewChanged,
     EditPlan(EditApplyError),
 }
 
@@ -121,6 +133,7 @@ impl std::fmt::Display for VoiceEditError {
             Self::InvalidSelection => write!(formatter, "voice edit selection is invalid"),
             Self::InvalidPhase { phase } => write!(formatter, "voice edit is in phase {phase:?}"),
             Self::TooManyTurns => write!(formatter, "voice edit has too many turns"),
+            Self::PreviewChanged => write!(formatter, "voice edit preview changed"),
             Self::EditPlan(error) => write!(formatter, "voice edit plan failed: {error}"),
         }
     }
@@ -134,6 +147,7 @@ impl From<EditApplyError> for VoiceEditError {
     }
 }
 
+#[derive(Clone)]
 pub struct VoiceEditSession {
     session_id: SessionId,
     phase: VoiceEditPhase,
@@ -169,6 +183,9 @@ impl VoiceEditSession {
                 draft: String::new(),
                 preview: String::new(),
                 turns: Vec::new(),
+                preview_history: Vec::new(),
+                preview_history_index: 0,
+                preview_revision: 0,
             }),
             target,
         })
@@ -181,6 +198,7 @@ impl VoiceEditSession {
     pub fn snapshot(&self) -> VoiceEditSnapshot {
         VoiceEditSnapshot {
             session_id: self.session_id,
+            instruction_id: None,
             phase: self.phase,
             context: self.context.clone(),
             target: self.target,
@@ -205,6 +223,9 @@ impl VoiceEditSession {
             &context.dictated_segment,
         )?;
         context.preview = context.draft.clone();
+        context.preview_history = vec![context.preview.clone()];
+        context.preview_history_index = 0;
+        context.preview_revision = 0;
         self.phase = VoiceEditPhase::DraftReady;
         Ok(())
     }
@@ -254,6 +275,22 @@ impl VoiceEditSession {
         instruction_polished: impl Into<String>,
         edit_plan: EditPlan,
     ) -> Result<(), VoiceEditError> {
+        let expected_revision = self.preview_revision()?;
+        self.apply_instruction_at_revision(
+            expected_revision,
+            instruction_raw,
+            instruction_polished,
+            edit_plan,
+        )
+    }
+
+    pub fn apply_instruction_at_revision(
+        &mut self,
+        expected_revision: u64,
+        instruction_raw: impl Into<String>,
+        instruction_polished: impl Into<String>,
+        edit_plan: EditPlan,
+    ) -> Result<(), VoiceEditError> {
         if !matches!(
             self.phase,
             VoiceEditPhase::DraftReady
@@ -274,6 +311,9 @@ impl VoiceEditSession {
             .ok_or(VoiceEditError::InvalidPhase { phase: self.phase })?
             .preview
             .clone();
+        if self.preview_revision()? != expected_revision {
+            return Err(VoiceEditError::PreviewChanged);
+        }
         if preview_before.trim().is_empty() {
             return Err(VoiceEditError::EmptyDraft);
         }
@@ -282,9 +322,22 @@ impl VoiceEditSession {
             .context
             .as_mut()
             .ok_or(VoiceEditError::InvalidPhase { phase: self.phase })?;
-        if context.turns.len() >= MAX_TURNS {
+        if preview_after == preview_before {
+            self.phase = if context.turns.is_empty() {
+                VoiceEditPhase::DraftReady
+            } else {
+                VoiceEditPhase::Preview
+            };
+            return Ok(());
+        }
+        if context.preview_history_index >= MAX_TURNS {
             return Err(VoiceEditError::TooManyTurns);
         }
+        context.preview_history.truncate(context.preview_history_index + 1);
+        context.turns.truncate(context.preview_history_index);
+        context.preview_history.push(preview_after.clone());
+        context.preview_history_index += 1;
+        context.preview_revision = context.preview_revision.wrapping_add(1);
         context.preview = preview_after.clone();
         context.turns.push(VoiceEditTurn {
             instruction_raw: raw,
@@ -296,8 +349,64 @@ impl VoiceEditSession {
         Ok(())
     }
 
+    /// Move to an already-saved preview without invoking a model or host write.
+    pub fn undo_preview(&mut self) -> Result<(), VoiceEditError> {
+        self.require_preview_phase()?;
+        let context = self
+            .context
+            .as_mut()
+            .ok_or(VoiceEditError::InvalidPhase { phase: self.phase })?;
+        if context.preview_history_index > 0 {
+            context.preview_history_index -= 1;
+            context.preview_revision = context.preview_revision.wrapping_add(1);
+            context.preview = context.preview_history[context.preview_history_index].clone();
+        }
+        Ok(())
+    }
+
+    /// Move to an already-saved preview without invoking a model or host write.
+    pub fn redo_preview(&mut self) -> Result<(), VoiceEditError> {
+        self.require_preview_phase()?;
+        let context = self
+            .context
+            .as_mut()
+            .ok_or(VoiceEditError::InvalidPhase { phase: self.phase })?;
+        if context.preview_history_index + 1 < context.preview_history.len() {
+            context.preview_history_index += 1;
+            context.preview_revision = context.preview_revision.wrapping_add(1);
+            context.preview = context.preview_history[context.preview_history_index].clone();
+        }
+        Ok(())
+    }
+
+    pub fn preview_revision(&self) -> Result<u64, VoiceEditError> {
+        self.context
+            .as_ref()
+            .map(|context| context.preview_revision)
+            .ok_or(VoiceEditError::InvalidPhase { phase: self.phase })
+    }
+
+
+    fn require_preview_phase(&self) -> Result<(), VoiceEditError> {
+        if matches!(self.phase, VoiceEditPhase::DraftReady | VoiceEditPhase::Preview) {
+            Ok(())
+        } else {
+            Err(VoiceEditError::InvalidPhase { phase: self.phase })
+        }
+    }
+
     /// Reserve the commit before the host writes the returned text externally.
     pub fn begin_commit(&mut self) -> Result<VoiceEditCommit, VoiceEditError> {
+        self.begin_commit_at_revision(self.preview_revision()?)
+    }
+
+    pub fn begin_commit_at_revision(
+        &mut self,
+        expected_revision: u64,
+    ) -> Result<VoiceEditCommit, VoiceEditError> {
+        if self.preview_revision()? != expected_revision {
+            return Err(VoiceEditError::PreviewChanged);
+        }
         if !matches!(
             self.phase,
             VoiceEditPhase::DraftReady | VoiceEditPhase::Preview
@@ -316,7 +425,12 @@ impl VoiceEditSession {
             session_id: self.session_id,
             text: context.preview.clone(),
             target: self.target,
-            turns: context.turns.clone(),
+            turns: context
+                .turns
+                .iter()
+                .take(context.preview_history_index)
+                .cloned()
+                .collect(),
         })
     }
 
@@ -416,5 +530,234 @@ mod tests {
             merge_draft("甲乙丙", Some(TextSelection { start: 1, end: 3 }), "").unwrap(),
             "乙丙"
         );
+    }
+
+    #[test]
+    fn preview_history_undo_redo_and_divergence_only_switch_saved_previews() {
+        use crate::edit_plan::{EditOperation, EditPlan};
+
+        let mut session = VoiceEditSession::start("original", None).unwrap();
+        session.finish_dictation("").unwrap();
+        let replace = |find: &str, replace: &str| EditPlan {
+            operations: vec![EditOperation::LiteralReplace {
+                find: find.into(),
+                replace: replace.into(),
+            }],
+            summary: None,
+        };
+        session.apply_instruction("one", "one", replace("original", "first")).unwrap();
+        session.apply_instruction("two", "two", replace("first", "second")).unwrap();
+        assert_eq!(session.snapshot().context.as_ref().unwrap().preview, "second");
+        session.undo_preview().unwrap();
+        assert_eq!(session.snapshot().context.as_ref().unwrap().preview, "first");
+        session.redo_preview().unwrap();
+        assert_eq!(session.snapshot().context.as_ref().unwrap().preview, "second");
+        session.undo_preview().unwrap();
+        session.apply_instruction("branch", "branch", replace("first", "branch")).unwrap();
+        session.redo_preview().unwrap();
+        assert_eq!(session.snapshot().context.as_ref().unwrap().preview, "branch");
+        assert_eq!(session.snapshot().context.as_ref().unwrap().preview_history.len(), 3);
+    }
+
+    #[test]
+    fn no_op_edit_preserves_revision_and_redo_history() {
+        use crate::edit_plan::{EditOperation, EditPlan};
+
+        let mut session = VoiceEditSession::start("original", None).unwrap();
+        session.finish_dictation("").unwrap();
+        let replace = |find: &str, replace: &str| EditPlan {
+            operations: vec![EditOperation::LiteralReplace {
+                find: find.into(),
+                replace: replace.into(),
+            }],
+            summary: None,
+        };
+        session.apply_instruction("one", "one", replace("original", "first")).unwrap();
+        session.apply_instruction("two", "two", replace("first", "second")).unwrap();
+        session.undo_preview().unwrap();
+        let before = session.snapshot();
+        session.apply_instruction("same", "same", replace("first", "first")).unwrap();
+        let after = session.snapshot();
+        assert_eq!(after.context, before.context);
+        assert_eq!(after.phase, before.phase);
+        session.redo_preview().unwrap();
+        assert_eq!(session.snapshot().context.as_ref().unwrap().preview, "second");
+    }
+
+    #[test]
+    fn stale_revision_is_rejected_without_mutating_the_current_preview() {
+        use crate::edit_plan::{EditOperation, EditPlan};
+
+        let mut session = VoiceEditSession::start("original", None).unwrap();
+        session.finish_dictation("").unwrap();
+        let revision = session.preview_revision().unwrap();
+        session.apply_instruction(
+            "first",
+            "first",
+            EditPlan {
+                operations: vec![EditOperation::FullRewrite { text: "first".into() }],
+                summary: None,
+            },
+        ).unwrap();
+        let result = session.apply_instruction_at_revision(
+            revision,
+            "stale",
+            "stale",
+            EditPlan {
+                operations: vec![EditOperation::FullRewrite { text: "wrong".into() }],
+                summary: None,
+            },
+        );
+        assert_eq!(result, Err(VoiceEditError::PreviewChanged));
+        assert_eq!(session.snapshot().context.as_ref().unwrap().preview, "first");
+    }
+
+    #[test]
+    fn no_op_edit_is_allowed_at_the_turn_limit() {
+        use crate::edit_plan::{EditOperation, EditPlan};
+
+        let mut session = VoiceEditSession::start("original", None).unwrap();
+        session.finish_dictation("").unwrap();
+        for index in 0..64 {
+            session
+                .apply_instruction(
+                    format!("edit {index}"),
+                    format!("edit {index}"),
+                    EditPlan {
+                        operations: vec![EditOperation::FullRewrite {
+                            text: format!("v{index}"),
+                        }],
+                        summary: None,
+                    },
+                )
+                .unwrap();
+        }
+        session
+            .apply_instruction(
+                "same",
+                "same",
+                EditPlan {
+                    operations: vec![EditOperation::FullRewrite { text: "v63".into() }],
+                    summary: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(session.snapshot().context.unwrap().preview_history_index, 64);
+    }
+
+    #[test]
+    fn stale_revision_after_divergent_branch_is_rejected() {
+        use crate::edit_plan::{EditOperation, EditPlan};
+
+        let mut session = VoiceEditSession::start("original", None).unwrap();
+        session.finish_dictation("").unwrap();
+        session.apply_instruction(
+            "first",
+            "first",
+            EditPlan {
+                operations: vec![EditOperation::FullRewrite { text: "first".into() }],
+                summary: None,
+            },
+        ).unwrap();
+        let stale_revision = session.preview_revision().unwrap();
+        session.undo_preview().unwrap();
+        session.apply_instruction(
+            "branch",
+            "branch",
+            EditPlan {
+                operations: vec![EditOperation::FullRewrite { text: "branch".into() }],
+                summary: None,
+            },
+        ).unwrap();
+        let result = session.apply_instruction_at_revision(
+            stale_revision,
+            "stale",
+            "stale",
+            EditPlan {
+                operations: vec![EditOperation::FullRewrite { text: "wrong".into() }],
+                summary: None,
+            },
+        );
+        assert_eq!(result, Err(VoiceEditError::PreviewChanged));
+        assert_eq!(session.snapshot().context.as_ref().unwrap().preview, "branch");
+    }
+
+    #[test]
+    fn divergence_at_the_turn_limit_uses_the_active_prefix_budget() {
+        use crate::edit_plan::{EditOperation, EditPlan};
+
+        let mut session = VoiceEditSession::start("original", None).unwrap();
+        session.finish_dictation("").unwrap();
+        let rewrite = |text: String| EditPlan {
+            operations: vec![EditOperation::FullRewrite { text }],
+            summary: None,
+        };
+        for index in 0..MAX_TURNS {
+            session.apply_instruction("edit", "edit", rewrite(format!("v{index}"))).unwrap();
+        }
+        let full = session.snapshot();
+        assert_eq!(
+            session.apply_instruction("overflow", "overflow", rewrite("overflow".into())),
+            Err(VoiceEditError::TooManyTurns)
+        );
+        assert_eq!(session.snapshot(), full);
+        session.undo_preview().unwrap();
+        session.apply_instruction("branch", "branch", rewrite("branch".into())).unwrap();
+        let branch = session.snapshot();
+        let context = branch.context.as_ref().unwrap();
+        assert_eq!(context.preview, "branch");
+        assert_eq!(context.turns.len(), MAX_TURNS);
+        assert_eq!(context.preview_history.len(), MAX_TURNS + 1);
+        assert_eq!(context.preview_history_index, MAX_TURNS);
+        session.redo_preview().unwrap();
+        assert_eq!(session.snapshot(), branch);
+    }
+
+    #[test]
+    fn interrupted_instruction_recovers_without_changing_preview_or_redo() {
+        let mut session = VoiceEditSession::start("original", None).unwrap();
+        session.finish_dictation("").unwrap();
+        let before = session.snapshot();
+        session.enter_editing().unwrap();
+        session.begin_applying().unwrap();
+        session.recover_instruction().unwrap();
+        assert_eq!(session.snapshot(), before);
+    }
+
+    #[test]
+    fn commit_rejects_an_unseen_revision_without_reserving_or_writing() {
+        let mut session = VoiceEditSession::start("original", None).unwrap();
+        session.finish_dictation("").unwrap();
+        let before = session.snapshot();
+        assert_eq!(
+            session.begin_commit_at_revision(1),
+            Err(VoiceEditError::PreviewChanged)
+        );
+        assert_eq!(session.snapshot(), before);
+        assert_eq!(session.begin_commit_at_revision(0).unwrap().text, "original");
+    }
+
+    #[test]
+    fn commit_uses_the_selected_preview_revision() {
+        use crate::edit_plan::{EditOperation, EditPlan};
+
+        let mut session = VoiceEditSession::start("original", None).unwrap();
+        session.finish_dictation("").unwrap();
+        session.apply_instruction(
+            "edit",
+            "edit",
+            EditPlan {
+                operations: vec![EditOperation::FullRewrite { text: "edited".into() }],
+                summary: None,
+            },
+        ).unwrap();
+        session.undo_preview().unwrap();
+        let wire = serde_json::to_value(session.snapshot()).unwrap();
+        assert_eq!(wire["context"]["previewRevision"], 2);
+        assert_eq!(wire["context"]["previewHistoryIndex"], 0);
+        assert_eq!(wire["context"]["previewHistory"][1], "edited");
+        let commit = session.begin_commit_at_revision(2).unwrap();
+        assert_eq!(commit.text, "original");
+        assert!(commit.turns.is_empty(), "redo instructions cannot leak into the committed path");
     }
 }

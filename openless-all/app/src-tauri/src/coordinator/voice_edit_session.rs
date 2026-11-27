@@ -20,6 +20,7 @@ pub(crate) struct VoiceEditHostState {
     pub(crate) target: Option<VoiceEditNativeTarget>,
     pub(crate) original_text: String,
     pub(crate) duration_ms: u64,
+    instruction_id: Option<SessionId>,
 }
 
 #[derive(Clone)]
@@ -113,11 +114,12 @@ async fn start_with_recording(
         host.finishing_initial_dictation = false;
         host.original_text = original;
         host.duration_ms = 0;
+        host.instruction_id = None;
         id
     };
-    if let Err(error) = inner.backend.start().await {
+    if let Err(_error) = inner.backend.start().await {
         let _ = cancel(inner, Some(session_id)).await;
-        return Err(error.to_string());
+        return Err("voiceEditSessionStartFailed".into());
     }
     {
         let mut host = inner.voice_edit_host.lock();
@@ -148,9 +150,9 @@ async fn start_with_recording(
     };
     let recording_id = match recording {
         Ok(id) => id,
-        Err(error) => {
+        Err(_error) => {
             let _ = cancel(inner, Some(session_id)).await;
-            return Err(error.to_string());
+            return Err("voiceEditInitialDictationFailed".into());
         }
     };
     let snapshot = {
@@ -201,32 +203,49 @@ pub(super) async fn finish_dictation(
     release_recording(inner, id, recording_id);
     let result = match result {
         Ok(result) => result,
-        Err(error) => {
+        Err(_error) => {
             let _ = cancel(inner, Some(id)).await;
-            return Err(error.to_string());
+            return Err("voiceEditInitialDictationFailed".into());
         }
     };
     let draft = {
         let mut host = inner.voice_edit_host.lock();
-        let session = current_session(&mut host, id)?;
-        match session.finish_dictation(non_empty_or_fallback(
+        let mut candidate = current_session(&mut host, id)?.clone();
+        match candidate.finish_dictation(non_empty_or_fallback(
             &result.polished_text,
             &result.raw_text,
         )) {
             Ok(()) => {
-                let snapshot = session.snapshot();
-                host.original_text = original_body(&snapshot);
-                persist_history(&inner.backend, id, &host.original_text,
+                let snapshot = candidate.snapshot();
+                let original_text = original_body(&snapshot);
+                let persisted = persist_history(
+                    &inner.backend,
+                    id,
+                    &original_text,
                     snapshot.context.as_ref().map(|c| c.preview.as_str()).unwrap_or_default(),
-                    result.duration_ms, HistoryInsertStatus::NotRequested)?;
+                    result.duration_ms,
+                    HistoryInsertStatus::NotRequested,
+                );
+                // Install the ready candidate even when history persistence fails: the
+                // preview remains available for retry and later persistence attempts.
+                host.original_text = original_text;
                 host.duration_ms = result.duration_ms;
-                Ok(snapshot)
+                host.session = Some(candidate);
+                persisted.map(|()| snapshot)
             }
-            Err(error) => Err(error.to_string()),
+            Err(_error) => Err("voiceEditDraftRejected".into()),
         }
     };
     if draft.is_err() {
-        let _ = cancel(inner, Some(id)).await;
+        let should_cancel = {
+            let mut host = inner.voice_edit_host.lock();
+            host.session.as_ref().is_some_and(|session| {
+                session.session_id() == id && session.snapshot().phase == VoiceEditPhase::Dictating
+            })
+        };
+        if should_cancel {
+            let _ = cancel(inner, Some(id)).await;
+        }
     }
     draft
 }
@@ -235,43 +254,45 @@ pub(super) async fn start_instruction(
     inner: &Arc<Inner>,
     id: SessionId,
 ) -> Result<VoiceEditSnapshot, String> {
+    start_instruction_with_options(inner, id, None, None).await
+}
+
+pub(super) async fn start_instruction_with_options(
+    inner: &Arc<Inner>,
+    id: SessionId,
+    instruction_id: Option<SessionId>,
+    expected_revision: Option<u64>,
+) -> Result<VoiceEditSnapshot, String> {
+    let instruction_id = instruction_id.unwrap_or_else(SessionId::new);
     {
         let mut host = inner.voice_edit_host.lock();
-        current_session(&mut host, id)?
-            .enter_editing()
-            .map_err(|e| e.to_string())?;
+        begin_instruction(&mut host, id, instruction_id, expected_revision, false)?;
     }
-    let recording_id = match inner
-        .backend
-        .start_dictation_with_options(DictationStartOptions {
-            insert_text: false,
-            output_target: DictationOutputTarget::VoiceEdit,
-            ..DictationStartOptions::default()
-        })
-        .await
-    {
+    let recording_id = match inner.backend.start_dictation_with_options(DictationStartOptions {
+        insert_text: false,
+        output_target: DictationOutputTarget::VoiceEdit,
+        ..DictationStartOptions::default()
+    }).await {
         Ok(id) => id,
-        Err(error) => {
-            recover_after_instruction_error(inner, id);
-            return Err(error.to_string());
+        Err(_) => {
+            return Err(recover_after_instruction_error(inner, id, instruction_id,
+                "voiceEditInstructionUnavailable"));
         }
     };
     let snapshot = {
         let mut host = inner.voice_edit_host.lock();
-        match current_session(&mut host, id) {
-            Ok(session) if session.snapshot().phase == VoiceEditPhase::Editing => {
-                let snapshot = session.snapshot();
-                host.dictation_session_id = Some(recording_id);
-                Some(snapshot)
-            }
-            _ => None,
+        if current_instruction(&mut host, id, instruction_id).is_ok() {
+            host.dictation_session_id = Some(recording_id);
+            host_snapshot(&host)
+        } else {
+            None
         }
     };
     match snapshot {
         Some(snapshot) => Ok(snapshot),
         None => {
             let _ = inner.backend.cancel_dictation(Some(recording_id)).await;
-            Err("voiceEditSessionChanged".into())
+            Err("voiceEditInstructionChanged".into())
         }
     }
 }
@@ -280,78 +301,146 @@ pub(super) async fn finish_instruction(
     inner: &Arc<Inner>,
     id: SessionId,
 ) -> Result<VoiceEditSnapshot, String> {
-    let recording_id = {
+    finish_instruction_with_id(inner, id, None).await
+}
+
+pub(super) async fn finish_instruction_with_id(
+    inner: &Arc<Inner>,
+    id: SessionId,
+    expected_instruction_id: Option<SessionId>,
+) -> Result<VoiceEditSnapshot, String> {
+    // Capture identity, revision and complete model input atomically, before ASR.
+    let (recording_id, instruction_id, context) = {
         let mut host = inner.voice_edit_host.lock();
-        let recording_id = host
-            .dictation_session_id
+        let instruction_id = host.instruction_id
             .ok_or_else(|| "voiceEditInstructionUnavailable".to_string())?;
-        current_session(&mut host, id)?
-            .begin_applying()
-            .map_err(|e| e.to_string())?;
-        recording_id
+        if expected_instruction_id.is_some_and(|expected| expected != instruction_id) {
+            return Err("voiceEditInstructionChanged".into());
+        }
+        let recording_id = host.dictation_session_id
+            .ok_or_else(|| "voiceEditInstructionUnavailable".to_string())?;
+        let session = current_instruction(&mut host, id, instruction_id)?;
+        let context = session.snapshot().context
+            .ok_or_else(|| "voiceEditDraftUnavailable".to_string())?;
+        session.begin_applying().map_err(|_| "voiceEditSessionBusy".to_string())?;
+        (recording_id, instruction_id, context)
     };
     let result = inner.backend.stop_dictation_session(recording_id).await;
     release_recording(inner, id, recording_id);
     let result = match result {
         Ok(result) => result,
-        Err(error) => {
-            recover_after_instruction_error(inner, id);
-            return Err(error.to_string());
-        }
+        Err(_) => return Err(recover_after_instruction_error(inner, id, instruction_id,
+            "voiceEditInstructionUnavailable")),
     };
-    let (field_context, draft) = {
+    {
         let mut host = inner.voice_edit_host.lock();
-        let session = current_session(&mut host, id)?;
-        if session.snapshot().phase != VoiceEditPhase::Applying {
-            return Err("voiceEditSessionChanged".into());
-        }
-        let context = session
-            .snapshot()
-            .context
-            .ok_or_else(|| "voiceEditDraftUnavailable".to_string())?;
-        (context.field_text, context.preview)
-    };
+        current_instruction(&mut host, id, instruction_id)?;
+    }
     let raw = non_empty_or_fallback(&result.raw_text, &result.polished_text);
     let polished = non_empty_or_fallback(&result.polished_text, &result.raw_text);
-    let generated = match inner
-        .backend
-        .services()
-        .selection_voice
+    let generated = inner.backend.services().selection_voice
         .voice_edit_plan(openless_core::domains::VoiceEditPlanRequest {
             session_id: id,
-            field_context,
-            draft,
+            field_context: context.field_text,
+            draft: context.preview,
             instruction_raw: raw.clone(),
             instruction_polished: polished,
-        })
-        .await
-    {
-        Ok(generated) => generated,
-        Err(error) => {
-            recover_after_instruction_error(inner, id);
-            return Err(error.to_string());
-        }
-    };
-    let mut host = inner.voice_edit_host.lock();
-    let session = current_session(&mut host, id)?;
-    if let Err(error) =
-        session.apply_instruction(raw, generated.instruction_polished, generated.plan)
-    {
-        let _ = session.recover_instruction();
-        return Err(error.to_string());
-    }
-    let snapshot = session.snapshot();
-    persist_history(&inner.backend, id, &host.original_text,
-        snapshot.context.as_ref().map(|c| c.preview.as_str()).unwrap_or_default(),
-        host.duration_ms, HistoryInsertStatus::NotRequested)?;
-    Ok(snapshot)
+        }).await;
+    complete_instruction(inner, id, instruction_id, context.preview_revision, raw, generated)
 }
 
-fn recover_after_instruction_error(inner: &Arc<Inner>, id: SessionId) {
-    let mut host = inner.voice_edit_host.lock();
-    if let Ok(session) = current_session(&mut host, id) {
-        let _ = session.recover_instruction();
+fn current_instruction(
+    host: &mut VoiceEditHostState,
+    id: SessionId,
+    instruction_id: SessionId,
+) -> Result<&mut VoiceEditSession, String> {
+    if host.instruction_id != Some(instruction_id) {
+        return Err("voiceEditInstructionChanged".into());
     }
+    current_session(host, id)
+}
+
+fn begin_instruction(
+    host: &mut VoiceEditHostState,
+    id: SessionId,
+    instruction_id: SessionId,
+    expected_revision: Option<u64>,
+    applying: bool,
+) -> Result<openless_core::VoiceEditContext, String> {
+    // A cancelled recorder may still be releasing its own backend handle.
+    if host.instruction_id.is_some() || host.dictation_session_id.is_some() {
+        return Err("voiceEditSessionBusy".into());
+    }
+    let session = current_session(host, id)?;
+    let context = session.snapshot().context
+        .ok_or_else(|| "voiceEditDraftUnavailable".to_string())?;
+    if expected_revision.is_some_and(|revision| revision != context.preview_revision) {
+        return Err("voiceEditPreviewChanged".into());
+    }
+    session.enter_editing().map_err(|_| "voiceEditSessionBusy".to_string())?;
+    if applying {
+        session.begin_applying().map_err(|_| "voiceEditSessionBusy".to_string())?;
+    }
+    host.instruction_id = Some(instruction_id);
+    Ok(context)
+}
+
+fn recover_after_instruction_error(
+    inner: &Arc<Inner>,
+    id: SessionId,
+    instruction_id: SessionId,
+    error: &str,
+) -> String {
+    let mut host = inner.voice_edit_host.lock();
+    match current_instruction(&mut host, id, instruction_id) {
+        Ok(session) => {
+            let _ = session.recover_instruction();
+            host.instruction_id = None;
+            error.to_string()
+        }
+        Err(error) => error,
+    }
+}
+
+fn complete_instruction(
+    inner: &Arc<Inner>,
+    id: SessionId,
+    instruction_id: SessionId,
+    revision: u64,
+    raw: String,
+    generated: Result<openless_core::domains::VoiceEditPlanResult, openless_core::BackendError>,
+) -> Result<VoiceEditSnapshot, String> {
+    let mut host = inner.voice_edit_host.lock();
+    let session = current_instruction(&mut host, id, instruction_id)?;
+    // Build a private candidate, persist it, then install it while holding the
+    // same ownership lock. A failed plan/store never mutates live preview history.
+    let mut candidate = session.clone();
+    let applied = generated.map_err(|_| "voiceEditPlanFailed".to_string()).and_then(|generated| {
+        candidate.apply_instruction_at_revision(revision, raw,
+            generated.instruction_polished, generated.plan).map_err(|error| match error {
+                openless_core::VoiceEditError::PreviewChanged => "voiceEditPreviewChanged".to_string(),
+                _ => "voiceEditPlanRejected".to_string(),
+            })
+    });
+    if let Err(error) = applied {
+        let _ = session.recover_instruction();
+        host.instruction_id = None;
+        return Err(error);
+    }
+    let snapshot = candidate.snapshot();
+    // Identical output is not a new revision and must retain the redo branch.
+    if candidate.preview_revision().ok() != Some(revision) {
+        if let Err(error) = persist_history(&inner.backend, id, &host.original_text,
+            snapshot.context.as_ref().map(|c| c.preview.as_str()).unwrap_or_default(),
+            host.duration_ms, HistoryInsertStatus::NotRequested) {
+            let _ = current_instruction(&mut host, id, instruction_id)?.recover_instruction();
+            host.instruction_id = None;
+            return Err(error);
+        }
+    }
+    host.session = Some(candidate);
+    host.instruction_id = None;
+    Ok(snapshot)
 }
 
 fn release_recording(inner: &Arc<Inner>, id: SessionId, recording_id: SessionId) {
@@ -364,16 +453,97 @@ fn release_recording(inner: &Arc<Inner>, id: SessionId, recording_id: SessionId)
     }
 }
 
+pub(super) async fn apply_text_instruction(
+    inner: &Arc<Inner>,
+    id: SessionId,
+    instruction: String,
+    instruction_id: Option<SessionId>,
+    expected_revision: Option<u64>,
+) -> Result<VoiceEditSnapshot, String> {
+    let instruction = instruction.trim().to_string();
+    if instruction.is_empty() {
+        return Err("voiceEditInstructionEmpty".into());
+    }
+    let instruction_id = instruction_id.unwrap_or_else(SessionId::new);
+    let context = {
+        let mut host = inner.voice_edit_host.lock();
+        begin_instruction(&mut host, id, instruction_id, expected_revision, true)?
+    };
+    let generated = inner.backend.services().selection_voice
+        .voice_edit_plan(openless_core::domains::VoiceEditPlanRequest {
+            session_id: id,
+            field_context: context.field_text,
+            draft: context.preview,
+            instruction_raw: instruction.clone(),
+            instruction_polished: instruction.clone(),
+        }).await;
+    complete_instruction(inner, id, instruction_id, context.preview_revision, instruction, generated)
+}
+
+/// Cancel just this instruction. The provider may keep running; its result and
+/// cleanup are fenced by instruction_id and cannot overwrite a successor.
+pub(super) async fn cancel_instruction(
+    inner: &Arc<Inner>,
+    id: SessionId,
+    instruction_id: SessionId,
+) -> Result<VoiceEditSnapshot, String> {
+    let recording_id = {
+        let mut host = inner.voice_edit_host.lock();
+        current_instruction(&mut host, id, instruction_id)?
+            .recover_instruction().map_err(|_| "voiceEditInstructionUnavailable".to_string())?;
+        host.instruction_id = None;
+        host.dictation_session_id
+    };
+    if let Some(recording_id) = recording_id {
+        let cancelled = inner.backend.cancel_dictation(Some(recording_id)).await;
+        if inner.backend.snapshot().dictation.session_id != Some(recording_id) {
+            release_recording(inner, id, recording_id);
+        }
+        cancelled.map_err(|_| "voiceEditInstructionUnavailable".to_string())?;
+    }
+    // Re-read only this session after recorder cleanup, not a replacement session.
+    let mut host = inner.voice_edit_host.lock();
+    current_session(&mut host, id)?;
+    host_snapshot(&host).ok_or_else(|| "voiceEditSessionUnavailable".to_string())
+}
+
+pub(super) async fn undo_preview(inner: &Arc<Inner>, id: SessionId) -> Result<VoiceEditSnapshot, String> {
+    let mut host = inner.voice_edit_host.lock();
+    let session = current_session(&mut host, id)?;
+    session.undo_preview().map_err(|_| "voiceEditHistoryUnavailable".to_string())?;
+    Ok(session.snapshot())
+}
+
+pub(super) async fn redo_preview(inner: &Arc<Inner>, id: SessionId) -> Result<VoiceEditSnapshot, String> {
+    let mut host = inner.voice_edit_host.lock();
+    let session = current_session(&mut host, id)?;
+    session.redo_preview().map_err(|_| "voiceEditHistoryUnavailable".to_string())?;
+    Ok(session.snapshot())
+}
+
 pub(super) async fn commit(inner: &Arc<Inner>, id: SessionId) -> Result<VoiceEditSnapshot, String> {
+    commit_at_revision(inner, id, None).await
+}
+
+pub(super) async fn commit_at_revision(
+    inner: &Arc<Inner>,
+    id: SessionId,
+    expected_revision: Option<u64>,
+) -> Result<VoiceEditSnapshot, String> {
     let (ticket, target, raw, duration) = {
         let mut host = inner.voice_edit_host.lock();
         let target = host
             .target
             .clone()
             .ok_or_else(|| "voiceEditTargetUnavailable".to_string())?;
-        let ticket = current_session(&mut host, id)?
-            .begin_commit()
-            .map_err(|e| e.to_string())?;
+        let session = current_session(&mut host, id)?;
+        let ticket = match expected_revision {
+            Some(revision) => session.begin_commit_at_revision(revision),
+            None => session.begin_commit(), // Legacy IPC callers predate preview revisions.
+        }.map_err(|error| match error {
+            openless_core::VoiceEditError::PreviewChanged => "voiceEditPreviewChanged".to_string(),
+            _ => "voiceEditSessionBusy".to_string(),
+        })?;
         (
             ticket,
             target,
@@ -403,11 +573,14 @@ pub(super) async fn commit(inner: &Arc<Inner>, id: SessionId) -> Result<VoiceEdi
             return Err(error);
         }
     };
+    if let Err(error) = persist_history(&inner.backend, ticket.session_id, &raw, &ticket.text, duration, insert_status) {
+        let _ = session.recover_commit();
+        return Err(error);
+    }
     session.complete_commit().map_err(|e| e.to_string())?;
     let snapshot = session.snapshot();
     inner.host.set_voice_edit_interactive(false);
     drop(host);
-    persist_history(&inner.backend, ticket.session_id, &raw, &ticket.text, duration, insert_status)?;
     Ok(snapshot)
 }
 
@@ -429,6 +602,7 @@ pub(super) async fn cancel(
             }
         }
         host.pending_start_id = None;
+        host.instruction_id = None;
         let snapshot = host.session.as_ref().map(VoiceEditSession::snapshot);
         host.target = None;
         inner.host.set_voice_edit_interactive(false);
@@ -469,12 +643,15 @@ pub(super) fn can_close(inner: &Arc<Inner>, id: Option<SessionId>) -> Result<(),
 }
 
 pub(super) fn snapshot(inner: &Arc<Inner>) -> Option<VoiceEditSnapshot> {
-    inner
-        .voice_edit_host
-        .lock()
-        .session
-        .as_ref()
-        .map(VoiceEditSession::snapshot)
+    host_snapshot(&inner.voice_edit_host.lock())
+}
+
+fn host_snapshot(host: &VoiceEditHostState) -> Option<VoiceEditSnapshot> {
+    host.session.as_ref().map(|session| {
+        let mut snapshot = session.snapshot();
+        snapshot.instruction_id = host.instruction_id;
+        snapshot
+    })
 }
 
 fn capture_target() -> Result<(String, Option<TextSelection>, VoiceEditNativeTarget), String> {
@@ -664,7 +841,7 @@ fn persist_history(
         session,
         preferences.history_retention_days,
         preferences.history_max_entries,
-    ).map_err(|error| error.to_string())
+    ).map_err(|_| "voiceEditHistoryUnavailable".to_string())
 }
 
 fn non_empty_or_fallback(primary: &str, fallback: &str) -> String {

@@ -43,6 +43,30 @@
   font-size: 12px;
 }
 
+.ol-voice-edit-text-edit {
+  display: grid;
+  gap: 6px;
+}
+
+.ol-voice-edit-text-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ol-voice-edit-text-row input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--ol-border, #e5e7eb);
+  border-radius: var(--ol-r-md, 8px);
+  padding: 8px 10px;
+  color: inherit;
+  background: var(--ol-surface, transparent);
+}
+
+.ol-voice-edit-text-row .ol-tool-button {
+  white-space: nowrap;
+}
+
 .ol-voice-edit-actions {
   display: flex;
   flex-wrap: wrap;
